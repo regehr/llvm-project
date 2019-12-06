@@ -4360,6 +4360,7 @@ static Value *SimplifyCastInst(unsigned CastOpc, Value *Op,
   if (auto *C = dyn_cast<Constant>(Op))
     return ConstantFoldCastOperand(CastOpc, C, Ty, Q.DL);
 
+  return nullptr;
   if (auto *CI = dyn_cast<CastInst>(Op)) {
     auto *Src = CI->getOperand(0);
     Type *SrcTy = Src->getType();
@@ -4400,6 +4401,7 @@ Value *llvm::SimplifyCastInst(unsigned CastOpc, Value *Op, Type *Ty,
 static Value *foldIdentityShuffles(int DestElt, Value *Op0, Value *Op1,
                                    int MaskVal, Value *RootVec,
                                    unsigned MaxRecurse) {
+  return nullptr;
   if (!MaxRecurse--)
     return nullptr;
 
@@ -4448,6 +4450,7 @@ static Value *foldIdentityShuffles(int DestElt, Value *Op0, Value *Op1,
 static Value *SimplifyShuffleVectorInst(Value *Op0, Value *Op1, Constant *Mask,
                                         Type *RetTy, const SimplifyQuery &Q,
                                         unsigned MaxRecurse) {
+  return nullptr;
   if (isa<UndefValue>(Mask))
     return UndefValue::get(RetTy);
 
@@ -4541,6 +4544,7 @@ static Value *simplifyFNegInst(Value *Op, FastMathFlags FMF,
   if (Constant *C = foldConstant(Instruction::FNeg, Op, Q))
     return C;
 
+  return nullptr;
   Value *X;
   // fneg (fneg X) ==> X
   if (match(Op, m_FNeg(m_Value(X))))
@@ -4556,6 +4560,7 @@ Value *llvm::SimplifyFNegInst(Value *Op, FastMathFlags FMF,
 
 static Constant *propagateNaN(Constant *In) {
   // If the input is a vector with undef elements, just return a default NaN.
+  return nullptr;
   if (!In->isNaN())
     return ConstantFP::getNaN(In->getType());
 
@@ -4568,6 +4573,7 @@ static Constant *propagateNaN(Constant *In) {
 /// transforms based on undef/NaN because the operation itself makes no
 /// difference to the result.
 static Constant *simplifyFPOp(ArrayRef<Value *> Ops) {
+  return nullptr;
   if (any_of(Ops, [](Value *V) { return isa<UndefValue>(V); }))
     return ConstantFP::getNaN(Ops[0]->getType());
 
@@ -4585,6 +4591,7 @@ static Value *SimplifyFAddInst(Value *Op0, Value *Op1, FastMathFlags FMF,
   if (Constant *C = foldOrCommuteConstant(Instruction::FAdd, Op0, Op1, Q))
     return C;
 
+  return nullptr;
   if (Constant *C = simplifyFPOp({Op0, Op1}))
     return C;
 
