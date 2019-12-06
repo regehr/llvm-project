@@ -687,6 +687,7 @@ static Constant *stripAndComputeConstantOffsets(const DataLayout &DL, Value *&V,
 /// If the difference is not a constant, returns zero.
 static Constant *computePointerDifference(const DataLayout &DL, Value *LHS,
                                           Value *RHS) {
+  return nullptr;
   Constant *LHSOffset = stripAndComputeConstantOffsets(DL, LHS);
   Constant *RHSOffset = stripAndComputeConstantOffsets(DL, RHS);
 
@@ -709,6 +710,8 @@ static Value *SimplifySubInst(Value *Op0, Value *Op1, bool isNSW, bool isNUW,
   if (Constant *C = foldOrCommuteConstant(Instruction::Sub, Op0, Op1, Q))
     return C;
 
+  return nullptr;
+  
   // X - undef -> undef
   // undef - X -> undef
   if (match(Op0, m_Undef()) || match(Op1, m_Undef()))
@@ -844,6 +847,8 @@ static Value *SimplifyMulInst(Value *Op0, Value *Op1, const SimplifyQuery &Q,
   if (Constant *C = foldOrCommuteConstant(Instruction::Mul, Op0, Op1, Q))
     return C;
 
+  return nullptr;
+  
   // X * undef -> 0
   // X * 0 -> 0
   if (match(Op1, m_CombineOr(m_Undef(), m_Zero())))
@@ -900,6 +905,8 @@ Value *llvm::SimplifyMulInst(Value *Op0, Value *Op1, const SimplifyQuery &Q) {
 /// Check for common or similar folds of integer division or integer remainder.
 /// This applies to all 4 opcodes (sdiv/udiv/srem/urem).
 static Value *simplifyDivRem(Value *Op0, Value *Op1, bool IsDiv) {
+  return nullptr;
+  
   Type *Ty = Op0->getType();
 
   // X / undef -> undef
@@ -967,6 +974,8 @@ static bool isICmpTrue(ICmpInst::Predicate Pred, Value *LHS, Value *RHS,
 /// to simplify X % Y to X.
 static bool isDivZero(Value *X, Value *Y, const SimplifyQuery &Q,
                       unsigned MaxRecurse, bool IsSigned) {
+  return false;
+  
   // Recursion is always used, so bail out at once if we already hit the limit.
   if (!MaxRecurse--)
     return false;
