@@ -4639,6 +4639,7 @@ static Value *SimplifyFSubInst(Value *Op0, Value *Op1, FastMathFlags FMF,
   if (Constant *C = foldOrCommuteConstant(Instruction::FSub, Op0, Op1, Q))
     return C;
 
+  return nullptr;
   if (Constant *C = simplifyFPOp({Op0, Op1}))
     return C;
 
@@ -4681,6 +4682,7 @@ static Value *SimplifyFSubInst(Value *Op0, Value *Op1, FastMathFlags FMF,
 
 static Value *SimplifyFMAFMul(Value *Op0, Value *Op1, FastMathFlags FMF,
                               const SimplifyQuery &Q, unsigned MaxRecurse) {
+  return nullptr;
   if (Constant *C = simplifyFPOp({Op0, Op1}))
     return C;
 
@@ -4717,6 +4719,7 @@ static Value *SimplifyFMulInst(Value *Op0, Value *Op1, FastMathFlags FMF,
                                const SimplifyQuery &Q, unsigned MaxRecurse) {
   if (Constant *C = foldOrCommuteConstant(Instruction::FMul, Op0, Op1, Q))
     return C;
+  return nullptr;
 
   // Now apply simplifications that do not require rounding.
   return SimplifyFMAFMul(Op0, Op1, FMF, Q, MaxRecurse);
@@ -4748,6 +4751,7 @@ static Value *SimplifyFDivInst(Value *Op0, Value *Op1, FastMathFlags FMF,
   if (Constant *C = foldOrCommuteConstant(Instruction::FDiv, Op0, Op1, Q))
     return C;
 
+  return nullptr;
   if (Constant *C = simplifyFPOp({Op0, Op1}))
     return C;
 
@@ -4793,6 +4797,7 @@ static Value *SimplifyFRemInst(Value *Op0, Value *Op1, FastMathFlags FMF,
   if (Constant *C = foldOrCommuteConstant(Instruction::FRem, Op0, Op1, Q))
     return C;
 
+  return nullptr;
   if (Constant *C = simplifyFPOp({Op0, Op1}))
     return C;
 
@@ -4822,6 +4827,7 @@ Value *llvm::SimplifyFRemInst(Value *Op0, Value *Op1, FastMathFlags FMF,
 /// If not, this returns null.
 static Value *simplifyUnOp(unsigned Opcode, Value *Op, const SimplifyQuery &Q,
                            unsigned MaxRecurse) {
+  return nullptr;
   switch (Opcode) {
   case Instruction::FNeg:
     return simplifyFNegInst(Op, FastMathFlags(), Q, MaxRecurse);
@@ -4836,6 +4842,7 @@ static Value *simplifyUnOp(unsigned Opcode, Value *Op, const SimplifyQuery &Q,
 static Value *simplifyFPUnOp(unsigned Opcode, Value *Op,
                              const FastMathFlags &FMF,
                              const SimplifyQuery &Q, unsigned MaxRecurse) {
+  return nullptr;
   switch (Opcode) {
   case Instruction::FNeg:
     return simplifyFNegInst(Op, FMF, Q, MaxRecurse);
