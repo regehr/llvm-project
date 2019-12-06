@@ -4324,6 +4324,9 @@ Value *llvm::SimplifyExtractElementInst(Value *Vec, Value *Idx,
 
 /// See if we can fold the given phi. If not, returns null.
 static Value *SimplifyPHINode(PHINode *PN, const SimplifyQuery &Q) {
+
+  // JDR: can't disable this w/o breaking the compiler
+  
   // If all of the PHI's incoming values are the same then replace the PHI node
   // with the common value.
   Value *CommonValue = nullptr;
@@ -4968,6 +4971,7 @@ static bool IsIdempotent(Intrinsic::ID ID) {
 
 static Value *SimplifyRelativeLoad(Constant *Ptr, Constant *Offset,
                                    const DataLayout &DL) {
+  return nullptr;
   GlobalValue *PtrSym;
   APInt PtrOffset;
   if (!IsConstantOffsetFromGlobal(Ptr, PtrSym, PtrOffset, DL))
@@ -5024,6 +5028,7 @@ static Value *SimplifyRelativeLoad(Constant *Ptr, Constant *Offset,
 
 static Value *simplifyUnaryIntrinsic(Function *F, Value *Op0,
                                      const SimplifyQuery &Q) {
+  return nullptr;
   // Idempotent functions return the same result when called repeatedly.
   Intrinsic::ID IID = F->getIntrinsicID();
   if (IsIdempotent(IID))
@@ -5097,6 +5102,7 @@ static Value *simplifyUnaryIntrinsic(Function *F, Value *Op0,
 
 static Value *simplifyBinaryIntrinsic(Function *F, Value *Op0, Value *Op1,
                                       const SimplifyQuery &Q) {
+  return nullptr;
   Intrinsic::ID IID = F->getIntrinsicID();
   Type *ReturnType = F->getReturnType();
   switch (IID) {
@@ -5240,6 +5246,7 @@ static Value *simplifyBinaryIntrinsic(Function *F, Value *Op0, Value *Op1,
 
 static Value *simplifyIntrinsic(CallBase *Call, const SimplifyQuery &Q) {
 
+  return nullptr;
   // Intrinsics with no operands have some kind of side effect. Don't simplify.
   unsigned NumOperands = Call->getNumArgOperands();
   if (!NumOperands)
@@ -5302,6 +5309,7 @@ static Value *simplifyIntrinsic(CallBase *Call, const SimplifyQuery &Q) {
 }
 
 Value *llvm::SimplifyCall(CallBase *Call, const SimplifyQuery &Q) {
+  return nullptr;
   Value *Callee = Call->getCalledValue();
 
   // call undef -> undef
@@ -5335,6 +5343,7 @@ Value *llvm::SimplifyCall(CallBase *Call, const SimplifyQuery &Q) {
 
 /// Given operands for a Freeze, see if we can fold the result.
 static Value *SimplifyFreezeInst(Value *Op0) {
+  return nullptr;
   // Use a utility function defined in ValueTracking.
   if (llvm::isGuaranteedNotToBeUndefOrPoison(Op0))
     return Op0;
