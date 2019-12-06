@@ -3040,6 +3040,7 @@ static Value *simplifyICmpWithBinOp(CmpInst::Predicate Pred, Value *LHS,
 static Value *simplifyICmpWithMinMax(CmpInst::Predicate Pred, Value *LHS,
                                      Value *RHS, const SimplifyQuery &Q,
                                      unsigned MaxRecurse) {
+  return nullptr;
   Type *ITy = GetCompareTy(LHS); // The return type.
   Value *A, *B;
   CmpInst::Predicate P = CmpInst::BAD_ICMP_PREDICATE;
@@ -3243,6 +3244,7 @@ static Value *simplifyICmpWithMinMax(CmpInst::Predicate Pred, Value *LHS,
 /// If not, this returns null.
 static Value *SimplifyICmpInst(unsigned Predicate, Value *LHS, Value *RHS,
                                const SimplifyQuery &Q, unsigned MaxRecurse) {
+  return nullptr;
   CmpInst::Predicate Pred = (CmpInst::Predicate)Predicate;
   assert(CmpInst::isIntPredicate(Pred) && "Not an integer compare!");
 
@@ -3545,11 +3547,13 @@ static Value *SimplifyFCmpInst(unsigned Predicate, Value *LHS, Value *RHS,
     if (Constant *CRHS = dyn_cast<Constant>(RHS))
       return ConstantFoldCompareInstOperands(Pred, CLHS, CRHS, Q.DL, Q.TLI);
 
+  return nullptr;
     // If we have a constant, make sure it is on the RHS.
     std::swap(LHS, RHS);
     Pred = CmpInst::getSwappedPredicate(Pred);
   }
 
+  return nullptr;
   // Fold trivial predicates.
   Type *RetTy = GetCompareTy(LHS);
   if (Pred == FCmpInst::FCMP_FALSE)
@@ -3726,6 +3730,7 @@ Value *llvm::SimplifyFCmpInst(unsigned Predicate, Value *LHS, Value *RHS,
 static const Value *SimplifyWithOpReplaced(Value *V, Value *Op, Value *RepOp,
                                            const SimplifyQuery &Q,
                                            unsigned MaxRecurse) {
+  return nullptr;
   // Trivial replacement.
   if (V == Op)
     return RepOp;
@@ -3825,6 +3830,7 @@ static const Value *SimplifyWithOpReplaced(Value *V, Value *Op, Value *RepOp,
 /// integer comparison where one operand of the compare is a constant.
 static Value *simplifySelectBitTest(Value *TrueVal, Value *FalseVal, Value *X,
                                     const APInt *Y, bool TrueWhenUnset) {
+  return nullptr;
   const APInt *C;
 
   // (X & Y) == 0 ? X & ~Y : X  --> X
@@ -3861,6 +3867,7 @@ static Value *simplifySelectBitTest(Value *TrueVal, Value *FalseVal, Value *X,
 static Value *simplifySelectWithFakeICmpEq(Value *CmpLHS, Value *CmpRHS,
                                            ICmpInst::Predicate Pred,
                                            Value *TrueVal, Value *FalseVal) {
+  return nullptr;
   Value *X;
   APInt Mask;
   if (!decomposeBitTestICmp(CmpLHS, CmpRHS, Pred, X, Mask))
@@ -3875,6 +3882,7 @@ static Value *simplifySelectWithFakeICmpEq(Value *CmpLHS, Value *CmpRHS,
 static Value *simplifySelectWithICmpCond(Value *CondVal, Value *TrueVal,
                                          Value *FalseVal, const SimplifyQuery &Q,
                                          unsigned MaxRecurse) {
+  return nullptr;
   ICmpInst::Predicate Pred;
   Value *CmpLHS, *CmpRHS;
   if (!match(CondVal, m_ICmp(Pred, m_Value(CmpLHS), m_Value(CmpRHS))))
@@ -3967,6 +3975,7 @@ static Value *simplifySelectWithICmpCond(Value *CondVal, Value *TrueVal,
 /// floating-point comparison.
 static Value *simplifySelectWithFCmp(Value *Cond, Value *T, Value *F,
                                      const SimplifyQuery &Q) {
+  return nullptr;
   FCmpInst::Predicate Pred;
   if (!match(Cond, m_FCmp(Pred, m_Specific(T), m_Specific(F))) &&
       !match(Cond, m_FCmp(Pred, m_Specific(F), m_Specific(T))))
@@ -3998,6 +4007,7 @@ static Value *simplifySelectWithFCmp(Value *Cond, Value *T, Value *F,
 /// If not, this returns null.
 static Value *SimplifySelectInst(Value *Cond, Value *TrueVal, Value *FalseVal,
                                  const SimplifyQuery &Q, unsigned MaxRecurse) {
+  return nullptr;
   if (auto *CondC = dyn_cast<Constant>(Cond)) {
     if (auto *TrueC = dyn_cast<Constant>(TrueVal))
       if (auto *FalseC = dyn_cast<Constant>(FalseVal))
@@ -4052,6 +4062,7 @@ Value *llvm::SimplifySelectInst(Value *Cond, Value *TrueVal, Value *FalseVal,
 /// If not, this returns null.
 static Value *SimplifyGEPInst(Type *SrcTy, ArrayRef<Value *> Ops,
                               const SimplifyQuery &Q, unsigned) {
+  return nullptr;
   // The type of the GEP pointer operand.
   unsigned AS =
       cast<PointerType>(Ops[0]->getType()->getScalarType())->getAddressSpace();
@@ -4172,6 +4183,7 @@ Value *llvm::SimplifyGEPInst(Type *SrcTy, ArrayRef<Value *> Ops,
 static Value *SimplifyInsertValueInst(Value *Agg, Value *Val,
                                       ArrayRef<unsigned> Idxs, const SimplifyQuery &Q,
                                       unsigned) {
+  return nullptr;
   if (Constant *CAgg = dyn_cast<Constant>(Agg))
     if (Constant *CVal = dyn_cast<Constant>(Val))
       return ConstantFoldInsertValueInstruction(CAgg, CVal, Idxs);
@@ -4211,6 +4223,8 @@ Value *llvm::SimplifyInsertElementInst(Value *Vec, Value *Val, Value *Idx,
   if (VecC && ValC && IdxC)
     return ConstantFoldInsertElementInstruction(VecC, ValC, IdxC);
 
+  return nullptr;
+
   // Fold into undef if index is out of bounds.
   if (auto *CI = dyn_cast<ConstantInt>(Idx)) {
     uint64_t NumElements = cast<VectorType>(Vec->getType())->getNumElements();
@@ -4243,6 +4257,7 @@ static Value *SimplifyExtractValueInst(Value *Agg, ArrayRef<unsigned> Idxs,
   if (auto *CAgg = dyn_cast<Constant>(Agg))
     return ConstantFoldExtractValueInstruction(CAgg, Idxs);
 
+  return nullptr;
   // extractvalue x, (insertvalue y, elt, n), n -> elt
   unsigned NumIdxs = Idxs.size();
   for (auto *IVI = dyn_cast<InsertValueInst>(Agg); IVI != nullptr;
@@ -4274,6 +4289,7 @@ static Value *SimplifyExtractElementInst(Value *Vec, Value *Idx, const SimplifyQ
     if (auto *CIdx = dyn_cast<Constant>(Idx))
       return ConstantFoldExtractElementInstruction(CVec, CIdx);
 
+    return nullptr;
     // The index is not relevant if our vector is a splat.
     if (auto *Splat = CVec->getSplatValue())
       return Splat;
@@ -4282,6 +4298,7 @@ static Value *SimplifyExtractElementInst(Value *Vec, Value *Idx, const SimplifyQ
       return UndefValue::get(Vec->getType()->getVectorElementType());
   }
 
+  return nullptr;
   // If extracting a specified index from the vector, see if we can recursively
   // find a previously computed scalar that was inserted into the vector.
   if (auto *IdxC = dyn_cast<ConstantInt>(Idx)) {
