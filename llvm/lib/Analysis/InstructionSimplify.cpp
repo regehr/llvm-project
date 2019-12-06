@@ -1030,6 +1030,8 @@ static Value *simplifyDiv(Instruction::BinaryOps Opcode, Value *Op0, Value *Op1,
   if (Constant *C = foldOrCommuteConstant(Opcode, Op0, Op1, Q))
     return C;
 
+  return nullptr;
+  
   if (Value *V = simplifyDivRem(Op0, Op1, true))
     return V;
 
@@ -1088,6 +1090,8 @@ static Value *simplifyRem(Instruction::BinaryOps Opcode, Value *Op0, Value *Op1,
   if (Constant *C = foldOrCommuteConstant(Opcode, Op0, Op1, Q))
     return C;
 
+  return nullptr;
+  
   if (Value *V = simplifyDivRem(Op0, Op1, false))
     return V;
 
@@ -1129,6 +1133,7 @@ static Value *simplifyRem(Instruction::BinaryOps Opcode, Value *Op0, Value *Op1,
 /// If not, this returns null.
 static Value *SimplifySDivInst(Value *Op0, Value *Op1, const SimplifyQuery &Q,
                                unsigned MaxRecurse) {
+  return nullptr;
   // If two operands are negated and no signed overflow, return -1.
   if (isKnownNegation(Op0, Op1, /*NeedNSW=*/true))
     return Constant::getAllOnesValue(Op0->getType());
@@ -1155,6 +1160,7 @@ Value *llvm::SimplifyUDivInst(Value *Op0, Value *Op1, const SimplifyQuery &Q) {
 /// If not, this returns null.
 static Value *SimplifySRemInst(Value *Op0, Value *Op1, const SimplifyQuery &Q,
                                unsigned MaxRecurse) {
+  return nullptr;
   // If the divisor is 0, the result is undefined, so assume the divisor is -1.
   // srem Op0, (sext i1 X) --> srem Op0, -1 --> 0
   Value *X;
@@ -1217,6 +1223,8 @@ static Value *SimplifyShift(Instruction::BinaryOps Opcode, Value *Op0,
   if (Constant *C = foldOrCommuteConstant(Opcode, Op0, Op1, Q))
     return C;
 
+  return nullptr;
+  
   // 0 shift by X -> 0
   if (match(Op0, m_Zero()))
     return Constant::getNullValue(Op0->getType());
@@ -1265,6 +1273,8 @@ static Value *SimplifyShift(Instruction::BinaryOps Opcode, Value *Op0,
 static Value *SimplifyRightShift(Instruction::BinaryOps Opcode, Value *Op0,
                                  Value *Op1, bool isExact, const SimplifyQuery &Q,
                                  unsigned MaxRecurse) {
+  return nullptr;
+  
   if (Value *V = SimplifyShift(Opcode, Op0, Op1, Q, MaxRecurse))
     return V;
 
@@ -1291,6 +1301,8 @@ static Value *SimplifyRightShift(Instruction::BinaryOps Opcode, Value *Op0,
 /// If not, this returns null.
 static Value *SimplifyShlInst(Value *Op0, Value *Op1, bool isNSW, bool isNUW,
                               const SimplifyQuery &Q, unsigned MaxRecurse) {
+  return nullptr;
+  
   if (Value *V = SimplifyShift(Instruction::Shl, Op0, Op1, Q, MaxRecurse))
     return V;
 
@@ -1323,6 +1335,8 @@ Value *llvm::SimplifyShlInst(Value *Op0, Value *Op1, bool isNSW, bool isNUW,
 /// If not, this returns null.
 static Value *SimplifyLShrInst(Value *Op0, Value *Op1, bool isExact,
                                const SimplifyQuery &Q, unsigned MaxRecurse) {
+  return nullptr;
+  
   if (Value *V = SimplifyRightShift(Instruction::LShr, Op0, Op1, isExact, Q,
                                     MaxRecurse))
       return V;
@@ -1361,6 +1375,8 @@ Value *llvm::SimplifyLShrInst(Value *Op0, Value *Op1, bool isExact,
 /// If not, this returns null.
 static Value *SimplifyAShrInst(Value *Op0, Value *Op1, bool isExact,
                                const SimplifyQuery &Q, unsigned MaxRecurse) {
+  return nullptr;
+  
   if (Value *V = SimplifyRightShift(Instruction::AShr, Op0, Op1, isExact, Q,
                                     MaxRecurse))
     return V;
@@ -1393,6 +1409,8 @@ Value *llvm::SimplifyAShrInst(Value *Op0, Value *Op1, bool isExact,
 static Value *simplifyUnsignedRangeCheck(ICmpInst *ZeroICmp,
                                          ICmpInst *UnsignedICmp, bool IsAnd,
                                          const SimplifyQuery &Q) {
+  return nullptr;
+  
   Value *X, *Y;
 
   ICmpInst::Predicate EqPred;
@@ -1502,6 +1520,7 @@ static Value *simplifyUnsignedRangeCheck(ICmpInst *ZeroICmp,
 /// Commuted variants are assumed to be handled by calling this function again
 /// with the parameters swapped.
 static Value *simplifyAndOfICmpsWithSameOperands(ICmpInst *Op0, ICmpInst *Op1) {
+  return nullptr;
   ICmpInst::Predicate Pred0, Pred1;
   Value *A ,*B;
   if (!match(Op0, m_ICmp(Pred0, m_Value(A), m_Value(B))) ||
@@ -1527,6 +1546,7 @@ static Value *simplifyAndOfICmpsWithSameOperands(ICmpInst *Op0, ICmpInst *Op1) {
 /// Commuted variants are assumed to be handled by calling this function again
 /// with the parameters swapped.
 static Value *simplifyOrOfICmpsWithSameOperands(ICmpInst *Op0, ICmpInst *Op1) {
+  return nullptr;
   ICmpInst::Predicate Pred0, Pred1;
   Value *A ,*B;
   if (!match(Op0, m_ICmp(Pred0, m_Value(A), m_Value(B))) ||
@@ -1555,6 +1575,7 @@ static Value *simplifyOrOfICmpsWithSameOperands(ICmpInst *Op0, ICmpInst *Op1) {
 /// the other.
 static Value *simplifyAndOrOfICmpsWithConstants(ICmpInst *Cmp0, ICmpInst *Cmp1,
                                                 bool IsAnd) {
+  return nullptr;
   // Look for this pattern: {and/or} (icmp X, C0), (icmp X, C1)).
   if (Cmp0->getOperand(0) != Cmp1->getOperand(0))
     return nullptr;
@@ -1592,6 +1613,7 @@ static Value *simplifyAndOrOfICmpsWithConstants(ICmpInst *Cmp0, ICmpInst *Cmp1,
 
 static Value *simplifyAndOrOfICmpsWithZero(ICmpInst *Cmp0, ICmpInst *Cmp1,
                                            bool IsAnd) {
+  return nullptr;
   ICmpInst::Predicate P0 = Cmp0->getPredicate(), P1 = Cmp1->getPredicate();
   if (!match(Cmp0->getOperand(1), m_Zero()) ||
       !match(Cmp1->getOperand(1), m_Zero()) || P0 != P1)
@@ -1629,6 +1651,7 @@ static Value *simplifyAndOrOfICmpsWithZero(ICmpInst *Cmp0, ICmpInst *Cmp1,
 
 static Value *simplifyAndOfICmpsWithAdd(ICmpInst *Op0, ICmpInst *Op1,
                                         const InstrInfoQuery &IIQ) {
+  return nullptr;
   // (icmp (add V, C0), C1) & (icmp V, C0)
   ICmpInst::Predicate Pred0, Pred1;
   const APInt *C0, *C1;
@@ -1676,6 +1699,7 @@ static Value *simplifyAndOfICmpsWithAdd(ICmpInst *Op0, ICmpInst *Op1,
 
 static Value *simplifyAndOfICmps(ICmpInst *Op0, ICmpInst *Op1,
                                  const SimplifyQuery &Q) {
+  return nullptr;
   if (Value *X = simplifyUnsignedRangeCheck(Op0, Op1, /*IsAnd=*/true, Q))
     return X;
   if (Value *X = simplifyUnsignedRangeCheck(Op1, Op0, /*IsAnd=*/true, Q))
@@ -1702,6 +1726,7 @@ static Value *simplifyAndOfICmps(ICmpInst *Op0, ICmpInst *Op1,
 
 static Value *simplifyOrOfICmpsWithAdd(ICmpInst *Op0, ICmpInst *Op1,
                                        const InstrInfoQuery &IIQ) {
+  return nullptr;
   // (icmp (add V, C0), C1) | (icmp V, C0)
   ICmpInst::Predicate Pred0, Pred1;
   const APInt *C0, *C1;
@@ -1749,6 +1774,7 @@ static Value *simplifyOrOfICmpsWithAdd(ICmpInst *Op0, ICmpInst *Op1,
 
 static Value *simplifyOrOfICmps(ICmpInst *Op0, ICmpInst *Op1,
                                 const SimplifyQuery &Q) {
+  return nullptr;
   if (Value *X = simplifyUnsignedRangeCheck(Op0, Op1, /*IsAnd=*/false, Q))
     return X;
   if (Value *X = simplifyUnsignedRangeCheck(Op1, Op0, /*IsAnd=*/false, Q))
@@ -1775,6 +1801,7 @@ static Value *simplifyOrOfICmps(ICmpInst *Op0, ICmpInst *Op1,
 
 static Value *simplifyAndOrOfFCmps(const TargetLibraryInfo *TLI,
                                    FCmpInst *LHS, FCmpInst *RHS, bool IsAnd) {
+  return nullptr;
   Value *LHS0 = LHS->getOperand(0), *LHS1 = LHS->getOperand(1);
   Value *RHS0 = RHS->getOperand(0), *RHS1 = RHS->getOperand(1);
   if (LHS0->getType() != RHS0->getType())
@@ -1813,6 +1840,7 @@ static Value *simplifyAndOrOfFCmps(const TargetLibraryInfo *TLI,
 
 static Value *simplifyAndOrOfCmps(const SimplifyQuery &Q,
                                   Value *Op0, Value *Op1, bool IsAnd) {
+  return nullptr;
   // Look through casts of the 'and' operands to find compares.
   auto *Cast0 = dyn_cast<CastInst>(Op0);
   auto *Cast1 = dyn_cast<CastInst>(Op1);
@@ -1852,6 +1880,7 @@ static Value *simplifyAndOrOfCmps(const SimplifyQuery &Q,
 ///   %Op1 = extractvalue { i4, i1 } %Agg, 1
 static bool omitCheckForZeroBeforeMulWithOverflowInternal(Value *Op1,
                                                           Value *X) {
+  return false;
   auto *Extract = dyn_cast<ExtractValueInst>(Op1);
   // We should only be extracting the overflow bit.
   if (!Extract || !Extract->getIndices().equals(1))
