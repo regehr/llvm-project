@@ -3626,6 +3626,8 @@ void InstructionCombiningPass::getAnalysisUsage(AnalysisUsage &AU) const {
 }
 
 bool InstructionCombiningPass::runOnFunction(Function &F) {
+  return false;
+
   if (skipFunction(F))
     return false;
 

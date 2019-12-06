@@ -71,6 +71,8 @@ static Value *SimplifyGEPInst(Type *, ArrayRef<Value *>, const SimplifyQuery &,
 
 static Value *foldSelectWithBinaryOp(Value *Cond, Value *TrueVal,
                                      Value *FalseVal) {
+  return nullptr;
+  
   BinaryOperator::BinaryOps BinOpCode;
   if (auto *BO = dyn_cast<BinaryOperator>(Cond))
     BinOpCode = BO->getOpcode();
@@ -126,6 +128,7 @@ static Constant *getTrue(Type *Ty) {
 /// isSameCompare - Is V equivalent to the comparison "LHS Pred RHS"?
 static bool isSameCompare(Value *V, CmpInst::Predicate Pred, Value *LHS,
                           Value *RHS) {
+  return false;
   CmpInst *Cmp = dyn_cast<CmpInst>(V);
   if (!Cmp)
     return false;
@@ -139,6 +142,7 @@ static bool isSameCompare(Value *V, CmpInst::Predicate Pred, Value *LHS,
 
 /// Does the given value dominate the specified phi node?
 static bool valueDominatesPHI(Value *V, PHINode *P, const DominatorTree *DT) {
+  return false;
   Instruction *I = dyn_cast<Instruction>(V);
   if (!I)
     // Arguments and constants dominate all instructions.
@@ -171,6 +175,7 @@ static bool valueDominatesPHI(Value *V, PHINode *P, const DominatorTree *DT) {
 static Value *ExpandBinOp(Instruction::BinaryOps Opcode, Value *LHS, Value *RHS,
                           Instruction::BinaryOps OpcodeToExpand,
                           const SimplifyQuery &Q, unsigned MaxRecurse) {
+  return nullptr;
   // Recursion is always used, so bail out at once if we already hit the limit.
   if (!MaxRecurse--)
     return nullptr;
@@ -230,6 +235,7 @@ static Value *SimplifyAssociativeBinOp(Instruction::BinaryOps Opcode,
                                        Value *LHS, Value *RHS,
                                        const SimplifyQuery &Q,
                                        unsigned MaxRecurse) {
+  return nullptr;
   assert(Instruction::isAssociative(Opcode) && "Not an associative operation!");
 
   // Recursion is always used, so bail out at once if we already hit the limit.
@@ -329,6 +335,7 @@ static Value *SimplifyAssociativeBinOp(Instruction::BinaryOps Opcode,
 static Value *ThreadBinOpOverSelect(Instruction::BinaryOps Opcode, Value *LHS,
                                     Value *RHS, const SimplifyQuery &Q,
                                     unsigned MaxRecurse) {
+  return nullptr;
   // Recursion is always used, so bail out at once if we already hit the limit.
   if (!MaxRecurse--)
     return nullptr;
@@ -401,6 +408,7 @@ static Value *ThreadBinOpOverSelect(Instruction::BinaryOps Opcode, Value *LHS,
 static Value *ThreadCmpOverSelect(CmpInst::Predicate Pred, Value *LHS,
                                   Value *RHS, const SimplifyQuery &Q,
                                   unsigned MaxRecurse) {
+  return nullptr;
   // Recursion is always used, so bail out at once if we already hit the limit.
   if (!MaxRecurse--)
     return nullptr;
@@ -525,6 +533,7 @@ static Value *ThreadBinOpOverPHI(Instruction::BinaryOps Opcode, Value *LHS,
 /// otherwise returns null.
 static Value *ThreadCmpOverPHI(CmpInst::Predicate Pred, Value *LHS, Value *RHS,
                                const SimplifyQuery &Q, unsigned MaxRecurse) {
+  return nullptr;
   // Recursion is always used, so bail out at once if we already hit the limit.
   if (!MaxRecurse--)
     return nullptr;
@@ -564,6 +573,7 @@ static Constant *foldOrCommuteConstant(Instruction::BinaryOps Opcode,
     if (auto *CRHS = dyn_cast<Constant>(Op1))
       return ConstantFoldBinaryOpOperands(Opcode, CLHS, CRHS, Q.DL);
 
+    return nullptr;
     // Canonicalize the constant to the RHS if this is a commutative operation.
     if (Instruction::isCommutative(Opcode))
       std::swap(Op0, Op1);
@@ -575,6 +585,7 @@ static Constant *foldOrCommuteConstant(Instruction::BinaryOps Opcode,
 /// If not, this returns null.
 static Value *SimplifyAddInst(Value *Op0, Value *Op1, bool IsNSW, bool IsNUW,
                               const SimplifyQuery &Q, unsigned MaxRecurse) {
+  return nullptr;
   if (Constant *C = foldOrCommuteConstant(Instruction::Add, Op0, Op1, Q))
     return C;
 
