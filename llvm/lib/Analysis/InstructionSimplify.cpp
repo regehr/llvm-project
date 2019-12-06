@@ -1907,6 +1907,7 @@ static bool omitCheckForZeroBeforeMulWithOverflowInternal(Value *Op1,
 ///   %??? = and i1 %Op0, %Op1
 /// We can just return  %Op1
 static Value *omitCheckForZeroBeforeMulWithOverflow(Value *Op0, Value *Op1) {
+  return nullptr;
   ICmpInst::Predicate Pred;
   Value *X;
   if (!match(Op0, m_ICmp(Pred, m_Value(X), m_Zero())) ||
@@ -1931,6 +1932,7 @@ static Value *omitCheckForZeroBeforeMulWithOverflow(Value *Op0, Value *Op1) {
 /// We can just return  %NotOp1
 static Value *omitCheckForZeroBeforeInvertedMulWithOverflow(Value *Op0,
                                                             Value *NotOp1) {
+  return nullptr;
   ICmpInst::Predicate Pred;
   Value *X;
   if (!match(Op0, m_ICmp(Pred, m_Value(X), m_Zero())) ||
@@ -1954,6 +1956,8 @@ static Value *SimplifyAndInst(Value *Op0, Value *Op1, const SimplifyQuery &Q,
   if (Constant *C = foldOrCommuteConstant(Instruction::And, Op0, Op1, Q))
     return C;
 
+  return nullptr;
+  
   // X & undef -> 0
   if (match(Op1, m_Undef()))
     return Constant::getNullValue(Op0->getType());
@@ -2110,6 +2114,8 @@ static Value *SimplifyOrInst(Value *Op0, Value *Op1, const SimplifyQuery &Q,
   if (Constant *C = foldOrCommuteConstant(Instruction::Or, Op0, Op1, Q))
     return C;
 
+  return nullptr;
+  
   // X | undef -> -1
   // X | -1 = -1
   // Do not return Op1 because it may contain undef elements if it's a vector.
@@ -2251,6 +2257,7 @@ Value *llvm::SimplifyOrInst(Value *Op0, Value *Op1, const SimplifyQuery &Q) {
 /// If not, this returns null.
 static Value *SimplifyXorInst(Value *Op0, Value *Op1, const SimplifyQuery &Q,
                               unsigned MaxRecurse) {
+  return nullptr;
   if (Constant *C = foldOrCommuteConstant(Instruction::Xor, Op0, Op1, Q))
     return C;
 
@@ -2302,6 +2309,7 @@ static Type *GetCompareTy(Value *Op) {
 /// Helper function for analyzing max/min idioms.
 static Value *ExtractEquivalentCondition(Value *V, CmpInst::Predicate Pred,
                                          Value *LHS, Value *RHS) {
+  return nullptr;
   SelectInst *SI = dyn_cast<SelectInst>(V);
   if (!SI)
     return nullptr;
@@ -2350,6 +2358,7 @@ computePointerICmp(const DataLayout &DL, const TargetLibraryInfo *TLI,
                    const DominatorTree *DT, CmpInst::Predicate Pred,
                    AssumptionCache *AC, const Instruction *CxtI,
                    const InstrInfoQuery &IIQ, Value *LHS, Value *RHS) {
+  return nullptr;
   // First, skip past any trivial no-ops.
   LHS = LHS->stripPointerCasts();
   RHS = RHS->stripPointerCasts();
@@ -2535,6 +2544,7 @@ computePointerICmp(const DataLayout &DL, const TargetLibraryInfo *TLI,
 /// Fold an icmp when its operands have i1 scalar type.
 static Value *simplifyICmpOfBools(CmpInst::Predicate Pred, Value *LHS,
                                   Value *RHS, const SimplifyQuery &Q) {
+  return nullptr;
   Type *ITy = GetCompareTy(LHS); // The return type.
   Type *OpTy = LHS->getType();   // The operand type.
   if (!OpTy->isIntOrIntVectorTy(1))
@@ -2609,6 +2619,7 @@ static Value *simplifyICmpOfBools(CmpInst::Predicate Pred, Value *LHS,
 /// Try hard to fold icmp with zero RHS because this is a common case.
 static Value *simplifyICmpWithZero(CmpInst::Predicate Pred, Value *LHS,
                                    Value *RHS, const SimplifyQuery &Q) {
+  return nullptr;
   if (!match(RHS, m_Zero()))
     return nullptr;
 
@@ -2671,6 +2682,7 @@ static Value *simplifyICmpWithZero(CmpInst::Predicate Pred, Value *LHS,
 
 static Value *simplifyICmpWithConstant(CmpInst::Predicate Pred, Value *LHS,
                                        Value *RHS, const InstrInfoQuery &IIQ) {
+  return nullptr;
   Type *ITy = GetCompareTy(RHS); // The return type.
 
   Value *X;
@@ -2713,6 +2725,7 @@ static Value *simplifyICmpWithConstant(CmpInst::Predicate Pred, Value *LHS,
 static Value *simplifyICmpWithBinOp(CmpInst::Predicate Pred, Value *LHS,
                                     Value *RHS, const SimplifyQuery &Q,
                                     unsigned MaxRecurse) {
+  return nullptr;
   Type *ITy = GetCompareTy(LHS); // The return type.
 
   BinaryOperator *LBO = dyn_cast<BinaryOperator>(LHS);
