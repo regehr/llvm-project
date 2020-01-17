@@ -307,6 +307,14 @@ void HIPToolChain::addClangTargetOptions(
                          false))
     CC1Args.push_back("-fgpu-rdc");
 
+  StringRef MaxThreadsPerBlock =
+      DriverArgs.getLastArgValue(options::OPT_gpu_max_threads_per_block_EQ);
+  if (!MaxThreadsPerBlock.empty()) {
+    std::string ArgStr =
+        std::string("--gpu-max-threads-per-block=") + MaxThreadsPerBlock.str();
+    CC1Args.push_back(DriverArgs.MakeArgStringRef(ArgStr));
+  }
+
   if (DriverArgs.hasFlag(options::OPT_fgpu_allow_device_init,
                          options::OPT_fno_gpu_allow_device_init, false))
     CC1Args.push_back("-fgpu-allow-device-init");
@@ -428,6 +436,7 @@ Tool *HIPToolChain::buildLinker() const {
 
 void HIPToolChain::addClangWarningOptions(ArgStringList &CC1Args) const {
   HostTC.addClangWarningOptions(CC1Args);
+  CC1Args.push_back("-Werror=format-nonliteral");
 }
 
 ToolChain::CXXStdlibType

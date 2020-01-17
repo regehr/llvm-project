@@ -1,16 +1,16 @@
-// RUN: %clang_cc1 -verify -fopenmp -fopenmp-version=45 -ast-print %s -Wno-openmp-target | FileCheck %s --check-prefix CHECK --check-prefix OMP45
+// RUN: %clang_cc1 -verify -fopenmp -fopenmp-version=45 -ast-print %s -Wno-openmp-mapping | FileCheck %s --check-prefix CHECK --check-prefix OMP45
 // RUN: %clang_cc1 -fopenmp -fopenmp-version=45 -x c++ -std=c++11 -emit-pch -o %t %s
-// RUN: %clang_cc1 -fopenmp -fopenmp-version=45 -std=c++11 -include-pch %t -fsyntax-only -verify %s -ast-print -Wno-openmp-target | FileCheck %s --check-prefix CHECK --check-prefix OMP45
-// RUN: %clang_cc1 -verify -fopenmp -fopenmp-version=50 -ast-print %s -Wno-openmp-target -DOMP5 | FileCheck %s --check-prefix CHECK --check-prefix OMP50
+// RUN: %clang_cc1 -fopenmp -fopenmp-version=45 -std=c++11 -include-pch %t -fsyntax-only -verify %s -ast-print -Wno-openmp-mapping | FileCheck %s --check-prefix CHECK --check-prefix OMP45
+// RUN: %clang_cc1 -verify -fopenmp -fopenmp-version=50 -ast-print %s -Wno-openmp-mapping -DOMP5 | FileCheck %s --check-prefix CHECK --check-prefix OMP50
 // RUN: %clang_cc1 -fopenmp -fopenmp-version=50 -x c++ -std=c++11 -emit-pch -o %t %s -DOMP5
-// RUN: %clang_cc1 -fopenmp -fopenmp-version=50 -std=c++11 -include-pch %t -fsyntax-only -verify %s -ast-print -Wno-openmp-target -DOMP5 | FileCheck %s --check-prefix CHECK --check-prefix OMP50
+// RUN: %clang_cc1 -fopenmp -fopenmp-version=50 -std=c++11 -include-pch %t -fsyntax-only -verify %s -ast-print -Wno-openmp-mapping -DOMP5 | FileCheck %s --check-prefix CHECK --check-prefix OMP50
 
-// RUN: %clang_cc1 -verify -fopenmp-simd -fopenmp-version=45 -ast-print %s -Wno-openmp-target | FileCheck %s --check-prefix CHECK --check-prefix OMP45
+// RUN: %clang_cc1 -verify -fopenmp-simd -fopenmp-version=45 -ast-print %s -Wno-openmp-mapping | FileCheck %s --check-prefix CHECK --check-prefix OMP45
 // RUN: %clang_cc1 -fopenmp-simd -fopenmp-version=45 -x c++ -std=c++11 -emit-pch -o %t %s
-// RUN: %clang_cc1 -fopenmp-simd -fopenmp-version=45 -std=c++11 -include-pch %t -fsyntax-only -verify %s -ast-print -Wno-openmp-target | FileCheck %s --check-prefix CHECK --check-prefix OMP45
-// RUN: %clang_cc1 -verify -fopenmp-simd -fopenmp-version=50 -ast-print %s -Wno-openmp-target -DOMP5 | FileCheck %s --check-prefix CHECK --check-prefix OMP50
+// RUN: %clang_cc1 -fopenmp-simd -fopenmp-version=45 -std=c++11 -include-pch %t -fsyntax-only -verify %s -ast-print -Wno-openmp-mapping | FileCheck %s --check-prefix CHECK --check-prefix OMP45
+// RUN: %clang_cc1 -verify -fopenmp-simd -fopenmp-version=50 -ast-print %s -Wno-openmp-mapping -DOMP5 | FileCheck %s --check-prefix CHECK --check-prefix OMP50
 // RUN: %clang_cc1 -fopenmp-simd -fopenmp-version=50 -x c++ -std=c++11 -emit-pch -o %t %s -DOMP5
-// RUN: %clang_cc1 -fopenmp-simd -fopenmp-version=50 -std=c++11 -include-pch %t -fsyntax-only -verify %s -ast-print -Wno-openmp-target -DOMP5 | FileCheck %s --check-prefix CHECK --check-prefix OMP50
+// RUN: %clang_cc1 -fopenmp-simd -fopenmp-version=50 -std=c++11 -include-pch %t -fsyntax-only -verify %s -ast-print -Wno-openmp-mapping -DOMP5 | FileCheck %s --check-prefix CHECK --check-prefix OMP50
 // expected-no-diagnostics
 
 #ifndef HEADER
@@ -150,7 +150,7 @@ int main(int argc, char **argv) {
 #pragma omp target
 #pragma omp teams
 #ifdef OMP5
-#pragma omp distribute parallel for simd aligned(x:8) linear(i:2) safelen(8) simdlen(8) if(simd: argc)
+#pragma omp distribute parallel for simd aligned(x:8) linear(i:2) safelen(8) simdlen(8) if(simd: argc) nontemporal(argc, c, d)
 #else
 #pragma omp distribute parallel for simd aligned(x:8) linear(i:2) safelen(8) simdlen(8)
 #endif // OMP5
@@ -158,7 +158,7 @@ int main(int argc, char **argv) {
     for (int j = 0; j < 200; j++)
       a += h + x[j];
   // OMP45: #pragma omp distribute parallel for simd aligned(x: 8) linear(i: 2) safelen(8) simdlen(8)
-  // OMP50: #pragma omp distribute parallel for simd aligned(x: 8) linear(i: 2) safelen(8) simdlen(8) if(simd: argc)
+  // OMP50: #pragma omp distribute parallel for simd aligned(x: 8) linear(i: 2) safelen(8) simdlen(8) if(simd: argc) nontemporal(argc,c,d)
   // CHECK-NEXT: for (i = 0; i < 100; i++)
   // CHECK-NEXT: for (int j = 0; j < 200; j++)
   // CHECK-NEXT: a += h + x[j];

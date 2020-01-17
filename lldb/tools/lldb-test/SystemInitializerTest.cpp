@@ -56,6 +56,7 @@
 #include "Plugins/ObjectFile/ELF/ObjectFileELF.h"
 #include "Plugins/ObjectFile/Mach-O/ObjectFileMachO.h"
 #include "Plugins/ObjectFile/PECOFF/ObjectFilePECOFF.h"
+#include "Plugins/ObjectFile/wasm/ObjectFileWasm.h"
 #include "Plugins/Platform/Android/PlatformAndroid.h"
 #include "Plugins/Platform/FreeBSD/PlatformFreeBSD.h"
 #include "Plugins/Platform/Linux/PlatformLinux.h"
@@ -75,6 +76,7 @@
 #include "Plugins/SymbolFile/PDB/SymbolFilePDB.h"
 #include "Plugins/SymbolFile/Symtab/SymbolFileSymtab.h"
 #include "Plugins/SymbolVendor/ELF/SymbolVendorELF.h"
+#include "Plugins/SymbolVendor/wasm/SymbolVendorWasm.h"
 #include "Plugins/SystemRuntime/MacOSX/SystemRuntimeMacOSX.h"
 #include "Plugins/UnwindAssembly/InstEmulation/UnwindAssemblyInstEmulation.h"
 #include "Plugins/UnwindAssembly/x86/UnwindAssembly-x86.h"
@@ -152,6 +154,7 @@ llvm::Error SystemInitializerTest::Initialize() {
   ObjectFileELF::Initialize();
   ObjectFileMachO::Initialize();
   ObjectFilePECOFF::Initialize();
+  wasm::ObjectFileWasm::Initialize();
 
   ScriptInterpreterNone::Initialize();
 
@@ -199,6 +202,7 @@ llvm::Error SystemInitializerTest::Initialize() {
   SymbolFileDWARF::Initialize();
   SymbolFilePDB::Initialize();
   SymbolFileSymtab::Initialize();
+  wasm::SymbolVendorWasm::Initialize();
   UnwindAssemblyInstEmulation::Initialize();
   UnwindAssembly_x86::Initialize();
   EmulateInstructionARM64::Initialize();
@@ -286,6 +290,7 @@ void SystemInitializerTest::Terminate() {
   SymbolFileDWARF::Terminate();
   SymbolFilePDB::Terminate();
   SymbolFileSymtab::Terminate();
+  wasm::SymbolVendorWasm::Terminate();
   UnwindAssembly_x86::Terminate();
   UnwindAssemblyInstEmulation::Terminate();
   EmulateInstructionARM64::Terminate();
@@ -345,6 +350,7 @@ void SystemInitializerTest::Terminate() {
   ObjectFileELF::Terminate();
   ObjectFileMachO::Terminate();
   ObjectFilePECOFF::Terminate();
+  wasm::ObjectFileWasm::Terminate();
 
   // Now shutdown the common parts, in reverse order.
   SystemInitializerCommon::Terminate();

@@ -708,8 +708,8 @@ static bool symbolIsDefined(const NMSymbol &Sym) {
 }
 
 static void sortAndPrintSymbolList(SymbolicFile &Obj, bool printName,
-                                   const std::string &ArchiveName,
-                                   const std::string &ArchitectureName) {
+                                   StringRef ArchiveName,
+                                   StringRef ArchitectureName) {
   if (!NoSort) {
     using Comparator = bool (*)(const NMSymbol &, const NMSymbol &);
     Comparator Cmp;
@@ -1133,13 +1133,16 @@ static char getNMSectionTagAndName(SymbolicFile &Obj, basic_symbol_iterator I,
     Ret = getSymbolNMTypeChar(*MachO, I);
   else if (WasmObjectFile *Wasm = dyn_cast<WasmObjectFile>(&Obj))
     Ret = getSymbolNMTypeChar(*Wasm, I);
-  else
-    Ret = getSymbolNMTypeChar(cast<ELFObjectFileBase>(Obj), I);
+  else if (ELFObjectFileBase *ELF = dyn_cast<ELFObjectFileBase>(&Obj)) {
+    if (ELFSymbolRef(*I).getELFType() == ELF::STT_GNU_IFUNC)
+      return 'i';
+    Ret = getSymbolNMTypeChar(*ELF, I);
+    if (ELFSymbolRef(*I).getBinding() == ELF::STB_GNU_UNIQUE)
+      return Ret;
+  } else
+    llvm_unreachable("unknown binary format");
 
   if (!(Symflags & object::SymbolRef::SF_Global))
-    return Ret;
-
-  if (Obj.isELF() && ELFSymbolRef(*I).getBinding() == ELF::STB_GNU_UNIQUE)
     return Ret;
 
   return toupper(Ret);
@@ -1181,10 +1184,9 @@ static unsigned getNsectInMachO(MachOObjectFile &Obj, BasicSymbolRef Sym) {
   return (STE.n_type & MachO::N_TYPE) == MachO::N_SECT ? STE.n_sect : 0;
 }
 
-static void
-dumpSymbolNamesFromObject(SymbolicFile &Obj, bool printName,
-                          const std::string &ArchiveName = std::string(),
-                          const std::string &ArchitectureName = std::string()) {
+static void dumpSymbolNamesFromObject(SymbolicFile &Obj, bool printName,
+                                      StringRef ArchiveName = {},
+                                      StringRef ArchitectureName = {}) {
   auto Symbols = Obj.symbols();
   if (DynamicSyms) {
     const auto *E = dyn_cast<ELFObjectFileBase>(&Obj);

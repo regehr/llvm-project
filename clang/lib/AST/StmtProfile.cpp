@@ -769,7 +769,13 @@ void OMPClauseProfiler::VisitOMPIsDevicePtrClause(
     const OMPIsDevicePtrClause *C) {
   VisitOMPClauseList(C);
 }
+void OMPClauseProfiler::VisitOMPNontemporalClause(
+    const OMPNontemporalClause *C) {
+  VisitOMPClauseList(C);
+  for (auto *E : C->private_refs())
+    Profiler->VisitStmt(E);
 }
+} // namespace
 
 void
 StmtProfiler::VisitOMPExecutableDirective(const OMPExecutableDirective *S) {
@@ -1329,9 +1335,9 @@ void StmtProfiler::VisitAtomicExpr(const AtomicExpr *S) {
 void StmtProfiler::VisitConceptSpecializationExpr(
                                            const ConceptSpecializationExpr *S) {
   VisitExpr(S);
-  VisitDecl(S->getFoundDecl());
-  VisitTemplateArguments(S->getTemplateArgsAsWritten()->getTemplateArgs(),
-                         S->getTemplateArgsAsWritten()->NumTemplateArgs);
+  VisitDecl(S->getNamedConcept());
+  for (const TemplateArgument &Arg : S->getTemplateArguments())
+    VisitTemplateArgument(Arg);
 }
 
 static Stmt::StmtClass DecodeOperatorCall(const CXXOperatorCallExpr *S,

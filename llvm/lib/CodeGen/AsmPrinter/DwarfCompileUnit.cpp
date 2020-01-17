@@ -78,10 +78,6 @@ DwarfCompileUnit::DwarfCompileUnit(unsigned UID, const DICompileUnit *Node,
 void DwarfCompileUnit::addLabelAddress(DIE &Die, dwarf::Attribute Attribute,
                                        const MCSymbol *Label) {
   // Don't use the address pool in non-fission or in the skeleton unit itself.
-  // FIXME: Once GDB supports this, it's probably worthwhile using the address
-  // pool from the skeleton - maybe even in non-fission (possibly fewer
-  // relocations by sharing them in the pool, but we have other ideas about how
-  // to reduce the number of relocations as well/instead).
   if ((!DD->useSplitDwarf() || !Skeleton) && DD->getDwarfVersion() < 5)
     return addLocalLabelAddress(Die, Attribute, Label);
 
@@ -503,10 +499,10 @@ void DwarfCompileUnit::addScopeRangeList(DIE &ScopeDIE,
     const MCSymbol *RangeSectionSym =
         TLOF.getDwarfRangesSection()->getBeginSymbol();
     if (isDwoUnit())
-      addSectionDelta(ScopeDIE, dwarf::DW_AT_ranges, List.getSym(),
+      addSectionDelta(ScopeDIE, dwarf::DW_AT_ranges, List.Label,
                       RangeSectionSym);
     else
-      addSectionLabel(ScopeDIE, dwarf::DW_AT_ranges, List.getSym(),
+      addSectionLabel(ScopeDIE, dwarf::DW_AT_ranges, List.Label,
                       RangeSectionSym);
   }
 }
@@ -615,6 +611,10 @@ DIE *DwarfCompileUnit::constructVariableDIEImpl(const DbgVariable &DV,
   unsigned Offset = DV.getDebugLocListIndex();
   if (Offset != ~0U) {
     addLocationList(*VariableDie, dwarf::DW_AT_location, Offset);
+    auto TagOffset = DV.getDebugLocListTagOffset();
+    if (TagOffset)
+      addUInt(*VariableDie, dwarf::DW_AT_LLVM_tag_offset, dwarf::DW_FORM_data1,
+              *TagOffset);
     return VariableDie;
   }
 
@@ -632,6 +632,10 @@ DIE *DwarfCompileUnit::constructVariableDIEImpl(const DbgVariable &DV,
         DwarfExpr.addUnsignedConstant(DVal->getInt());
         DwarfExpr.addExpression(Expr);
         addBlock(*VariableDie, dwarf::DW_AT_location, DwarfExpr.finalize());
+        if (DwarfExpr.TagOffset)
+          addUInt(*VariableDie, dwarf::DW_AT_LLVM_tag_offset,
+                  dwarf::DW_FORM_data1, *DwarfExpr.TagOffset);
+
       } else
         addConstantValue(*VariableDie, DVal->getInt(), DV.getType());
     } else if (DVal->isConstantFP()) {
@@ -930,6 +934,7 @@ DwarfCompileUnit::getDwarf5OrGNUAttr(dwarf::Attribute Attr) const {
   case dwarf::DW_AT_call_origin:
     return dwarf::DW_AT_abstract_origin;
   case dwarf::DW_AT_call_pc:
+  case dwarf::DW_AT_call_return_pc:
     return dwarf::DW_AT_low_pc;
   case dwarf::DW_AT_call_value:
     return dwarf::DW_AT_GNU_call_site_value;
@@ -952,9 +957,11 @@ DwarfCompileUnit::getDwarf5OrGNULocationAtom(dwarf::LocationAtom Loc) const {
   }
 }
 
-DIE &DwarfCompileUnit::constructCallSiteEntryDIE(
-    DIE &ScopeDIE, const DISubprogram *CalleeSP, bool IsTail,
-    const MCSymbol *PCAddr, const MCExpr *PCOffset, unsigned CallReg) {
+DIE &DwarfCompileUnit::constructCallSiteEntryDIE(DIE &ScopeDIE,
+                                                 const DISubprogram *CalleeSP,
+                                                 bool IsTail,
+                                                 const MCSymbol *PCAddr,
+                                                 unsigned CallReg) {
   // Insert a call site entry DIE within ScopeDIE.
   DIE &CallSiteDIE = createAndAddDIE(getDwarf5OrGNUTag(dwarf::DW_TAG_call_site),
                                      ScopeDIE, nullptr);
@@ -964,8 +971,8 @@ DIE &DwarfCompileUnit::constructCallSiteEntryDIE(
     addAddress(CallSiteDIE, getDwarf5OrGNUAttr(dwarf::DW_AT_call_target),
                MachineLocation(CallReg));
   } else {
-    DIE *CalleeDIE = getOrCreateSubprogramDIE(CalleeSP);
-    assert(CalleeDIE && "Could not create DIE for call site entry origin");
+    DIE *CalleeDIE = getDIE(CalleeSP);
+    assert(CalleeDIE && "Could not find DIE for call site entry origin");
     addDIEEntry(CallSiteDIE, getDwarf5OrGNUAttr(dwarf::DW_AT_call_origin),
                 *CalleeDIE);
   }
@@ -976,12 +983,13 @@ DIE &DwarfCompileUnit::constructCallSiteEntryDIE(
 
   // Attach the return PC to allow the debugger to disambiguate call paths
   // from one function to another.
-  if (DD->getDwarfVersion() == 4 && DD->tuneForGDB()) {
-    assert(PCAddr && "Missing PC information for a call");
-    addLabelAddress(CallSiteDIE, dwarf::DW_AT_low_pc, PCAddr);
-  } else if (!IsTail || DD->tuneForGDB()) {
-    assert(PCOffset && "Missing return PC information for a call");
-    addAddressExpr(CallSiteDIE, dwarf::DW_AT_call_return_pc, PCOffset);
+  //
+  // The return PC is only really needed when the call /isn't/ a tail call, but
+  // for some reason GDB always expects it.
+  if (!IsTail || DD->tuneForGDB()) {
+    assert(PCAddr && "Missing return PC information for a call");
+    addLabelAddress(CallSiteDIE,
+                    getDwarf5OrGNUAttr(dwarf::DW_AT_call_return_pc), PCAddr);
   }
 
   return CallSiteDIE;
@@ -1198,6 +1206,10 @@ void DwarfCompileUnit::addAddress(DIE &Die, dwarf::Attribute Attribute,
 
   // Now attach the location information to the DIE.
   addBlock(Die, Attribute, DwarfExpr.finalize());
+
+  if (DwarfExpr.TagOffset)
+    addUInt(Die, dwarf::DW_AT_LLVM_tag_offset, dwarf::DW_FORM_data1,
+            *DwarfExpr.TagOffset);
 }
 
 /// Start with the address based on the location provided, and generate the
@@ -1228,6 +1240,10 @@ void DwarfCompileUnit::addComplexAddress(const DbgVariable &DV, DIE &Die,
 
   // Now attach the location information to the DIE.
   addBlock(Die, Attribute, DwarfExpr.finalize());
+
+  if (DwarfExpr.TagOffset)
+    addUInt(Die, dwarf::DW_AT_LLVM_tag_offset, dwarf::DW_FORM_data1,
+            *DwarfExpr.TagOffset);
 }
 
 /// Add a Dwarf loclistptr attribute data and value.
@@ -1271,12 +1287,6 @@ void DwarfCompileUnit::applyLabelAttributes(const DbgLabel &Label,
 void DwarfCompileUnit::addExpr(DIELoc &Die, dwarf::Form Form,
                                const MCExpr *Expr) {
   Die.addValue(DIEValueAllocator, (dwarf::Attribute)0, Form, DIEExpr(Expr));
-}
-
-void DwarfCompileUnit::addAddressExpr(DIE &Die, dwarf::Attribute Attribute,
-                                      const MCExpr *Expr) {
-  Die.addValue(DIEValueAllocator, Attribute, dwarf::DW_FORM_addr,
-               DIEExpr(Expr));
 }
 
 void DwarfCompileUnit::applySubprogramAttributesToDefinition(

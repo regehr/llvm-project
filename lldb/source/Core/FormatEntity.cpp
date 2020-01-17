@@ -125,6 +125,7 @@ static FormatEntity::Entry::Definition g_function_child_entries[] = {
     ENTRY("name", FunctionName),
     ENTRY("name-without-args", FunctionNameNoArgs),
     ENTRY("name-with-args", FunctionNameWithArgs),
+    ENTRY("mangled-name", FunctionMangledName),
     ENTRY("addr-offset", FunctionAddrOffset),
     ENTRY("concrete-only-addr-offset-no-padding", FunctionAddrOffsetConcrete),
     ENTRY("line-offset", FunctionLineOffset),
@@ -351,6 +352,7 @@ const char *FormatEntity::Entry::TypeToCString(Type t) {
     ENUM_TO_CSTR(FunctionName);
     ENUM_TO_CSTR(FunctionNameWithArgs);
     ENUM_TO_CSTR(FunctionNameNoArgs);
+    ENUM_TO_CSTR(FunctionMangledName);
     ENUM_TO_CSTR(FunctionAddrOffset);
     ENUM_TO_CSTR(FunctionAddrOffsetConcrete);
     ENUM_TO_CSTR(FunctionLineOffset);
@@ -1745,6 +1747,31 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
   }
     return false;
 
+  case Entry::Type::FunctionMangledName: {
+    const char *name = nullptr;
+    if (sc->symbol)
+      name = sc->symbol->GetMangled()
+                 .GetName(sc->symbol->GetLanguage(), Mangled::ePreferMangled)
+                 .AsCString();
+    else if (sc->function)
+      name = sc->function->GetMangled()
+                 .GetName(sc->symbol->GetLanguage(), Mangled::ePreferMangled)
+                 .AsCString();
+
+    if (!name)
+      return false;
+    s.PutCString(name);
+
+    if (sc->block->GetContainingInlinedBlock()) {
+      if (const InlineFunctionInfo *inline_info =
+              sc->block->GetInlinedFunctionInfo()) {
+        s.PutCString(" [inlined] ");
+        inline_info->GetName(sc->function->GetLanguage()).Dump(&s);
+      }
+    }
+    return true;
+  }
+
   case Entry::Type::FunctionAddrOffset:
     if (addr) {
       if (DumpAddressOffsetFromFunction(s, sc, exe_ctx, *addr, false, false,
@@ -2310,7 +2337,7 @@ bool FormatEntity::FormatFileSpec(const FileSpec &file_spec, Stream &s,
                                   llvm::StringRef variable_name,
                                   llvm::StringRef variable_format) {
   if (variable_name.empty() || variable_name.equals(".fullpath")) {
-    file_spec.Dump(&s);
+    file_spec.Dump(s.AsRawOstream());
     return true;
   } else if (variable_name.equals(".basename")) {
     s.PutCString(file_spec.GetFilename().AsCString(""));
