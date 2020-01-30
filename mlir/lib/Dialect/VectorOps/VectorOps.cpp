@@ -1,6 +1,6 @@
 //===- VectorOps.cpp - MLIR Super Vectorizer Operations -------------------===//
 //
-// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
@@ -14,6 +14,7 @@
 #include "mlir/Dialect/VectorOps/VectorOps.h"
 #include "mlir/Dialect/StandardOps/Ops.h"
 #include "mlir/Dialect/Utils/StructuredOpsUtils.h"
+#include "mlir/Dialect/VectorOps/VectorUtils.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Builders.h"
@@ -524,37 +525,15 @@ isValidExtractOrInsertSlicesType(Operation *op, VectorType vectorType,
   if (sizes.size() != rank || strides.size() != rank)
     return op->emitError("requires sizes and strides of rank ") << rank;
 
-  // Compute the number of slices in each dimension.
-  // TODO(andydavis) Move this into a slice generation helper function.
-  auto shape = vectorType.getShape();
-  SmallVector<int64_t, 4> dimSliceCounts(rank);
-  for (unsigned i = 0; i < rank; ++i)
-    dimSliceCounts[i] = ceilDiv(shape[i], sizes[i]);
-  // Compute the strides between slices in each dimension.
-  SmallVector<int64_t, 4> sliceStrides(rank);
-  sliceStrides[rank - 1] = 1;
-  for (int i = rank - 2; i >= 0; --i)
-    sliceStrides[i] = sliceStrides[i + 1] * dimSliceCounts[i + 1];
-
   // Generate each slice shape based on 'sizes', 'strides' and 'vectorType',
   // and verify that the same matches the corresponding tuple element 'i'.
+  auto shape = vectorType.getShape();
+  auto sliceStrides = computeStrides(shape, sizes);
   for (int64_t i = 0, e = tupleType.size(); i < e; ++i) {
-    // De-linearize w.r.t. 'sliceStrides'.
-    SmallVector<int64_t, 4> vectorOffsets(rank);
-    int64_t linearIndex = i;
-    for (unsigned j = 0; j < rank; ++j) {
-      vectorOffsets[j] = linearIndex / sliceStrides[j];
-      linearIndex %= sliceStrides[j];
-    }
-    // Convert from unrolled vector-space offsets to element-space offsets.
-    auto offsets = mlir::functional::zipMap(
-        [](int64_t v1, int64_t v2) { return v1 * v2; }, vectorOffsets, sizes);
-    // Initialize 'sliceSizes' to target 'sizes'
-    SmallVector<int64_t, 4> sliceSizes(sizes.begin(), sizes.end());
-    for (unsigned j = 0; j < rank; ++j) {
-      // Based on 'offsets' and 'shape' clip some dim sizes for partial tiles.
-      sliceSizes[j] = std::min(sliceSizes[j], shape[j] - offsets[j]);
-    }
+    auto vectorOffsets = delinearize(sliceStrides, i);
+    auto elementOffsets =
+        computeElementOffsetsFromVectorSliceOffsets(sizes, vectorOffsets);
+    auto sliceSizes = computeSliceSizes(shape, sizes, elementOffsets);
     // Create slice VectorType type.
     auto sliceVectorType =
         VectorType::get(sliceSizes, vectorType.getElementType());
@@ -1679,6 +1658,18 @@ static LogicalResult verify(TupleGetOp op) {
       op.getIndex() >= static_cast<int64_t>(tupleType.size()))
     return op.emitOpError("tuple get index out of range");
   return success();
+}
+
+OpFoldResult TupleGetOp::fold(ArrayRef<Attribute> operands) {
+  // Rewrite:
+  //    %t = vector.tuple .., %e_i, ..
+  //    %x = vector.tuple_get %t, i
+  // into:
+  //    %t = vector.tuple .., %e_i, ..  // one less use
+  //    %x = %e_i
+  if (auto tupleOp = dyn_cast_or_null<TupleOp>(getOperand().getDefiningOp()))
+    return tupleOp.getOperand(getIndex());
+  return {};
 }
 
 //===----------------------------------------------------------------------===//

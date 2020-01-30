@@ -1,4 +1,4 @@
-//===-- REPL.cpp ------------------------------------------------*- C++ -*-===//
+//===-- REPL.cpp ----------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -488,14 +488,7 @@ void REPL::IOHandlerComplete(IOHandler &io_handler,
   current_code.append("\n");
   current_code += request.GetRawLine();
 
-  StringList matches;
-  int result = CompleteCode(current_code, matches);
-  if (result == -2) {
-    assert(matches.GetSize() == 1);
-    request.AddCompletion(matches.GetStringAtIndex(0), "",
-                          CompletionMode::RewriteLine);
-  } else
-    request.AddCompletions(matches);
+  CompleteCode(current_code, request);
 }
 
 bool QuitCommandOverrideCallback(void *baton, const char **argv) {

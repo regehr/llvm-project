@@ -401,7 +401,7 @@ private:
       if (IntervalMs < 0)
         return 0;
       if (Region->ReleaseInfo.LastReleaseAtNs +
-              static_cast<uptr>(IntervalMs) * 1000000ULL >
+              static_cast<u64>(IntervalMs) * 1000000 >
           getMonotonicTime()) {
         return 0; // Memory was returned recently.
       }

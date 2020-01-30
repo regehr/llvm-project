@@ -1,6 +1,6 @@
 //===-- LLVMOpBase.td - LLVM IR dialect shared definitions -*- tablegen -*-===//
 //
-// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
@@ -55,5 +55,22 @@ class LLVM_OpBase<Dialect dialect, string mnemonic, list<OpTrait> traits = []> :
 // directly.
 class LLVM_Op<string mnemonic, list<OpTrait> traits = []> :
     LLVM_OpBase<LLVM_Dialect, mnemonic, traits>;
+
+// Base class for LLVM intrinsics operation. It is the same as an LLVM_Op
+// but the operation has a ".intr." element in the prefix becoming
+// "llvm.intr.*".
+class LLVM_IntrOp<string mnemonic, list<OpTrait> traits = []> :
+    LLVM_Op<"intr."#mnemonic, traits>;
+
+// Case of the LLVM enum attribute backed by I64Attr with customized string
+// representation that corresponds to what is visible in the textual IR form.
+class LLVM_EnumAttrCase<string cppSym, string irSym, int val> :
+    I64EnumAttrCase<cppSym, val, irSym>;
+
+// LLVM enum attribute backed by I64Attr with string representation
+// corresponding to what is visible in the textual IR form.
+class LLVM_EnumAttr<string name, string description,
+                    list<LLVM_EnumAttrCase> cases> :
+    I64EnumAttr<name, description, cases>;
 
 #endif  // LLVMIR_OP_BASE

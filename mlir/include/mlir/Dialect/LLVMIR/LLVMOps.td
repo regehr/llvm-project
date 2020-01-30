@@ -1,6 +1,6 @@
 //===-- LLVMOps.td - LLVM IR dialect op definition file ----*- tablegen -*-===//
 //
-// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
@@ -315,6 +315,41 @@ def LLVM_FPExtOp : LLVM_CastOp<"fpext", "CreateFPExt">;
 def LLVM_FPTruncOp : LLVM_CastOp<"fptrunc", "CreateFPTrunc">;
 
 // Call-related operations.
+def LLVM_InvokeOp : LLVM_Op<"invoke", [Terminator]>,
+                    Arguments<(ins OptionalAttr<FlatSymbolRefAttr>:$callee,
+                               Variadic<LLVM_Type>)>,
+                    Results<(outs Variadic<LLVM_Type>)> {
+  let builders = [OpBuilder<
+    "Builder *b, OperationState &result, ArrayRef<Type> tys, "
+    "FlatSymbolRefAttr callee, ValueRange ops, Block* normal, "
+    "ValueRange normalOps, Block* unwind, ValueRange unwindOps",
+    [{
+      result.addAttribute("callee", callee);
+      build(b, result, tys, ops, normal, normalOps, unwind, unwindOps);
+    }]>,
+    OpBuilder<
+    "Builder *b, OperationState &result, ArrayRef<Type> tys, "
+    "ValueRange ops, Block* normal, "
+    "ValueRange normalOps, Block* unwind, ValueRange unwindOps",
+    [{
+      result.addTypes(tys);
+      result.addOperands(ops);
+      result.addSuccessor(normal, normalOps);
+      result.addSuccessor(unwind, unwindOps);
+    }]>];
+  let verifier = [{ return ::verify(*this);  }];
+  let parser = [{ return parseInvokeOp(parser, result); }];
+  let printer = [{ printInvokeOp(p, *this); }];
+}
+
+def LLVM_LandingpadOp : LLVM_OneResultOp<"landingpad">,
+                        Arguments<(ins UnitAttr:$cleanup, 
+                                       Variadic<LLVM_Type>)> {
+  let verifier = [{ return ::verify(*this); }];
+  let parser = [{ return parseLandingpadOp(parser, result); }];
+  let printer = [{ printLandingpadOp(p, *this); }];
+}
+
 def LLVM_CallOp : LLVM_Op<"call">,
                   Arguments<(ins OptionalAttr<FlatSymbolRefAttr>:$callee,
                              Variadic<LLVM_Type>)>,
@@ -459,18 +494,21 @@ def LLVM_UnreachableOp : LLVM_TerminatorOp<"unreachable", []> {
 // https://llvm.org/docs/LangRef.html#linkage-types. The names are equivalent to
 // visible names in the IR rather than to enum values names in llvm::GlobalValue
 // since the latter is easier to change.
-def LinkagePrivate             : I64EnumAttrCase<"Private", 0>;
-def LinkageInternal            : I64EnumAttrCase<"Internal", 1>;
-def LinkageAvailableExternally : I64EnumAttrCase<"AvailableExternally", 2>;
-def LinkageLinkonce            : I64EnumAttrCase<"Linkonce", 3>;
-def LinkageWeak                : I64EnumAttrCase<"Weak", 4>;
-def LinkageCommon              : I64EnumAttrCase<"Common", 5>;
-def LinkageAppending           : I64EnumAttrCase<"Appending", 6>;
-def LinkageExternWeak          : I64EnumAttrCase<"ExternWeak", 7>;
-def LinkageLinkonceODR         : I64EnumAttrCase<"LinkonceODR", 8>;
-def LinkageWeakODR             : I64EnumAttrCase<"WeakODR", 9>;
-def LinkageExternal            : I64EnumAttrCase<"External", 10>;
-def Linkage : I64EnumAttr<
+def LinkagePrivate             : LLVM_EnumAttrCase<"Private", "private", 0>;
+def LinkageInternal            : LLVM_EnumAttrCase<"Internal", "internal", 1>;
+def LinkageAvailableExternally : LLVM_EnumAttrCase<"AvailableExternally",
+                                                   "available_externally", 2>;
+def LinkageLinkonce            : LLVM_EnumAttrCase<"Linkonce", "linkonce", 3>;
+def LinkageWeak                : LLVM_EnumAttrCase<"Weak", "weak", 4>;
+def LinkageCommon              : LLVM_EnumAttrCase<"Common", "common", 5>;
+def LinkageAppending           : LLVM_EnumAttrCase<"Appending", "appending", 6>;
+def LinkageExternWeak          : LLVM_EnumAttrCase<"ExternWeak",
+                                                   "extern_weak", 7>;
+def LinkageLinkonceODR         : LLVM_EnumAttrCase<"LinkonceODR",
+                                                   "linkonce_odr", 8>;
+def LinkageWeakODR             : LLVM_EnumAttrCase<"WeakODR", "weak_odr", 9>;
+def LinkageExternal            : LLVM_EnumAttrCase<"External", "external", 10>;
+def Linkage : LLVM_EnumAttr<
     "Linkage",
     "LLVM linkage types",
     [LinkagePrivate, LinkageInternal, LinkageAvailableExternally,
@@ -654,30 +692,31 @@ class LLVM_UnaryIntrinsicOp<string func, list<OpTrait> traits = []> :
       "{$in->getType()}), {$in});"> {
 }
 
-class LLVM_BinaryIntrinsicOp<string func, list<OpTrait> traits = []> :
+class LLVM_BinarySameArgsIntrinsicOp<string func, list<OpTrait> traits = []> :
     LLVM_OneResultOp<"intr." # func,
            !listconcat([NoSideEffect, SameOperandsAndResultType], traits)>,
     Arguments<(ins LLVM_Type:$a, LLVM_Type:$b)>,
     LLVM_Builder<"$res = builder.CreateCall(llvm::Intrinsic::getDeclaration("
       "builder.GetInsertBlock()->getModule(), llvm::Intrinsic::" # func # ","
-      "{$a->getType(), $b->getType()}), {$a, $b});"> {
+      "{$a->getType()}), {$a, $b});"> {
 }
 
-class LLVM_TernaryIntrinsicOp<string func, list<OpTrait> traits = []> :
+class LLVM_TernarySameArgsIntrinsicOp<string func, list<OpTrait> traits = []> :
     LLVM_OneResultOp<"intr." # func,
            !listconcat([NoSideEffect, SameOperandsAndResultType], traits)>,
     Arguments<(ins LLVM_Type:$a, LLVM_Type:$b, LLVM_Type:$c)>,
     LLVM_Builder<"$res = builder.CreateCall(llvm::Intrinsic::getDeclaration("
       "builder.GetInsertBlock()->getModule(), llvm::Intrinsic::" # func # ","
-      "{$a->getType(), $b->getType(), $c->getType()}), {$a, $b, $c});"> {
+      "{$a->getType()}), {$a, $b, $c});"> {
 }
 
 def LLVM_ExpOp : LLVM_UnaryIntrinsicOp<"exp">;
 def LLVM_FAbsOp : LLVM_UnaryIntrinsicOp<"fabs">;
 def LLVM_FCeilOp : LLVM_UnaryIntrinsicOp<"ceil">;
 def LLVM_CosOp : LLVM_UnaryIntrinsicOp<"cos">;
-def LLVM_CopySignOp : LLVM_BinaryIntrinsicOp<"copysign">;
-def LLVM_FMulAddOp : LLVM_TernaryIntrinsicOp<"fmuladd">;
+def LLVM_CopySignOp : LLVM_BinarySameArgsIntrinsicOp<"copysign">;
+def LLVM_FMulAddOp : LLVM_TernarySameArgsIntrinsicOp<"fmuladd">;
+def LLVM_SqrtOp : LLVM_UnaryIntrinsicOp<"sqrt">;
 
 def LLVM_LogOp : LLVM_Op<"intr.log", [NoSideEffect]>,
                    Arguments<(ins LLVM_Type:$in)>,
@@ -772,6 +811,21 @@ def LLVM_AtomicRMWOp : LLVM_Op<"atomicrmw">,
   }];
   let parser = [{ return parseAtomicRMWOp(parser, result); }];
   let printer = [{ printAtomicRMWOp(p, *this); }];
+  let verifier = "return ::verify(*this);";
+}
+
+def LLVM_AtomicCmpXchgOp : LLVM_Op<"cmpxchg">,
+    Arguments<(ins LLVM_Type:$ptr, LLVM_Type:$cmp, LLVM_Type:$val,
+                   AtomicOrdering:$success_ordering,
+                   AtomicOrdering:$failure_ordering)>,
+    Results<(outs LLVM_Type:$res)> {
+  let llvmBuilder = [{
+    $res = builder.CreateAtomicCmpXchg($ptr, $cmp, $val,
+                   getLLVMAtomicOrdering($success_ordering),
+                   getLLVMAtomicOrdering($failure_ordering));
+  }];
+  let parser = [{ return parseAtomicCmpXchgOp(parser, result); }];
+  let printer = [{ printAtomicCmpXchgOp(p, *this); }];
   let verifier = "return ::verify(*this);";
 }
 

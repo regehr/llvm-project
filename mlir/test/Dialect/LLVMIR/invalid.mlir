@@ -12,7 +12,7 @@ func @invalid_noalias(%arg0: !llvm.i32 {llvm.noalias = 3}) {
 // -----
 
 func @icmp_non_string(%arg0 : !llvm.i32, %arg1 : !llvm<"i16">) {
-  // expected-error@+1 {{expected 'predicate' attribute of string type}}
+  // expected-error@+1 {{invalid kind of attribute specified}}
   llvm.icmp 42 %arg0, %arg0 : !llvm.i32
   return
 }
@@ -156,7 +156,7 @@ func @insertvalue_non_llvm_type(%a : i32, %b : i32) {
 func @insertvalue_non_array_position() {
   // Note the double-type, otherwise attribute parsing consumes the trailing
   // type of the op as the (wrong) attribute type.
-  // expected-error@+1 {{expected an array attribute}}
+  // expected-error@+1 {{invalid kind of attribute specified}}
   llvm.insertvalue %a, %b 0 : i32 : !llvm<"{i32}">
 }
 
@@ -200,7 +200,7 @@ func @extractvalue_non_llvm_type(%a : i32, %b : i32) {
 func @extractvalue_non_array_position() {
   // Note the double-type, otherwise attribute parsing consumes the trailing
   // type of the op as the (wrong) attribute type.
-  // expected-error@+1 {{expected an array attribute}}
+  // expected-error@+1 {{invalid kind of attribute specified}}
   llvm.extractvalue %b 0 : i32 : !llvm<"{i32}">
 }
 
@@ -398,46 +398,166 @@ llvm.func @recursive_type(%a : !llvm<"%a = type { %a* }">) ->
 // CHECK-LABEL: @atomicrmw_expected_ptr
 func @atomicrmw_expected_ptr(%f32 : !llvm.float) {
   // expected-error@+1 {{expected LLVM IR pointer type for operand #0}}
-  %0 = llvm.atomicrmw "fadd" "unordered" %f32, %f32 : (!llvm.float, !llvm.float) -> !llvm.float
+  %0 = "llvm.atomicrmw"(%f32, %f32) {bin_op=11, ordering=1} : (!llvm.float, !llvm.float) -> !llvm.float
   llvm.return
 }
 
 // -----
+
 // CHECK-LABEL: @atomicrmw_mismatched_operands
 func @atomicrmw_mismatched_operands(%f32_ptr : !llvm<"float*">, %i32 : !llvm.i32) {
   // expected-error@+1 {{expected LLVM IR element type for operand #0 to match type for operand #1}}
-  %0 = llvm.atomicrmw "fadd" "unordered" %f32_ptr, %i32 : (!llvm<"float*">, !llvm.i32) -> !llvm.float
+  %0 = "llvm.atomicrmw"(%f32_ptr, %i32) {bin_op=11, ordering=1} : (!llvm<"float*">, !llvm.i32) -> !llvm.float
   llvm.return
 }
 
 // -----
+
 // CHECK-LABEL: @atomicrmw_mismatched_result
 func @atomicrmw_mismatched_operands(%f32_ptr : !llvm<"float*">, %f32 : !llvm.float) {
   // expected-error@+1 {{expected LLVM IR result type to match type for operand #1}}
-  %0 = llvm.atomicrmw "fadd" "unordered" %f32_ptr, %f32 : (!llvm<"float*">, !llvm.float) -> !llvm.i32
+  %0 = "llvm.atomicrmw"(%f32_ptr, %f32) {bin_op=11, ordering=1} : (!llvm<"float*">, !llvm.float) -> !llvm.i32
   llvm.return
 }
 
 // -----
+
 // CHECK-LABEL: @atomicrmw_expected_float
 func @atomicrmw_expected_float(%i32_ptr : !llvm<"i32*">, %i32 : !llvm.i32) {
   // expected-error@+1 {{expected LLVM IR floating point type}}
-  %0 = llvm.atomicrmw "fadd" "unordered" %i32_ptr, %i32 : (!llvm<"i32*">, !llvm.i32) -> !llvm.i32
+  %0 = llvm.atomicrmw fadd %i32_ptr, %i32 unordered : !llvm.i32
   llvm.return
 }
 
 // -----
+
 // CHECK-LABEL: @atomicrmw_unexpected_xchg_type
-func @atomicrmw_xchg_type(%i1_ptr : !llvm<"i1*">, %i1 : !llvm.i1) {
+func @atomicrmw_unexpected_xchg_type(%i1_ptr : !llvm<"i1*">, %i1 : !llvm.i1) {
   // expected-error@+1 {{unexpected LLVM IR type for 'xchg' bin_op}}
-  %0 = llvm.atomicrmw "xchg" "unordered" %i1_ptr, %i1 : (!llvm<"i1*">, !llvm.i1) -> !llvm.i1
+  %0 = llvm.atomicrmw xchg %i1_ptr, %i1 unordered : !llvm.i1
   llvm.return
 }
 
 // -----
+
 // CHECK-LABEL: @atomicrmw_expected_int
 func @atomicrmw_expected_int(%f32_ptr : !llvm<"float*">, %f32 : !llvm.float) {
   // expected-error@+1 {{expected LLVM IR integer type}}
-  %0 = llvm.atomicrmw "max" "unordered" %f32_ptr, %f32 : (!llvm<"float*">, !llvm.float) -> !llvm.float
+  %0 = llvm.atomicrmw max %f32_ptr, %f32 unordered : !llvm.float
   llvm.return
+}
+
+// -----
+
+// CHECK-LABEL: @cmpxchg_expected_ptr
+func @cmpxchg_expected_ptr(%f32_ptr : !llvm<"float*">, %f32 : !llvm.float) {
+  // expected-error@+1 {{expected LLVM IR pointer type for operand #0}}
+  %0 = "llvm.cmpxchg"(%f32, %f32, %f32) {success_ordering=2,failure_ordering=2} : (!llvm.float, !llvm.float, !llvm.float) -> !llvm<"{ float, i1 }">
+  llvm.return
+}
+
+// -----
+
+// CHECK-LABEL: @cmpxchg_mismatched_operands
+func @cmpxchg_mismatched_operands(%f32_ptr : !llvm<"float*">, %i32 : !llvm.i32) {
+  // expected-error@+1 {{expected LLVM IR element type for operand #0 to match type for all other operands}}
+  %0 = "llvm.cmpxchg"(%f32_ptr, %i32, %i32) {success_ordering=2,failure_ordering=2} : (!llvm<"float*">, !llvm.i32, !llvm.i32) -> !llvm<"{ i32, i1 }">
+  llvm.return
+}
+
+// -----
+
+// CHECK-LABEL: @cmpxchg_unexpected_type
+func @cmpxchg_unexpected_type(%i1_ptr : !llvm<"i1*">, %i1 : !llvm.i1) {
+  // expected-error@+1 {{unexpected LLVM IR type}}
+  %0 = llvm.cmpxchg %i1_ptr, %i1, %i1 monotonic monotonic : !llvm.i1
+  llvm.return
+}
+
+// -----
+
+// CHECK-LABEL: @cmpxchg_at_least_monotonic_success
+func @cmpxchg_at_least_monotonic_success(%i32_ptr : !llvm<"i32*">, %i32 : !llvm.i32) {
+  // expected-error@+1 {{ordering must be at least 'monotonic'}}
+  %0 = llvm.cmpxchg %i32_ptr, %i32, %i32 unordered monotonic : !llvm.i32
+  llvm.return
+}
+
+// -----
+
+// CHECK-LABEL: @cmpxchg_at_least_monotonic_failure
+func @cmpxchg_at_least_monotonic_failure(%i32_ptr : !llvm<"i32*">, %i32 : !llvm.i32) {
+  // expected-error@+1 {{ordering must be at least 'monotonic'}}
+  %0 = llvm.cmpxchg %i32_ptr, %i32, %i32 monotonic unordered : !llvm.i32
+  llvm.return
+}
+
+// -----
+
+// CHECK-LABEL: @cmpxchg_failure_release
+func @cmpxchg_failure_release(%i32_ptr : !llvm<"i32*">, %i32 : !llvm.i32) {
+  // expected-error@+1 {{failure ordering cannot be 'release' or 'acq_rel'}}
+  %0 = llvm.cmpxchg %i32_ptr, %i32, %i32 acq_rel release : !llvm.i32
+  llvm.return
+}
+
+// -----
+
+// CHECK-LABEL: @cmpxchg_failure_acq_rel
+func @cmpxchg_failure_acq_rel(%i32_ptr : !llvm<"i32*">, %i32 : !llvm.i32) {
+  // expected-error@+1 {{failure ordering cannot be 'release' or 'acq_rel'}}
+  %0 = llvm.cmpxchg %i32_ptr, %i32, %i32 acq_rel acq_rel : !llvm.i32
+  llvm.return
+}
+
+// -----
+
+llvm.func @foo(!llvm.i32) -> !llvm.i32
+llvm.func @__gxx_personality_v0(...) -> !llvm.i32
+
+llvm.func @bad_landingpad(%arg0: !llvm<"i8**">) {
+  %0 = llvm.mlir.constant(3 : i32) : !llvm.i32
+  %1 = llvm.mlir.constant(2 : i32) : !llvm.i32
+  %2 = llvm.invoke @foo(%1) to ^bb1 unwind ^bb2 : (!llvm.i32) -> !llvm.i32
+^bb1:  // pred: ^bb0
+  llvm.return %1 : !llvm.i32
+^bb2:  // pred: ^bb0
+  // expected-error@+1 {{clause #0 is not a known constant - null, addressof, bitcast}}
+  %3 = llvm.landingpad cleanup (catch %1 : !llvm.i32) (catch %arg0 : !llvm<"i8**">) : !llvm<"{ i8*, i32 }">
+  llvm.return %0 : !llvm.i32
+}
+
+// -----
+
+llvm.func @foo(!llvm.i32) -> !llvm.i32
+llvm.func @__gxx_personality_v0(...) -> !llvm.i32
+
+llvm.func @caller(%arg0: !llvm.i32) -> !llvm.i32 {
+  %0 = llvm.mlir.constant(1 : i32) : !llvm.i32
+  %1 = llvm.alloca %0 x !llvm<"i8*"> : (!llvm.i32) -> !llvm<"i8**">
+  // expected-note@+1 {{global addresses expected as operand to bitcast used in clauses for landingpad}}
+  %2 = llvm.bitcast %1 : !llvm<"i8**"> to !llvm<"i8*">
+  %3 = llvm.invoke @foo(%0) to ^bb1 unwind ^bb2 : (!llvm.i32) -> !llvm.i32
+^bb1: // pred: ^bb0
+  llvm.return %0 : !llvm.i32
+^bb2: // pred: ^bb0
+  // expected-error@+1 {{constant clauses expected}}
+  %5 = llvm.landingpad (catch %2 : !llvm<"i8*">) : !llvm<"{ i8*, i32 }">
+  llvm.return %0 : !llvm.i32
+}
+
+// -----
+
+llvm.func @foo(!llvm.i32) -> !llvm.i32
+llvm.func @__gxx_personality_v0(...) -> !llvm.i32
+
+llvm.func @caller(%arg0: !llvm.i32) -> !llvm.i32 {
+  %0 = llvm.mlir.constant(1 : i32) : !llvm.i32
+  %1 = llvm.invoke @foo(%0) to ^bb1 unwind ^bb2 : (!llvm.i32) -> !llvm.i32
+^bb1: // pred: ^bb0
+  llvm.return %0 : !llvm.i32
+^bb2: // pred: ^bb0
+  // expected-error@+1 {{landingpad instruction expects at least one clause or cleanup attribute}}
+  %2 = llvm.landingpad : !llvm<"{ i8*, i32 }">
+  llvm.return %0 : !llvm.i32
 }
