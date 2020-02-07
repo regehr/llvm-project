@@ -36,6 +36,7 @@
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/LEB128.h"
 #include "llvm/Support/MD5.h"
+#include "llvm/Support/TimeProfiler.h"
 #include <cstdlib>
 #include <thread>
 
@@ -2176,7 +2177,7 @@ template <class ELFT> void SymbolTableSection<ELFT>::writeTo(uint8_t *buf) {
         // We already set the less-significant bit for symbols
         // marked by the `STO_MIPS_MICROMIPS` flag and for microMIPS PLT
         // records. That allows us to distinguish such symbols in
-        // the `MIPS<ELFT>::relocateOne()` routine. Now we should
+        // the `MIPS<ELFT>::relocate()` routine. Now we should
         // clear that bit for non-dynamic symbol table, so tools
         // like `objdump` will be able to deal with a correct
         // symbol position.
@@ -2449,6 +2450,9 @@ PltSection::PltSection()
   if (config->emachine == EM_PPC || config->emachine == EM_PPC64) {
     name = ".glink";
     alignment = 4;
+    // PLTresolve is at the end.
+    if (config->emachine == EM_PPC)
+      footerSize = 64;
   }
 
   // On x86 when IBT is enabled, this section contains the second PLT (lazy
@@ -2486,7 +2490,7 @@ void PltSection::addEntry(Symbol &sym) {
 }
 
 size_t PltSection::getSize() const {
-  return headerSize + entries.size() * target->pltEntrySize;
+  return headerSize + entries.size() * target->pltEntrySize + footerSize;
 }
 
 bool PltSection::isNeeded() const {
@@ -3234,6 +3238,7 @@ MergeSyntheticSection *createMergeSynthetic(StringRef name, uint32_t type,
 }
 
 template <class ELFT> void splitSections() {
+  llvm::TimeTraceScope timeScope("Split sections");
   // splitIntoPieces needs to be called on each MergeInputSection
   // before calling finalizeContents().
   parallelForEach(inputSections, [](InputSectionBase *sec) {
@@ -3428,7 +3433,7 @@ void ARMExidxSyntheticSection::writeTo(uint8_t *buf) {
       memcpy(buf + offset, cantUnwindData, sizeof(cantUnwindData));
       uint64_t s = isec->getVA();
       uint64_t p = getVA() + offset;
-      target->relocateOne(buf + offset, R_ARM_PREL31, s - p);
+      target->relocateNoSym(buf + offset, R_ARM_PREL31, s - p);
       offset += 8;
     }
   }
@@ -3436,7 +3441,7 @@ void ARMExidxSyntheticSection::writeTo(uint8_t *buf) {
   memcpy(buf + offset, cantUnwindData, sizeof(cantUnwindData));
   uint64_t s = sentinel->getVA(sentinel->getSize());
   uint64_t p = getVA() + offset;
-  target->relocateOne(buf + offset, R_ARM_PREL31, s - p);
+  target->relocateNoSym(buf + offset, R_ARM_PREL31, s - p);
   assert(size == offset + 8);
 }
 

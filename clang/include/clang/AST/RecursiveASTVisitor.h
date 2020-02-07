@@ -1040,7 +1040,13 @@ DEF_TRAVERSE_TYPE(UnaryTransformType, {
   TRY_TO(TraverseType(T->getUnderlyingType()));
 })
 
-DEF_TRAVERSE_TYPE(AutoType, { TRY_TO(TraverseType(T->getDeducedType())); })
+DEF_TRAVERSE_TYPE(AutoType, {
+  TRY_TO(TraverseType(T->getDeducedType()));
+  if (T->isConstrained()) {
+    TRY_TO(TraverseDecl(T->getTypeConstraintConcept()));
+    TRY_TO(TraverseTemplateArguments(T->getArgs(), T->getNumArgs()));
+  }
+})
 DEF_TRAVERSE_TYPE(DeducedTemplateSpecializationType, {
   TRY_TO(TraverseTemplateName(T->getTemplateName()));
   TRY_TO(TraverseType(T->getDeducedType()));
@@ -1287,6 +1293,12 @@ DEF_TRAVERSE_TYPELOC(UnaryTransformType, {
 
 DEF_TRAVERSE_TYPELOC(AutoType, {
   TRY_TO(TraverseType(TL.getTypePtr()->getDeducedType()));
+  if (TL.isConstrained()) {
+    TRY_TO(TraverseNestedNameSpecifierLoc(TL.getNestedNameSpecifierLoc()));
+    TRY_TO(TraverseDeclarationNameInfo(TL.getConceptNameInfo()));
+    for (unsigned I = 0, E = TL.getNumArgs(); I != E; ++I)
+      TRY_TO(TraverseTemplateArgumentLoc(TL.getArgLoc(I)));
+  }
 })
 
 DEF_TRAVERSE_TYPELOC(DeducedTemplateSpecializationType, {
@@ -3110,6 +3122,11 @@ bool RecursiveASTVisitor<Derived>::VisitOMPSeqCstClause(OMPSeqCstClause *) {
 }
 
 template <typename Derived>
+bool RecursiveASTVisitor<Derived>::VisitOMPAcqRelClause(OMPAcqRelClause *) {
+  return true;
+}
+
+template <typename Derived>
 bool RecursiveASTVisitor<Derived>::VisitOMPThreadsClause(OMPThreadsClause *) {
   return true;
 }
@@ -3427,6 +3444,11 @@ bool RecursiveASTVisitor<Derived>::VisitOMPNontemporalClause(
   for (auto *E : C->private_refs()) {
     TRY_TO(TraverseStmt(E));
   }
+  return true;
+}
+
+template <typename Derived>
+bool RecursiveASTVisitor<Derived>::VisitOMPOrderClause(OMPOrderClause *) {
   return true;
 }
 

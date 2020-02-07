@@ -220,13 +220,13 @@ void DwarfStreamer::emitSectionContents(const object::ObjectFile &Obj,
 }
 
 /// Emit DIE containing warnings.
-void DwarfStreamer::emitPaperTrailWarningsDie(const Triple &Triple, DIE &Die) {
+void DwarfStreamer::emitPaperTrailWarningsDie(DIE &Die) {
   switchToDebugInfoSection(/* Version */ 2);
   auto &Asm = getAsmPrinter();
   Asm.emitInt32(11 + Die.getSize() - 4);
   Asm.emitInt16(2);
   Asm.emitInt32(0);
-  Asm.emitInt8(Triple.isArch64Bit() ? 8 : 4);
+  Asm.emitInt8(MOFI->getTargetTriple().isArch64Bit() ? 8 : 4);
   DebugInfoSectionSize += 11;
   emitDIE(Die);
 }
@@ -784,12 +784,16 @@ void DwarfStreamer::emitPubSectionForUnit(
 
 /// Emit .debug_pubnames for \p Unit.
 void DwarfStreamer::emitPubNamesForUnit(const CompileUnit &Unit) {
+  if (Options.Minimize)
+    return;
   emitPubSectionForUnit(MC->getObjectFileInfo()->getDwarfPubNamesSection(),
                         "names", Unit, Unit.getPubnames());
 }
 
 /// Emit .debug_pubtypes for \p Unit.
 void DwarfStreamer::emitPubTypesForUnit(const CompileUnit &Unit) {
+  if (Options.Minimize)
+    return;
   emitPubSectionForUnit(MC->getObjectFileInfo()->getDwarfPubTypesSection(),
                         "types", Unit, Unit.getPubtypes());
 }

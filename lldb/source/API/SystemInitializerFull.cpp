@@ -1,4 +1,4 @@
-//===-- SystemInitializerFull.cpp -------------------------------*- C++ -*-===//
+//===-- SystemInitializerFull.cpp -----------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -22,28 +22,27 @@
 #include "lldb/Host/Host.h"
 #include "lldb/Initialization/SystemInitializerCommon.h"
 #include "lldb/Interpreter/CommandInterpreter.h"
-#include "lldb/Symbol/ClangASTContext.h"
 #include "lldb/Utility/Timer.h"
 
-#include "Plugins/ABI/MacOSX-arm/ABIMacOSX_arm.h"
-#include "Plugins/ABI/MacOSX-arm64/ABIMacOSX_arm64.h"
-#include "Plugins/ABI/MacOSX-i386/ABIMacOSX_i386.h"
-#include "Plugins/ABI/SysV-arc/ABISysV_arc.h"
-#include "Plugins/ABI/SysV-arm/ABISysV_arm.h"
-#include "Plugins/ABI/SysV-arm64/ABISysV_arm64.h"
-#include "Plugins/ABI/SysV-hexagon/ABISysV_hexagon.h"
-#include "Plugins/ABI/SysV-i386/ABISysV_i386.h"
-#include "Plugins/ABI/SysV-mips/ABISysV_mips.h"
-#include "Plugins/ABI/SysV-mips64/ABISysV_mips64.h"
-#include "Plugins/ABI/SysV-ppc/ABISysV_ppc.h"
-#include "Plugins/ABI/SysV-ppc64/ABISysV_ppc64.h"
-#include "Plugins/ABI/SysV-s390x/ABISysV_s390x.h"
-#include "Plugins/ABI/SysV-x86_64/ABISysV_x86_64.h"
-#include "Plugins/ABI/Windows-x86_64/ABIWindows_x86_64.h"
+#include "Plugins/ABI/AArch64/ABIMacOSX_arm64.h"
+#include "Plugins/ABI/AArch64/ABISysV_arm64.h"
+#include "Plugins/ABI/ARC/ABISysV_arc.h"
+#include "Plugins/ABI/ARM/ABIMacOSX_arm.h"
+#include "Plugins/ABI/ARM/ABISysV_arm.h"
+#include "Plugins/ABI/Hexagon/ABISysV_hexagon.h"
+#include "Plugins/ABI/Mips/ABISysV_mips.h"
+#include "Plugins/ABI/Mips/ABISysV_mips64.h"
+#include "Plugins/ABI/PowerPC/ABISysV_ppc.h"
+#include "Plugins/ABI/PowerPC/ABISysV_ppc64.h"
+#include "Plugins/ABI/SystemZ/ABISysV_s390x.h"
+#include "Plugins/ABI/X86/ABIMacOSX_i386.h"
+#include "Plugins/ABI/X86/ABISysV_i386.h"
+#include "Plugins/ABI/X86/ABISysV_x86_64.h"
+#include "Plugins/ABI/X86/ABIWindows_x86_64.h"
 #include "Plugins/Architecture/Arm/ArchitectureArm.h"
 #include "Plugins/Architecture/Mips/ArchitectureMips.h"
 #include "Plugins/Architecture/PPC64/ArchitecturePPC64.h"
-#include "Plugins/Disassembler/llvm/DisassemblerLLVMC.h"
+#include "Plugins/Disassembler/LLVMC/DisassemblerLLVMC.h"
 #include "Plugins/DynamicLoader/MacOSX-DYLD/DynamicLoaderMacOS.h"
 #include "Plugins/DynamicLoader/MacOSX-DYLD/DynamicLoaderMacOSXDYLD.h"
 #include "Plugins/DynamicLoader/POSIX-DYLD/DynamicLoaderPOSIXDYLD.h"
@@ -54,17 +53,16 @@
 #include "Plugins/Instruction/MIPS/EmulateInstructionMIPS.h"
 #include "Plugins/Instruction/MIPS64/EmulateInstructionMIPS64.h"
 #include "Plugins/Instruction/PPC64/EmulateInstructionPPC64.h"
-#include "Plugins/InstrumentationRuntime/ASan/ASanRuntime.h"
-#include "Plugins/InstrumentationRuntime/MainThreadChecker/MainThreadCheckerRuntime.h"
-#include "Plugins/InstrumentationRuntime/TSan/TSanRuntime.h"
-#include "Plugins/InstrumentationRuntime/UBSan/UBSanRuntime.h"
+#include "Plugins/InstrumentationRuntime/ASan/InstrumentationRuntimeASan.h"
+#include "Plugins/InstrumentationRuntime/MainThreadChecker/InstrumentationRuntimeMainThreadChecker.h"
+#include "Plugins/InstrumentationRuntime/TSan/InstrumentationRuntimeTSan.h"
+#include "Plugins/InstrumentationRuntime/UBSan/InstrumentationRuntimeUBSan.h"
 #include "Plugins/JITLoader/GDB/JITLoaderGDB.h"
 #include "Plugins/Language/CPlusPlus/CPlusPlusLanguage.h"
 #include "Plugins/Language/ObjC/ObjCLanguage.h"
 #include "Plugins/Language/ObjCPlusPlus/ObjCPlusPlusLanguage.h"
 #include "Plugins/LanguageRuntime/CPlusPlus/ItaniumABI/ItaniumABILanguageRuntime.h"
-#include "Plugins/LanguageRuntime/ObjC/AppleObjCRuntime/AppleObjCRuntimeV1.h"
-#include "Plugins/LanguageRuntime/ObjC/AppleObjCRuntime/AppleObjCRuntimeV2.h"
+#include "Plugins/LanguageRuntime/ObjC/AppleObjCRuntime/AppleObjCRuntime.h"
 #include "Plugins/LanguageRuntime/RenderScript/RenderScriptRuntime/RenderScriptRuntime.h"
 #include "Plugins/MemoryHistory/asan/MemoryHistoryASan.h"
 #include "Plugins/ObjectContainer/BSD-Archive/ObjectContainerBSDArchive.h"
@@ -97,6 +95,7 @@
 #include "Plugins/SymbolVendor/ELF/SymbolVendorELF.h"
 #include "Plugins/SymbolVendor/wasm/SymbolVendorWasm.h"
 #include "Plugins/SystemRuntime/MacOSX/SystemRuntimeMacOSX.h"
+#include "Plugins/TypeSystem/Clang/TypeSystemClang.h"
 #include "Plugins/UnwindAssembly/InstEmulation/UnwindAssemblyInstEmulation.h"
 #include "Plugins/UnwindAssembly/x86/UnwindAssembly-x86.h"
 
@@ -206,7 +205,7 @@ llvm::Error SystemInitializerFull::Initialize() {
   llvm::InitializeAllTargetMCs();
   llvm::InitializeAllDisassemblers();
 
-  ClangASTContext::Initialize();
+  TypeSystemClang::Initialize();
 
 #define LLVM_TARGET(t) LLDB_PROCESS_ ## t(Initialize)
 #include "llvm/Config/Targets.def"
@@ -222,10 +221,10 @@ llvm::Error SystemInitializerFull::Initialize() {
   ProcessMachCore::Initialize();
   minidump::ProcessMinidump::Initialize();
   MemoryHistoryASan::Initialize();
-  AddressSanitizerRuntime::Initialize();
-  ThreadSanitizerRuntime::Initialize();
-  UndefinedBehaviorSanitizerRuntime::Initialize();
-  MainThreadCheckerRuntime::Initialize();
+  InstrumentationRuntimeASan::Initialize();
+  InstrumentationRuntimeTSan::Initialize();
+  InstrumentationRuntimeUBSan::Initialize();
+  InstrumentationRuntimeMainThreadChecker::Initialize();
 
   SymbolVendorELF::Initialize();
   breakpad::SymbolFileBreakpad::Initialize();
@@ -244,8 +243,7 @@ llvm::Error SystemInitializerFull::Initialize() {
 
   SymbolFileDWARFDebugMap::Initialize();
   ItaniumABILanguageRuntime::Initialize();
-  AppleObjCRuntimeV2::Initialize();
-  AppleObjCRuntimeV1::Initialize();
+  AppleObjCRuntime::Initialize();
   SystemRuntimeMacOSX::Initialize();
   RenderScriptRuntime::Initialize();
 
@@ -300,7 +298,7 @@ void SystemInitializerFull::Terminate() {
   // Terminate and unload and loaded system or user LLDB plug-ins
   PluginManager::Terminate();
 
-  ClangASTContext::Terminate();
+  TypeSystemClang::Terminate();
 
   ArchitectureArm::Terminate();
   ArchitectureMips::Terminate();
@@ -316,10 +314,11 @@ void SystemInitializerFull::Terminate() {
   ProcessMachCore::Terminate();
   minidump::ProcessMinidump::Terminate();
   MemoryHistoryASan::Terminate();
-  AddressSanitizerRuntime::Terminate();
-  ThreadSanitizerRuntime::Terminate();
-  UndefinedBehaviorSanitizerRuntime::Terminate();
-  MainThreadCheckerRuntime::Terminate();
+  InstrumentationRuntimeASan::Terminate();
+  InstrumentationRuntimeTSan::Terminate();
+  InstrumentationRuntimeUBSan::Terminate();
+  InstrumentationRuntimeMainThreadChecker::Terminate();
+
   wasm::SymbolVendorWasm::Terminate();
   SymbolVendorELF::Terminate();
   breakpad::SymbolFileBreakpad::Terminate();
@@ -337,8 +336,7 @@ void SystemInitializerFull::Terminate() {
 
   SymbolFileDWARFDebugMap::Terminate();
   ItaniumABILanguageRuntime::Terminate();
-  AppleObjCRuntimeV2::Terminate();
-  AppleObjCRuntimeV1::Terminate();
+  AppleObjCRuntime::Terminate();
   SystemRuntimeMacOSX::Terminate();
   RenderScriptRuntime::Terminate();
 

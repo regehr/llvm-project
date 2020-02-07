@@ -1,6 +1,6 @@
 //===- LinalgTraits.h - Linalg Traits ---------------------------*- C++ -*-===//
 //
-// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
@@ -91,6 +91,12 @@ public:
   unsigned getNumLoops() {
     return getNumIterators(
         cast<ConcreteType>(this->getOperation()).iterator_types());
+  }
+
+  bool hasSingleReductionLoop() {
+    auto iterators = cast<ConcreteType>(this->getOperation()).iterator_types();
+    return iterators.size() == 1 &&
+           getNumIterators(getReductionIteratorTypeName(), iterators);
   }
 
   //==========================================================================//
@@ -213,6 +219,15 @@ public:
     return this->getOperation()->getNumResults() == 0 &&
            llvm::all_of(getInputs(),
                         [](Value v) { return v.getType().isa<MemRefType>(); });
+  }
+
+  /// Query whether the op has only tensor inputs and outputs.
+  bool hasTensorSemantics() {
+    auto isTensorType = [](Value v) {
+      return v.getType().isa<RankedTensorType>();
+    };
+    return llvm::all_of(getInputs(), isTensorType) &&
+           llvm::all_of(this->getOperation()->getResults(), isTensorType);
   }
 
   //==========================================================================//

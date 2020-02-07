@@ -641,8 +641,9 @@ bool AMDGPUTargetLowering::shouldReduceLoadWidth(SDNode *N,
 
   unsigned NewSize = NewVT.getStoreSizeInBits();
 
-  // If we are reducing to a 32-bit load, this is always better.
-  if (NewSize == 32)
+  // If we are reducing to a 32-bit load or a smaller multi-dword load,
+  // this is always better.
+  if (NewSize >= 32)
     return true;
 
   EVT OldVT = N->getValueType(0);
@@ -731,6 +732,26 @@ bool AMDGPUTargetLowering::isSDNodeAlwaysUniform(const SDNode * N) const {
     }
     break;
   }
+}
+
+char AMDGPUTargetLowering::isNegatibleForFree(SDValue Op, SelectionDAG &DAG,
+                                              bool LegalOperations,
+                                              bool ForCodeSize,
+                                              unsigned Depth) const {
+  switch (Op.getOpcode()) {
+    case ISD::FMA:
+    case ISD::FMAD: {
+      // Negating a fma is not free if it has users without source mods.
+      if (!allUsesHaveSourceMods(Op.getNode()))
+        return 0;
+      break;
+    }
+    default:
+      break;
+  }
+
+  return TargetLowering::isNegatibleForFree(Op, DAG, LegalOperations,
+                                            ForCodeSize, Depth);
 }
 
 //===---------------------------------------------------------------------===//
@@ -1586,7 +1607,7 @@ SDValue AMDGPUTargetLowering::LowerDIVREM24(SDValue Op, SelectionDAG &DAG,
   const AMDGPUMachineFunction *MFI = MF.getInfo<AMDGPUMachineFunction>();
 
   // float fr = mad(fqneg, fb, fa);
-  unsigned OpCode = MFI->getMode().FP32Denormals ?
+  unsigned OpCode = MFI->getMode().allFP32Denormals() ?
                     (unsigned)AMDGPUISD::FMAD_FTZ :
                     (unsigned)ISD::FMAD;
   SDValue fr = DAG.getNode(OpCode, DL, FltVT, fqneg, fb, fa);
@@ -1671,7 +1692,7 @@ void AMDGPUTargetLowering::LowerUDIVREM64(SDValue Op,
     const SIMachineFunctionInfo *MFI = MF.getInfo<SIMachineFunctionInfo>();
 
     // Compute denominator reciprocal.
-    unsigned FMAD = MFI->getMode().FP32Denormals ?
+    unsigned FMAD = MFI->getMode().allFP32Denormals() ?
                     (unsigned)AMDGPUISD::FMAD_FTZ :
                     (unsigned)ISD::FMAD;
 
@@ -4322,9 +4343,6 @@ const char* AMDGPUTargetLowering::getTargetNodeName(unsigned Opcode) const {
   NODE_NAME_CASE(KILL)
   NODE_NAME_CASE(DUMMY_CHAIN)
   case AMDGPUISD::FIRST_MEM_OPCODE_NUMBER: break;
-  NODE_NAME_CASE(INTERP_P1LL_F16)
-  NODE_NAME_CASE(INTERP_P1LV_F16)
-  NODE_NAME_CASE(INTERP_P2_F16)
   NODE_NAME_CASE(LOAD_D16_HI)
   NODE_NAME_CASE(LOAD_D16_LO)
   NODE_NAME_CASE(LOAD_D16_HI_I8)

@@ -741,6 +741,12 @@ def warn_fortify_source_size_mismatch : Warning<
   "'%0' size argument is too large; destination buffer has size %1,"
   " but size argument is %2">, InGroup<FortifySource>;
 
+def warn_fortify_source_format_overflow : Warning<
+  "'%0' will always overflow; destination buffer has size %1,"
+  " but format string expands to at least %2">,
+  InGroup<FortifySource>;
+
+
 /// main()
 // static main() is not an error in C, just in C++.
 def warn_static_main : Warning<"'main' should not be declared static">,
@@ -2102,11 +2108,8 @@ def err_auto_not_allowed : Error<
   "|in template argument|in typedef|in type alias|in function return type"
   "|in conversion function type|here|in lambda parameter"
   "|in type allocated by 'new'|in K&R-style function parameter"
-  "|in template parameter|in friend declaration"
-  "|in requires expression parameter}1">;
-def err_auto_not_allowed_in_return_type_requirement : Error<
-  "%select{'auto'|'decltype(auto)'|'__auto_type'}0 not allowed in expression "
-  "type requirement">;
+  "|in template parameter|in friend declaration|in function prototype that is "
+  "not a function declaration|in requires expression parameter}1">;
 def err_dependent_deduced_tst : Error<
   "typename specifier refers to "
   "%select{class template|function template|variable template|alias template|"
@@ -2380,18 +2383,18 @@ def note_for_range_begin_end : Note<
 def warn_for_range_const_reference_copy : Warning<
   "loop variable %0 "
   "%diff{has type $ but is initialized with type $"
-  "| is initialized with a value of a different type}1,2 resulting in a copy">,
-  InGroup<RangeLoopAnalysis>, DefaultIgnore;
+  "|is initialized with a value of a different type}1,2 resulting in a copy">,
+  InGroup<RangeLoopConstruct>, DefaultIgnore;
 def note_use_type_or_non_reference : Note<
   "use non-reference type %0 to keep the copy or type %1 to prevent copying">;
 def warn_for_range_variable_always_copy : Warning<
   "loop variable %0 is always a copy because the range of type %1 does not "
   "return a reference">,
-  InGroup<RangeLoopAnalysis>, DefaultIgnore;
+  InGroup<RangeLoopBindReference>, DefaultIgnore;
 def note_use_non_reference_type : Note<"use non-reference type %0">;
 def warn_for_range_copy : Warning<
   "loop variable %0 of type %1 creates a copy from type %2">,
-  InGroup<RangeLoopAnalysis>, DefaultIgnore;
+  InGroup<RangeLoopConstruct>, DefaultIgnore;
 def note_use_reference_type : Note<"use reference type %0 to prevent copying">;
 def err_objc_for_range_init_stmt : Error<
   "initialization statement is not supported when iterating over Objective-C "
@@ -2406,6 +2409,13 @@ def warn_cxx14_compat_constexpr_not_const : Warning<
   "'constexpr' non-static member function will not be implicitly 'const' "
   "in C++14; add 'const' to avoid a change in behavior">,
   InGroup<DiagGroup<"constexpr-not-const">>;
+def err_invalid_consteval_take_address : Error<
+  "cannot take address of consteval function %0 outside"
+  " of an immediate invocation">;
+def err_invalid_consteval_call : Error<
+  "call to consteval function '%q0' is not a constant expression">;
+def err_invalid_consteval_decl_kind : Error<
+  "%0 cannot be declared consteval">;
 def err_invalid_constexpr : Error<
   "%select{function parameter|typedef}0 "
   "cannot be %sub{select_constexpr_spec_kind}1">;
@@ -2503,7 +2513,7 @@ def warn_cxx17_compat_constexpr_local_var_no_init : Warning<
   "is incompatible with C++ standards before C++20">,
   InGroup<CXXPre2aCompat>, DefaultIgnore;
 def ext_constexpr_function_never_constant_expr : ExtWarn<
-  "constexpr %select{function|constructor}0 never produces a "
+  "%select{constexpr|consteval}1 %select{function|constructor}0 never produces a "
   "constant expression">, InGroup<DiagGroup<"invalid-constexpr">>, DefaultError;
 def err_attr_cond_never_constant_expr : Error<
   "%0 attribute expression never produces a constant expression">;
@@ -2655,6 +2665,9 @@ def note_ambiguous_atomic_constraints : Note<
   "same concept">;
 def note_ambiguous_atomic_constraints_similar_expression : Note<
   "similar constraint expression here">;
+def err_unsupported_placeholder_constraint : Error<
+  "constrained placeholder types other than simple 'auto' on non-type template "
+  "parameters not supported yet">;
 
 def err_template_different_requires_clause : Error<
   "requires clause differs in template redeclaration">;
@@ -2669,6 +2682,8 @@ def err_type_constraint_non_type_concept : Error<
 def err_type_constraint_missing_arguments : Error<
   "%0 requires more than 1 template argument; provide the remaining arguments "
   "explicitly to use it here">;
+def err_placeholder_constraints_not_satisfied : Error<
+  "deduced type %0 does not satisfy %1">;
 
 // C++11 char16_t/char32_t
 def warn_cxx98_compat_unicode_type : Warning<
@@ -3252,9 +3267,6 @@ def warn_at_available_unchecked_use : Warning<
   InGroup<DiagGroup<"unsupported-availability-guard">>;
 
 // Thread Safety Attributes
-def warn_invalid_capability_name : Warning<
-  "invalid capability name '%0'; capability name must be 'mutex' or 'role'">,
-  InGroup<ThreadSafetyAttributes>, DefaultIgnore;
 def warn_thread_attribute_ignored : Warning<
   "ignoring %0 attribute because its argument is invalid">,
   InGroup<ThreadSafetyAttributes>, DefaultIgnore;
@@ -4681,6 +4693,8 @@ def note_checking_constraints_for_var_spec_id_here : Note<
 def note_checking_constraints_for_class_spec_id_here : Note<
   "while checking constraint satisfaction for class template partial "
   "specialization '%0' required here">;
+def note_checking_constraints_for_function_here : Note<
+  "while checking constraint satisfaction for function '%0' required here">;
 def note_constraint_substitution_here : Note<
   "while substituting template arguments into constraint expression here">;
 def note_constraint_normalization_here : Note<
@@ -6746,6 +6760,10 @@ def err_bad_cxx_cast_scalar_to_vector_different_size : Error<
 def err_bad_cxx_cast_vector_to_vector_different_size : Error<
   "%select{||reinterpret_cast||C-style cast|}0 from vector %1 "
   "to vector %2 of different size">;
+def warn_bad_cxx_cast_nested_pointer_addr_space : Warning<
+  "%select{reinterpret_cast|C-style cast}0 from %1 to %2 "
+  "changes address space of nested pointers">,
+  InGroup<IncompatiblePointerTypesDiscardsQualifiers>;
 def err_bad_lvalue_to_rvalue_cast : Error<
   "cannot cast from lvalue of type %1 to rvalue reference type %2; types are "
   "not compatible">;
@@ -8390,6 +8408,12 @@ def note_defaulted_comparison_cannot_deduce : Note<
   "return type of defaulted 'operator<=>' cannot be deduced because "
   "return type %2 of three-way comparison for %select{|member|base class}0 %1 "
   "is not a standard comparison category type">;
+def err_defaulted_comparison_cannot_deduce_undeduced_auto : Error<
+  "return type of defaulted 'operator<=>' cannot be deduced because "
+  "three-way comparison for %select{|member|base class}0 %1 "
+  "has a deduced return type and is not yet defined">;
+def note_defaulted_comparison_cannot_deduce_undeduced_auto : Note<
+  "%select{|member|base class}0 %1 declared here">;
 def note_defaulted_comparison_cannot_deduce_callee : Note<
   "selected 'operator<=>' for %select{|member|base class}0 %1 declared here">;
 def err_incorrect_defaulted_comparison_constexpr : Error<
@@ -9632,6 +9656,8 @@ def note_omp_atomic_capture: Note<
   "%select{expected assignment expression|expected compound statement|expected exactly two expression statements|expected in right hand side of the first expression}0">;
 def err_omp_atomic_several_clauses : Error<
   "directive '#pragma omp atomic' cannot contain more than one 'read', 'write', 'update' or 'capture' clause">;
+def err_omp_atomic_several_mem_order_clauses : Error<
+  "directive '#pragma omp atomic' cannot contain more than one 'seq_cst' or 'acq_rel' clause">;
 def note_omp_atomic_previous_clause : Note<
   "'%0' clause used here">;
 def err_omp_target_contains_not_only_teams : Error<
@@ -9701,7 +9727,7 @@ def err_omp_ordered_directive_with_param : Error<
 def err_omp_ordered_directive_without_param : Error<
   "'ordered' directive with 'depend' clause cannot be closely nested inside ordered region without specified parameter">;
 def note_omp_ordered_param : Note<
-  "'ordered' clause with specified parameter">;
+  "'ordered' clause%select{| with specified parameter}0">;
 def err_omp_expected_base_var_name : Error<
   "expected variable name as a base of the array %select{subscript|section}0">;
 def err_omp_map_shared_storage : Error<
@@ -9746,8 +9772,8 @@ def err_omp_unexpected_schedule_modifier : Error<
   "modifier '%0' cannot be used along with modifier '%1'">;
 def err_omp_schedule_nonmonotonic_static : Error<
   "'nonmonotonic' modifier can only be specified with 'dynamic' or 'guided' schedule kind">;
-def err_omp_schedule_nonmonotonic_ordered : Error<
-  "'schedule' clause with 'nonmonotonic' modifier cannot be specified if an 'ordered' clause is specified">;
+def err_omp_simple_clause_incompatible_with_ordered : Error<
+  "'%0' clause with '%1' modifier cannot be specified if an 'ordered' clause is specified">;
 def err_omp_ordered_simd : Error<
   "'ordered' clause with a parameter can not be specified in '#pragma omp %0' directive">;
 def err_omp_variable_in_given_clause_and_dsa : Error<
@@ -9870,6 +9896,10 @@ def err_omp_one_defaultmap_each_category: Error<
 def err_omp_lastprivate_conditional_non_scalar : Error<
   "expected list item of scalar type in 'lastprivate' clause with 'conditional' modifier"
   >;
+def err_omp_flush_order_clause_and_list : Error<
+  "'flush' directive with memory order clause '%0' cannot have the list">;
+def note_omp_flush_order_clause_here : Note<
+  "memory order clause '%0' is specified here">;
 } // end of OpenMP category
 
 let CategoryName = "Related Result Type Issue" in {

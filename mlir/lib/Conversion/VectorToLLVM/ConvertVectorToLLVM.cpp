@@ -1,6 +1,6 @@
 //===- VectorToLLVM.cpp - Conversion from Vector to the LLVM dialect ------===//
 //
-// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
@@ -33,8 +33,6 @@
 
 using namespace mlir;
 using namespace mlir::vector;
-
-namespace {
 
 template <typename T>
 static LLVM::LLVMType getPtrToElementType(T containerType,
@@ -125,6 +123,7 @@ static SmallVector<int64_t, 4> getI64SubArray(ArrayAttr arrayAttr,
   return res;
 }
 
+namespace {
 class VectorBroadcastOpConversion : public LLVMOpLowering {
 public:
   explicit VectorBroadcastOpConversion(MLIRContext *context,
@@ -549,7 +548,7 @@ public:
     auto stridedSliceInnerOp = rewriter.create<InsertStridedSliceOp>(
         loc, op.source(), extracted,
         getI64SubArray(op.offsets(), /*dropFront=*/rankDiff),
-        getI64SubArray(op.strides(), /*dropFront=*/rankDiff));
+        getI64SubArray(op.strides(), /*dropFront=*/0));
     rewriter.replaceOpWithNewOp<InsertOp>(
         op, stridedSliceInnerOp.getResult(), op.dest(),
         getI64SubArray(op.offsets(), /*dropFront=*/0,
@@ -810,7 +809,11 @@ public:
     Type eltType = vectorType ? vectorType.getElementType() : printType;
     int64_t rank = vectorType ? vectorType.getRank() : 0;
     Operation *printer;
-    if (eltType.isF32())
+    if (eltType.isInteger(32))
+      printer = getPrintI32(op);
+    else if (eltType.isInteger(64))
+      printer = getPrintI64(op);
+    else if (eltType.isF32())
       printer = getPrintFloat(op);
     else if (eltType.isF64())
       printer = getPrintDouble(op);
@@ -873,6 +876,16 @@ private:
   }
 
   // Helpers for method names.
+  Operation *getPrintI32(Operation *op) const {
+    LLVM::LLVMDialect *dialect = lowering.getDialect();
+    return getPrint(op, dialect, "print_i32",
+                    LLVM::LLVMType::getInt32Ty(dialect));
+  }
+  Operation *getPrintI64(Operation *op) const {
+    LLVM::LLVMDialect *dialect = lowering.getDialect();
+    return getPrint(op, dialect, "print_i64",
+                    LLVM::LLVMType::getInt64Ty(dialect));
+  }
   Operation *getPrintFloat(Operation *op) const {
     LLVM::LLVMDialect *dialect = lowering.getDialect();
     return getPrint(op, dialect, "print_f32",
@@ -973,9 +986,17 @@ struct LowerVectorToLLVMPass : public ModulePass<LowerVectorToLLVMPass> {
 } // namespace
 
 void LowerVectorToLLVMPass::runOnModule() {
-  // Convert to the LLVM IR dialect using the converter defined above.
-  OwningRewritePatternList patterns;
+  // Perform progressive lowering of operations on "slices".
+  // Folding and DCE get rid of all non-leaking tuple ops.
+  {
+    OwningRewritePatternList patterns;
+    populateVectorSlicesLoweringPatterns(patterns, &getContext());
+    applyPatternsGreedily(getModule(), patterns);
+  }
+
+  // Convert to the LLVM IR dialect.
   LLVMTypeConverter converter(&getContext());
+  OwningRewritePatternList patterns;
   populateVectorToLLVMConversionPatterns(converter, patterns);
   populateStdToLLVMConversionPatterns(converter, patterns);
 

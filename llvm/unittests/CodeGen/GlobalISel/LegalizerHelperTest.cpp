@@ -32,24 +32,24 @@ TEST_F(GISelMITest, LowerBitCountingCTTZ0) {
 
   // Declare your legalization info
   DefineLegalizerInfo(A, {
-    getActionDefinitionsBuilder(G_CTTZ_ZERO_UNDEF).legalFor({{s64, s64}});
+    getActionDefinitionsBuilder(G_CTTZ_ZERO_UNDEF).legalFor({{s32, s64}});
   });
   // Build Instr
   auto MIBCTTZ =
-      B.buildInstr(TargetOpcode::G_CTTZ, {LLT::scalar(64)}, {Copies[0]});
+      B.buildInstr(TargetOpcode::G_CTTZ, {LLT::scalar(32)}, {Copies[0]});
   AInfo Info(MF->getSubtarget());
   DummyGISelObserver Observer;
   LegalizerHelper Helper(*MF, Info, Observer, B);
   // Perform Legalization
-  EXPECT_TRUE(Helper.lower(*MIBCTTZ, 0, LLT::scalar(64)) ==
-              LegalizerHelper::LegalizeResult::Legalized);
+  EXPECT_EQ(LegalizerHelper::LegalizeResult::Legalized,
+            Helper.lower(*MIBCTTZ, 0, LLT::scalar(64)));
 
   auto CheckStr = R"(
-  CHECK: [[CZU:%[0-9]+]]:_(s64) = G_CTTZ_ZERO_UNDEF %0
+  CHECK: [[CZU:%[0-9]+]]:_(s32) = G_CTTZ_ZERO_UNDEF %0
   CHECK: [[ZERO:%[0-9]+]]:_(s64) = G_CONSTANT i64 0
-  CHECK: [[SIXTY4:%[0-9]+]]:_(s64) = G_CONSTANT i64 64
   CHECK: [[CMP:%[0-9]+]]:_(s1) = G_ICMP intpred(eq), %0:_(s64), [[ZERO]]
-  CHECK: [[SEL:%[0-9]+]]:_(s64) = G_SELECT [[CMP]]:_(s1), [[SIXTY4]]:_, [[CZU]]
+  CHECK: [[SIXTY4:%[0-9]+]]:_(s32) = G_CONSTANT i32 64
+  CHECK: [[SEL:%[0-9]+]]:_(s32) = G_SELECT [[CMP]]:_(s1), [[SIXTY4]]:_, [[CZU]]
   )";
 
   // Check
@@ -235,8 +235,8 @@ TEST_F(GISelMITest, LowerBitCountingCTLZ0) {
   auto CheckStr = R"(
   CHECK: [[CZU:%[0-9]+]]:_(s64) = G_CTLZ_ZERO_UNDEF %0
   CHECK: [[ZERO:%[0-9]+]]:_(s64) = G_CONSTANT i64 0
-  CHECK: [[SIXTY4:%[0-9]+]]:_(s64) = G_CONSTANT i64 64
   CHECK: [[CMP:%[0-9]+]]:_(s1) = G_ICMP intpred(eq), %0:_(s64), [[ZERO]]
+  CHECK: [[SIXTY4:%[0-9]+]]:_(s64) = G_CONSTANT i64 64
   CHECK: [[SEL:%[0-9]+]]:_(s64) = G_SELECT [[CMP]]:_(s1), [[SIXTY4]]:_, [[CZU]]
   )";
 
@@ -252,23 +252,23 @@ TEST_F(GISelMITest, LowerBitCountingCTLZLibcall) {
 
   // Declare your legalization info
   DefineLegalizerInfo(A, {
-    getActionDefinitionsBuilder(G_CTLZ_ZERO_UNDEF).libcallFor({{s64, s64}});
+    getActionDefinitionsBuilder(G_CTLZ_ZERO_UNDEF).libcallFor({{s32, s64}});
   });
   // Build
   auto MIBCTLZ =
-      B.buildInstr(TargetOpcode::G_CTLZ, {LLT::scalar(64)}, {Copies[0]});
+      B.buildInstr(TargetOpcode::G_CTLZ, {LLT::scalar(32)}, {Copies[0]});
   AInfo Info(MF->getSubtarget());
   DummyGISelObserver Observer;
   LegalizerHelper Helper(*MF, Info, Observer, B);
-  EXPECT_TRUE(Helper.lower(*MIBCTLZ, 0, LLT::scalar(64)) ==
-              LegalizerHelper::LegalizeResult::Legalized);
+  EXPECT_EQ(LegalizerHelper::LegalizeResult::Legalized,
+            Helper.lower(*MIBCTLZ, 0, LLT::scalar(32)));
 
   auto CheckStr = R"(
-  CHECK: [[CZU:%[0-9]+]]:_(s64) = G_CTLZ_ZERO_UNDEF %0
+  CHECK: [[CZU:%[0-9]+]]:_(s32) = G_CTLZ_ZERO_UNDEF %0
   CHECK: [[ZERO:%[0-9]+]]:_(s64) = G_CONSTANT i64 0
-  CHECK: [[THIRTY2:%[0-9]+]]:_(s64) = G_CONSTANT i64 64
   CHECK: [[CMP:%[0-9]+]]:_(s1) = G_ICMP intpred(eq), %0:_(s64), [[ZERO]]
-  CHECK: [[SEL:%[0-9]+]]:_(s64) = G_SELECT [[CMP]]:_(s1), [[THIRTY2]]:_, [[CZU]]
+  CHECK: [[THIRTY2:%[0-9]+]]:_(s32) = G_CONSTANT i32 64
+  CHECK: [[SEL:%[0-9]+]]:_(s32) = G_SELECT [[CMP]]:_(s1), [[THIRTY2]]:_, [[CZU]]
   )";
 
   // Check
@@ -1037,7 +1037,7 @@ TEST_F(GISelMITest, WidenScalarMergeValuesPointer) {
   auto Lo = B.buildTrunc(S32, Copies[0]);
   auto Hi = B.buildTrunc(S32, Copies[1]);
 
-  auto Merge = B.buildMerge(P0, {Lo.getReg(0), Hi.getReg(0)});
+  auto Merge = B.buildMerge(P0, {Lo, Hi});
 
   EXPECT_EQ(LegalizerHelper::LegalizeResult::Legalized,
             Helper.widenScalar(*Merge, 1, S64));
@@ -1178,5 +1178,109 @@ TEST_F(GISelMITest, LowerSEXTINREG) {
 
   // Check
   ASSERT_TRUE(CheckMachineFunction(*MF, CheckStr));
+}
+
+TEST_F(GISelMITest, LibcallFPExt) {
+  setUp();
+  if (!TM)
+    return;
+
+  // Declare your legalization info
+  DefineLegalizerInfo(A, {
+    getActionDefinitionsBuilder(G_FPEXT).libcallFor({{s32, s16}, {s128, s64}});
+  });
+
+  LLT S16{LLT::scalar(16)};
+  LLT S32{LLT::scalar(32)};
+  LLT S128{LLT::scalar(128)};
+  auto MIBTrunc = B.buildTrunc(S16, Copies[0]);
+  auto MIBFPExt1 =
+      B.buildInstr(TargetOpcode::G_FPEXT, {S32}, {MIBTrunc});
+
+  auto MIBFPExt2 =
+      B.buildInstr(TargetOpcode::G_FPEXT, {S128}, {Copies[1]});
+  AInfo Info(MF->getSubtarget());
+  DummyGISelObserver Observer;
+  LegalizerHelper Helper(*MF, Info, Observer, B);
+  EXPECT_EQ(LegalizerHelper::LegalizeResult::Legalized,
+              Helper.libcall(*MIBFPExt1));
+
+  EXPECT_EQ(LegalizerHelper::LegalizeResult::Legalized,
+              Helper.libcall(*MIBFPExt2));
+  auto CheckStr = R"(
+  CHECK: [[TRUNC:%[0-9]+]]:_(s16) = G_TRUNC
+  CHECK: $h0 = COPY [[TRUNC]]
+  CHECK: BL &__gnu_h2f_ieee
+  CHECK: $d0 = COPY
+  CHECK: BL &__extenddftf2
+  )";
+
+  // Check
+  EXPECT_TRUE(CheckMachineFunction(*MF, CheckStr)) << *MF;
+}
+
+TEST_F(GISelMITest, LibcallFPTrunc) {
+  setUp();
+  if (!TM)
+    return;
+
+  // Declare your legalization info
+  DefineLegalizerInfo(A, {
+    getActionDefinitionsBuilder(G_FPTRUNC).libcallFor({{s16, s32}, {s64, s128}});
+  });
+
+  LLT S16{LLT::scalar(16)};
+  LLT S32{LLT::scalar(32)};
+  LLT S64{LLT::scalar(64)};
+  LLT S128{LLT::scalar(128)};
+  auto MIBTrunc = B.buildTrunc(S32, Copies[0]);
+  auto MIBFPTrunc1 =
+      B.buildInstr(TargetOpcode::G_FPTRUNC, {S16}, {MIBTrunc});
+
+  auto MIBMerge = B.buildMerge(S128, {Copies[1], Copies[2]});
+
+  auto MIBFPTrunc2 =
+      B.buildInstr(TargetOpcode::G_FPTRUNC, {S64}, {MIBMerge});
+  AInfo Info(MF->getSubtarget());
+  DummyGISelObserver Observer;
+  LegalizerHelper Helper(*MF, Info, Observer, B);
+  EXPECT_EQ(LegalizerHelper::LegalizeResult::Legalized,
+            Helper.libcall(*MIBFPTrunc1));
+
+  EXPECT_EQ(LegalizerHelper::LegalizeResult::Legalized,
+            Helper.libcall(*MIBFPTrunc2));
+  auto CheckStr = R"(
+  CHECK: [[TRUNC:%[0-9]+]]:_(s32) = G_TRUNC
+  CHECK: $s0 = COPY [[TRUNC]]
+  CHECK: BL &__gnu_f2h_ieee
+  CHECK: $q0 = COPY
+  CHECK: BL &__trunctfdf2
+  )";
+
+  // Check
+  EXPECT_TRUE(CheckMachineFunction(*MF, CheckStr)) << *MF;
+}
+
+TEST_F(GISelMITest, LibcallSimple) {
+  setUp();
+  if (!TM)
+    return;
+
+  // Declare your legalization info
+  DefineLegalizerInfo(A, {
+    getActionDefinitionsBuilder(G_FADD).libcallFor({s16});
+  });
+
+  LLT S16{LLT::scalar(16)};
+  auto MIBTrunc = B.buildTrunc(S16, Copies[0]);
+  auto MIBFADD =
+      B.buildInstr(TargetOpcode::G_FADD, {S16}, {MIBTrunc, MIBTrunc});
+
+  AInfo Info(MF->getSubtarget());
+  DummyGISelObserver Observer;
+  LegalizerHelper Helper(*MF, Info, Observer, B);
+  // Make sure we do not crash anymore
+  EXPECT_EQ(LegalizerHelper::LegalizeResult::UnableToLegalize,
+            Helper.libcall(*MIBFADD));
 }
 } // namespace

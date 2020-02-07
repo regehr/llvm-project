@@ -349,6 +349,18 @@ void TypeLocWriter::VisitUnaryTransformTypeLoc(UnaryTransformTypeLoc TL) {
 
 void TypeLocWriter::VisitAutoTypeLoc(AutoTypeLoc TL) {
   Record.AddSourceLocation(TL.getNameLoc());
+  Record.push_back(TL.isConstrained());
+  if (TL.isConstrained()) {
+    Record.AddNestedNameSpecifierLoc(TL.getNestedNameSpecifierLoc());
+    Record.AddSourceLocation(TL.getTemplateKWLoc());
+    Record.AddSourceLocation(TL.getConceptNameLoc());
+    Record.AddDeclRef(TL.getFoundDecl());
+    Record.AddSourceLocation(TL.getLAngleLoc());
+    Record.AddSourceLocation(TL.getRAngleLoc());
+    for (unsigned I = 0; I < TL.getNumArgs(); ++I)
+      Record.AddTemplateArgumentLocInfo(TL.getTypePtr()->getArg(I).getKind(),
+                                        TL.getArgLocInfo(I));
+  }
 }
 
 void TypeLocWriter::VisitDeducedTemplateSpecializationTypeLoc(
@@ -1120,7 +1132,7 @@ void ASTWriter::WriteControlBlock(Preprocessor &PP, ASTContext &Context,
     BaseDirectory.assign(BaseDir.begin(), BaseDir.end());
   } else if (!isysroot.empty()) {
     // Write out paths relative to the sysroot if possible.
-    BaseDirectory = isysroot;
+    BaseDirectory = std::string(isysroot);
   }
 
   // Module map file
@@ -6135,6 +6147,8 @@ void OMPClauseWriter::VisitOMPCaptureClause(OMPCaptureClause *) {}
 
 void OMPClauseWriter::VisitOMPSeqCstClause(OMPSeqCstClause *) {}
 
+void OMPClauseWriter::VisitOMPAcqRelClause(OMPAcqRelClause *) {}
+
 void OMPClauseWriter::VisitOMPThreadsClause(OMPThreadsClause *) {}
 
 void OMPClauseWriter::VisitOMPSIMDClause(OMPSIMDClause *) {}
@@ -6551,3 +6565,10 @@ void OMPClauseWriter::VisitOMPNontemporalClause(OMPNontemporalClause *C) {
   for (auto *E : C->private_refs())
     Record.AddStmt(E);
 }
+
+void OMPClauseWriter::VisitOMPOrderClause(OMPOrderClause *C) {
+  Record.writeEnum(C->getKind());
+  Record.AddSourceLocation(C->getLParenLoc());
+  Record.AddSourceLocation(C->getKindKwLoc());
+}
+

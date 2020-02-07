@@ -3872,10 +3872,10 @@ static PPC::Predicate getPredicateForSetCC(ISD::CondCode CC, const EVT &VT,
     return UseSPE ? PPC::PRED_GT : PPC::PRED_LT;
   case ISD::SETULE:
   case ISD::SETLE:
-    return UseSPE ? PPC::PRED_LE : PPC::PRED_LE;
+    return PPC::PRED_LE;
   case ISD::SETOGT:
   case ISD::SETGT:
-    return UseSPE ? PPC::PRED_GT : PPC::PRED_GT;
+    return PPC::PRED_GT;
   case ISD::SETUGE:
   case ISD::SETGE:
     return UseSPE ? PPC::PRED_LE : PPC::PRED_GE;
@@ -5547,8 +5547,7 @@ void PPCDAGToDAGISel::foldBoolExts(SDValue &Res, SDNode *&N) {
       SDValue O1 = UserO1.getNode() == N ? Val : UserO1;
 
       return CurDAG->FoldConstantArithmetic(User->getOpcode(), dl,
-                                            User->getValueType(0),
-                                            O0.getNode(), O1.getNode());
+                                            User->getValueType(0), {O0, O1});
     };
 
     // FIXME: When the semantics of the interaction between select and undef

@@ -506,12 +506,15 @@ llvm::collectChildrenInLoop(DomTreeNode *N, const Loop *CurLoop) {
   return Worklist;
 }
 
-void llvm::deleteDeadLoop(Loop *L, DominatorTree *DT = nullptr,
-                          ScalarEvolution *SE = nullptr,
-                          LoopInfo *LI = nullptr) {
+void llvm::deleteDeadLoop(Loop *L, DominatorTree *DT, ScalarEvolution *SE,
+                          LoopInfo *LI, MemorySSA *MSSA) {
   assert((!DT || L->isLCSSAForm(*DT)) && "Expected LCSSA!");
   auto *Preheader = L->getLoopPreheader();
   assert(Preheader && "Preheader should exist!");
+
+  std::unique_ptr<MemorySSAUpdater> MSSAU;
+  if (MSSA)
+    MSSAU = std::make_unique<MemorySSAUpdater>(MSSA);
 
   // Now that we know the removal is safe, remove the loop by changing the
   // branch from the preheader to go to the single exit block.
@@ -585,18 +588,33 @@ void llvm::deleteDeadLoop(Loop *L, DominatorTree *DT = nullptr,
            "Should have exactly one value and that's from the preheader!");
   }
 
+  DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Eager);
+  if (DT) {
+    DTU.applyUpdates({{DominatorTree::Insert, Preheader, ExitBlock}});
+    if (MSSA) {
+      MSSAU->applyUpdates({{DominatorTree::Insert, Preheader, ExitBlock}}, *DT);
+      if (VerifyMemorySSA)
+        MSSA->verifyMemorySSA();
+    }
+  }
+
   // Disconnect the loop body by branching directly to its exit.
   Builder.SetInsertPoint(Preheader->getTerminator());
   Builder.CreateBr(ExitBlock);
   // Remove the old branch.
   Preheader->getTerminator()->eraseFromParent();
 
-  DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Eager);
   if (DT) {
-    // Update the dominator tree by informing it about the new edge from the
-    // preheader to the exit and the removed edge.
-    DTU.applyUpdates({{DominatorTree::Insert, Preheader, ExitBlock},
-                      {DominatorTree::Delete, Preheader, L->getHeader()}});
+    DTU.applyUpdates({{DominatorTree::Delete, Preheader, L->getHeader()}});
+    if (MSSA) {
+      MSSAU->applyUpdates({{DominatorTree::Delete, Preheader, L->getHeader()}},
+                          *DT);
+      if (VerifyMemorySSA)
+        MSSA->verifyMemorySSA();
+      SmallSetVector<BasicBlock *, 8> DeadBlockSet(L->block_begin(),
+                                                   L->block_end());
+      MSSAU->removeBlocks(DeadBlockSet);
+    }
   }
 
   // Use a map to unique and a vector to guarantee deterministic ordering.
@@ -656,6 +674,9 @@ void llvm::deleteDeadLoop(Loop *L, DominatorTree *DT = nullptr,
   // delete it freely later.
   for (auto *Block : L->blocks())
     Block->dropAllReferences();
+
+  if (MSSA && VerifyMemorySSA)
+    MSSA->verifyMemorySSA();
 
   if (LI) {
     // Erase the instructions and the blocks without having to worry
@@ -916,6 +937,11 @@ llvm::getShuffleReduction(IRBuilder<> &Builder, Value *Src, unsigned Op,
     }
     if (!RedOps.empty())
       propagateIRFlags(TmpVec, RedOps);
+
+    // We may compute the reassociated scalar ops in a way that does not
+    // preserve nsw/nuw etc. Conservatively, drop those flags.
+    if (auto *ReductionInst = dyn_cast<Instruction>(TmpVec))
+      ReductionInst->dropPoisonGeneratingFlags();
   }
   // The result is in the first element of the vector.
   return Builder.CreateExtractElement(TmpVec, Builder.getInt32(0));
@@ -1423,4 +1449,50 @@ void llvm::setProfileInfoAfterUnrolling(Loop *OrigLoop, Loop *UnrolledLoop,
                             OrigLoopInvocationWeight);
   setLoopEstimatedTripCount(RemainderLoop, RemainderAverageTripCount,
                             OrigLoopInvocationWeight);
+}
+
+/// Utility that implements appending of loops onto a worklist.
+/// Loops are added in preorder (analogous for reverse postorder for trees),
+/// and the worklist is processed LIFO.
+template <typename RangeT>
+void llvm::appendReversedLoopsToWorklist(
+    RangeT &&Loops, SmallPriorityWorklist<Loop *, 4> &Worklist) {
+  // We use an internal worklist to build up the preorder traversal without
+  // recursion.
+  SmallVector<Loop *, 4> PreOrderLoops, PreOrderWorklist;
+
+  // We walk the initial sequence of loops in reverse because we generally want
+  // to visit defs before uses and the worklist is LIFO.
+  for (Loop *RootL : Loops) {
+    assert(PreOrderLoops.empty() && "Must start with an empty preorder walk.");
+    assert(PreOrderWorklist.empty() &&
+           "Must start with an empty preorder walk worklist.");
+    PreOrderWorklist.push_back(RootL);
+    do {
+      Loop *L = PreOrderWorklist.pop_back_val();
+      PreOrderWorklist.append(L->begin(), L->end());
+      PreOrderLoops.push_back(L);
+    } while (!PreOrderWorklist.empty());
+
+    Worklist.insert(std::move(PreOrderLoops));
+    PreOrderLoops.clear();
+  }
+}
+
+template <typename RangeT>
+void llvm::appendLoopsToWorklist(RangeT &&Loops,
+                                 SmallPriorityWorklist<Loop *, 4> &Worklist) {
+  appendReversedLoopsToWorklist(reverse(Loops), Worklist);
+}
+
+template void llvm::appendLoopsToWorklist<ArrayRef<Loop *> &>(
+    ArrayRef<Loop *> &Loops, SmallPriorityWorklist<Loop *, 4> &Worklist);
+
+template void
+llvm::appendLoopsToWorklist<Loop &>(Loop &L,
+                                    SmallPriorityWorklist<Loop *, 4> &Worklist);
+
+void llvm::appendLoopsToWorklist(LoopInfo &LI,
+                                 SmallPriorityWorklist<Loop *, 4> &Worklist) {
+  appendReversedLoopsToWorklist(LI, Worklist);
 }
