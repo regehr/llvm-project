@@ -20,6 +20,8 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/CallGraph.h"
+#include "llvm/Analysis/CallGraphSCCPass.h"
 #include "llvm/Analysis/CaptureTracking.h"
 #include "llvm/Analysis/EHPersonalities.h"
 #include "llvm/Analysis/GlobalsModRef.h"
@@ -243,20 +245,6 @@ Argument *IRPosition::getAssociatedArgument() const {
     return Callee->getArg(ArgNo);
 
   return nullptr;
-}
-
-/// For calls (and invokes) we will only replace instruction uses to not disturb
-/// the old style call graph.
-/// TODO: Remove this once we get rid of the old PM.
-static void replaceAllInstructionUsesWith(Value &Old, Value &New) {
-  if (!isa<CallBase>(Old))
-    return Old.replaceAllUsesWith(&New);
-  SmallVector<Use *, 8> Uses;
-  for (Use &U : Old.uses())
-    if (isa<Instruction>(U.getUser()))
-      Uses.push_back(&U);
-  for (Use *U : Uses)
-    U->set(&New);
 }
 
 static Optional<ConstantInt *>
@@ -1201,10 +1189,10 @@ ChangeStatus AAReturnedValuesImpl::manifest(Attributor &A) {
                   "Number of function with unique return");
 
   // Callback to replace the uses of CB with the constant C.
-  auto ReplaceCallSiteUsersWith = [](CallBase &CB, Constant &C) {
+  auto ReplaceCallSiteUsersWith = [&A](CallBase &CB, Constant &C) {
     if (CB.getNumUses() == 0 || CB.isMustTailCall())
       return ChangeStatus::UNCHANGED;
-    replaceAllInstructionUsesWith(CB, C);
+    A.replaceAllUsesWith(CB, C);
     return ChangeStatus::CHANGED;
   };
 
@@ -2508,13 +2496,29 @@ struct AANoAliasFloating final : AANoAliasImpl {
   /// See AbstractAttribute::initialize(...).
   void initialize(Attributor &A) override {
     AANoAliasImpl::initialize(A);
-    Value &Val = getAssociatedValue();
+    Value *Val = &getAssociatedValue();
+    do {
+      CastInst *CI = dyn_cast<CastInst>(Val);
+      if (!CI)
+        break;
+      Value *Base = CI->getOperand(0);
+      if (Base->getNumUses() != 1)
+        break;
+      Val = Base;
+    } while (true);
+
     if (isa<AllocaInst>(Val))
       indicateOptimisticFixpoint();
     else if (isa<ConstantPointerNull>(Val) &&
              !NullPointerIsDefined(getAnchorScope(),
-                                   Val.getType()->getPointerAddressSpace()))
+                                   Val->getType()->getPointerAddressSpace()))
       indicateOptimisticFixpoint();
+    else if (Val != &getAssociatedValue()) {
+      const auto &ValNoAliasAA =
+          A.getAAFor<AANoAlias>(*this, IRPosition::value(*Val));
+      if (ValNoAliasAA.isKnownNoAlias())
+        indicateOptimisticFixpoint();
+    }
   }
 
   /// See AbstractAttribute::updateImpl(...).
@@ -4420,9 +4424,7 @@ struct AAValueSimplifyImpl : AAValueSimplify {
       else
         return false;
     } else {
-      // FIXME: It should be llvm::None but if you set llvm::None,
-      //        values are mistakenly infered as `undef` now.
-      SimplifiedAssociatedValue = &getAssociatedValue();
+      SimplifiedAssociatedValue = llvm::None;
     }
     return true;
   }
@@ -4694,7 +4696,7 @@ struct AAHeapToStackImpl : public AAHeapToStack {
         AI = new BitCastInst(AI, MallocCall->getType(), "malloc_bc",
                              AI->getNextNode());
 
-      replaceAllInstructionUsesWith(*MallocCall, *AI);
+      A.replaceAllUsesWith(*MallocCall, *AI);
 
       if (auto *II = dyn_cast<InvokeInst>(MallocCall)) {
         auto *NBB = II->getNormalDest();
@@ -6165,7 +6167,7 @@ struct AAValueConstantRangeFloating : AAValueConstantRangeImpl {
 
   /// See AbstractAttribute::initialize(...).
   void initialize(Attributor &A) override {
-    AAValueConstantRange::initialize(A);
+    AAValueConstantRangeImpl::initialize(A);
     Value &V = getAssociatedValue();
 
     if (auto *C = dyn_cast<ConstantInt>(&V)) {
@@ -6195,6 +6197,17 @@ struct AAValueConstantRangeFloating : AAValueConstantRangeImpl {
         return;
       }
 
+    // We handle casts in the updateImpl.
+    // TODO: Allow non integers as well.
+    if (CastInst *CI = dyn_cast<CastInst>(&V))
+      if (CI->getOperand(0)->getType()->isIntegerTy())
+        return;
+
+    // We can work with PHI and select instruction as we traverse their operands
+    // during update.
+    if (isa<SelectInst>(V) || isa<PHINode>(V))
+      return;
+
     // Otherwise we give up.
     indicatePessimisticFixpoint();
 
@@ -6202,17 +6215,21 @@ struct AAValueConstantRangeFloating : AAValueConstantRangeImpl {
                       << getAssociatedValue() << "\n");
   }
 
-  bool calculateBinaryOperator(Attributor &A, BinaryOperator *BinOp,
-                               IntegerRangeState &T, Instruction *CtxI) {
+  bool calculateBinaryOperator(
+      Attributor &A, BinaryOperator *BinOp, IntegerRangeState &T,
+      Instruction *CtxI,
+      SmallVectorImpl<const AAValueConstantRange *> &QuerriedAAs) {
     Value *LHS = BinOp->getOperand(0);
     Value *RHS = BinOp->getOperand(1);
 
     auto &LHSAA =
         A.getAAFor<AAValueConstantRange>(*this, IRPosition::value(*LHS));
+    QuerriedAAs.push_back(&LHSAA);
     auto LHSAARange = LHSAA.getAssumedConstantRange(A, CtxI);
 
     auto &RHSAA =
         A.getAAFor<AAValueConstantRange>(*this, IRPosition::value(*RHS));
+    QuerriedAAs.push_back(&RHSAA);
     auto RHSAARange = RHSAA.getAssumedConstantRange(A, CtxI);
 
     auto AssumedRange = LHSAARange.binaryOp(BinOp->getOpcode(), RHSAARange);
@@ -6224,15 +6241,35 @@ struct AAValueConstantRangeFloating : AAValueConstantRangeImpl {
     return T.isValidState();
   }
 
-  bool calculateCmpInst(Attributor &A, CmpInst *CmpI, IntegerRangeState &T,
-                        Instruction *CtxI) {
+  bool calculateCastInst(
+      Attributor &A, CastInst *CastI, IntegerRangeState &T, Instruction *CtxI,
+      SmallVectorImpl<const AAValueConstantRange *> &QuerriedAAs) {
+    assert(CastI->getNumOperands() == 1 && "Expected cast to be unary!");
+    // TODO: Allow non integers as well.
+    Value &OpV = *CastI->getOperand(0);
+    assert(OpV.getType()->isIntegerTy() && "Expected integer cast");
+
+    auto &OpAA =
+        A.getAAFor<AAValueConstantRange>(*this, IRPosition::value(OpV));
+    QuerriedAAs.push_back(&OpAA);
+    T.unionAssumed(
+        OpAA.getAssumed().castOp(CastI->getOpcode(), getState().getBitWidth()));
+    return T.isValidState();
+  }
+
+  bool
+  calculateCmpInst(Attributor &A, CmpInst *CmpI, IntegerRangeState &T,
+                   Instruction *CtxI,
+                   SmallVectorImpl<const AAValueConstantRange *> &QuerriedAAs) {
     Value *LHS = CmpI->getOperand(0);
     Value *RHS = CmpI->getOperand(1);
 
     auto &LHSAA =
         A.getAAFor<AAValueConstantRange>(*this, IRPosition::value(*LHS));
+    QuerriedAAs.push_back(&LHSAA);
     auto &RHSAA =
         A.getAAFor<AAValueConstantRange>(*this, IRPosition::value(*RHS));
+    QuerriedAAs.push_back(&RHSAA);
 
     auto LHSAARange = LHSAA.getAssumedConstantRange(A, CtxI);
     auto RHSAARange = RHSAA.getAssumedConstantRange(A, CtxI);
@@ -6290,17 +6327,37 @@ struct AAValueConstantRangeFloating : AAValueConstantRangeImpl {
         return T.isValidState();
       }
 
-      if (auto *BinOp = dyn_cast<BinaryOperator>(I))
-        return calculateBinaryOperator(A, BinOp, T, CtxI);
-      else if (auto *CmpI = dyn_cast<CmpInst>(I))
-        return calculateCmpInst(A, CmpI, T, CtxI);
-      else {
+      SmallVector<const AAValueConstantRange *, 4> QuerriedAAs;
+      if (auto *BinOp = dyn_cast<BinaryOperator>(I)) {
+        if (!calculateBinaryOperator(A, BinOp, T, CtxI, QuerriedAAs))
+          return false;
+      } else if (auto *CmpI = dyn_cast<CmpInst>(I)) {
+        if (!calculateCmpInst(A, CmpI, T, CtxI, QuerriedAAs))
+          return false;
+      } else if (auto *CastI = dyn_cast<CastInst>(I)) {
+        if (!calculateCastInst(A, CastI, T, CtxI, QuerriedAAs))
+          return false;
+      } else {
         // Give up with other instructions.
         // TODO: Add other instructions
 
         T.indicatePessimisticFixpoint();
         return false;
       }
+
+      // Catch circular reasoning in a pessimistic way for now.
+      // TODO: Check how the range evolves and if we stripped anything, see also
+      //       AADereferenceable or AAAlign for similar situations.
+      for (const AAValueConstantRange *QueriedAA : QuerriedAAs) {
+        if (QueriedAA != this)
+          continue;
+        // If we are in a stady state we do not need to worry.
+        if (T.getAssumed() == getState().getAssumed())
+          continue;
+        T.indicatePessimisticFixpoint();
+      }
+
+      return T.isValidState();
     };
 
     IntegerRangeState T(getBitWidth());
@@ -6378,7 +6435,7 @@ struct AAValueConstantRangeCallSiteArgument : AAValueConstantRangeFloating {
 bool Attributor::isAssumedDead(const AbstractAttribute &AA,
                                const AAIsDead *LivenessAA) {
   const Instruction *CtxI = AA.getIRPosition().getCtxI();
-  if (!CtxI)
+  if (!CtxI || !Functions.count(const_cast<Function *>(CtxI->getFunction())))
     return false;
 
   // TODO: Find a good way to utilize fine and coarse grained liveness
@@ -6665,7 +6722,7 @@ bool Attributor::checkForAllReadWriteInstructions(
   return true;
 }
 
-ChangeStatus Attributor::run(Module &M) {
+ChangeStatus Attributor::run() {
   LLVM_DEBUG(dbgs() << "[Attributor] Identified and initialized "
                     << AllAbstractAttributes.size()
                     << " abstract attributes.\n");
@@ -6852,9 +6909,9 @@ ChangeStatus Attributor::run(Module &M) {
   NumAttributesValidFixpoint += NumAtFixpoint;
 
   (void)NumFinalAAs;
-  assert(
-      NumFinalAAs == AllAbstractAttributes.size() &&
-      "Expected the final number of abstract attributes to remain unchanged!");
+  assert(NumFinalAAs == AllAbstractAttributes.size() &&
+         "Expected the final number of abstract attributes to remain "
+         "unchanged!");
 
   // Delete stuff at the end to avoid invalid references and a nice order.
   {
@@ -6874,11 +6931,12 @@ ChangeStatus Attributor::run(Module &M) {
       LLVM_DEBUG(dbgs() << "Use " << *NewV << " in " << *U->getUser()
                         << " instead of " << *OldV << "\n");
       U->set(NewV);
-      if (Instruction *I = dyn_cast<Instruction>(OldV))
+      if (Instruction *I = dyn_cast<Instruction>(OldV)) {
+        CGModifiedFunctions.insert(I->getFunction());
         if (!isa<PHINode>(I) && !ToBeDeletedInsts.count(I) &&
-            isInstructionTriviallyDead(I)) {
+            isInstructionTriviallyDead(I))
           DeadInsts.push_back(I);
-        }
+      }
       if (isa<Constant>(NewV) && isa<BranchInst>(U->getUser())) {
         Instruction *UserI = cast<Instruction>(U->getUser());
         if (isa<UndefValue>(NewV)) {
@@ -6915,13 +6973,18 @@ ChangeStatus Attributor::run(Module &M) {
         }
       }
     for (auto &V : ToBeChangedToUnreachableInsts)
-      if (Instruction *I = dyn_cast_or_null<Instruction>(V))
+      if (Instruction *I = dyn_cast_or_null<Instruction>(V)) {
+        CGModifiedFunctions.insert(I->getFunction());
         changeToUnreachable(I, /* UseLLVMTrap */ false);
-    for (Instruction *I : TerminatorsToFold)
+      }
+    for (Instruction *I : TerminatorsToFold) {
+      CGModifiedFunctions.insert(I->getFunction());
       ConstantFoldTerminator(I->getParent());
+    }
 
     for (auto &V : ToBeDeletedInsts) {
       if (Instruction *I = dyn_cast_or_null<Instruction>(V)) {
+        CGModifiedFunctions.insert(I->getFunction());
         I->replaceAllUsesWith(UndefValue::get(I->getType()));
         if (!isa<PHINode>(I) && isInstructionTriviallyDead(I))
           DeadInsts.push_back(I);
@@ -6935,7 +6998,10 @@ ChangeStatus Attributor::run(Module &M) {
     if (unsigned NumDeadBlocks = ToBeDeletedBlocks.size()) {
       SmallVector<BasicBlock *, 8> ToBeDeletedBBs;
       ToBeDeletedBBs.reserve(NumDeadBlocks);
-      ToBeDeletedBBs.append(ToBeDeletedBlocks.begin(), ToBeDeletedBlocks.end());
+      for (BasicBlock *BB : ToBeDeletedBlocks) {
+        CGModifiedFunctions.insert(BB->getParent());
+        ToBeDeletedBBs.push_back(BB);
+      }
       // Actually we do not delete the blocks but squash them into a single
       // unreachable but untangling branches that jump here is something we need
       // to do in a more generic way.
@@ -6949,9 +7015,9 @@ ChangeStatus Attributor::run(Module &M) {
     // as live to lower the number of iterations. If they happen to be dead, the
     // below fixpoint loop will identify and eliminate them.
     SmallVector<Function *, 8> InternalFns;
-    for (Function &F : M)
-      if (F.hasLocalLinkage())
-        InternalFns.push_back(&F);
+    for (Function *F : Functions)
+      if (F->hasLocalLinkage())
+        InternalFns.push_back(F);
 
     bool FoundDeadFn = true;
     while (FoundDeadFn) {
@@ -6977,17 +7043,18 @@ ChangeStatus Attributor::run(Module &M) {
     }
   }
 
+  // Rewrite the functions as requested during manifest.
+  ManifestChange =
+      ManifestChange | rewriteFunctionSignatures(CGModifiedFunctions);
+
+  for (Function *Fn : CGModifiedFunctions)
+    CGUpdater.reanalyzeFunction(*Fn);
+
   STATS_DECL(AAIsDead, Function, "Number of dead functions deleted.");
   BUILD_STAT_NAME(AAIsDead, Function) += ToBeDeletedFunctions.size();
 
-  // Rewrite the functions as requested during manifest.
-  ManifestChange = ManifestChange | rewriteFunctionSignatures();
-
-  for (Function *Fn : ToBeDeletedFunctions) {
-    Fn->deleteBody();
-    Fn->replaceAllUsesWith(UndefValue::get(Fn->getType()));
-    Fn->eraseFromParent();
-  }
+  for (Function *Fn : ToBeDeletedFunctions)
+    CGUpdater.removeFunction(*Fn);
 
   if (VerifyMaxFixpointIterations &&
       IterationCounter != MaxFixpointIterations) {
@@ -7093,7 +7160,8 @@ bool Attributor::registerFunctionSignatureRewrite(
   return true;
 }
 
-ChangeStatus Attributor::rewriteFunctionSignatures() {
+ChangeStatus Attributor::rewriteFunctionSignatures(
+    SmallPtrSetImpl<Function *> &ModifiedFns) {
   ChangeStatus Changed = ChangeStatus::UNCHANGED;
 
   for (auto &It : ArgumentReplacementMap) {
@@ -7254,11 +7322,20 @@ ChangeStatus Attributor::rewriteFunctionSignatures() {
     for (auto &CallSitePair : CallSitePairs) {
       CallBase &OldCB = *CallSitePair.first;
       CallBase &NewCB = *CallSitePair.second;
+      // We do not modify the call graph here but simply reanalyze the old
+      // function. This should be revisited once the old PM is gone.
+      ModifiedFns.insert(OldCB.getFunction());
       OldCB.replaceAllUsesWith(&NewCB);
       OldCB.eraseFromParent();
     }
 
-    ToBeDeletedFunctions.insert(OldFn);
+    // Replace the function in the call graph (if any).
+    CGUpdater.replaceFunctionWith(*OldFn, *NewFn);
+
+    // If the old function was modified and needed to be reanalyzed, the new one
+    // does now.
+    if (ModifiedFns.erase(OldFn))
+      ModifiedFns.insert(NewFn);
 
     Changed = ChangeStatus::CHANGED;
   }
@@ -7588,50 +7665,90 @@ void AbstractAttribute::print(raw_ostream &OS) const {
 ///                       Pass (Manager) Boilerplate
 /// ----------------------------------------------------------------------------
 
-static bool runAttributorOnModule(Module &M, AnalysisGetter &AG) {
-  if (DisableAttributor)
+static bool runAttributorOnFunctions(InformationCache &InfoCache,
+                                     SetVector<Function *> &Functions,
+                                     AnalysisGetter &AG,
+                                     CallGraphUpdater &CGUpdater) {
+  if (DisableAttributor || Functions.empty())
     return false;
 
-  LLVM_DEBUG(dbgs() << "[Attributor] Run on module with " << M.size()
+  LLVM_DEBUG(dbgs() << "[Attributor] Run on module with " << Functions.size()
                     << " functions.\n");
 
   // Create an Attributor and initially empty information cache that is filled
   // while we identify default attribute opportunities.
-  InformationCache InfoCache(M, AG);
-  Attributor A(InfoCache, DepRecInterval);
+  Attributor A(Functions, InfoCache, CGUpdater, DepRecInterval);
 
-  for (Function &F : M)
-    A.initializeInformationCache(F);
+  for (Function *F : Functions)
+    A.initializeInformationCache(*F);
 
-  for (Function &F : M) {
-    if (F.hasExactDefinition())
+  for (Function *F : Functions) {
+    if (F->hasExactDefinition())
       NumFnWithExactDefinition++;
     else
       NumFnWithoutExactDefinition++;
 
     // We look at internal functions only on-demand but if any use is not a
-    // direct call, we have to do it eagerly.
-    if (F.hasLocalLinkage()) {
-      if (llvm::all_of(F.uses(), [](const Use &U) {
-            return ImmutableCallSite(U.getUser()) &&
-                   ImmutableCallSite(U.getUser()).isCallee(&U);
+    // direct call or outside the current set of analyzed functions, we have to
+    // do it eagerly.
+    if (F->hasLocalLinkage()) {
+      if (llvm::all_of(F->uses(), [&Functions](const Use &U) {
+            ImmutableCallSite ICS(U.getUser());
+            return ICS && ICS.isCallee(&U) &&
+                   Functions.count(const_cast<Function *>(ICS.getCaller()));
           }))
         continue;
     }
 
     // Populate the Attributor with abstract attribute opportunities in the
     // function and the information cache with IR information.
-    A.identifyDefaultAbstractAttributes(F);
+    A.identifyDefaultAbstractAttributes(*F);
   }
 
-  bool Changed = A.run(M) == ChangeStatus::CHANGED;
-  assert(!verifyModule(M, &errs()) && "Module verification failed!");
+  bool Changed = A.run() == ChangeStatus::CHANGED;
+  assert(!verifyModule(*Functions.front()->getParent(), &errs()) &&
+         "Module verification failed!");
   return Changed;
 }
 
 PreservedAnalyses AttributorPass::run(Module &M, ModuleAnalysisManager &AM) {
-  AnalysisGetter AG(AM);
-  if (runAttributorOnModule(M, AG)) {
+  FunctionAnalysisManager &FAM =
+      AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+  AnalysisGetter AG(FAM);
+
+  SetVector<Function *> Functions;
+  for (Function &F : M)
+    Functions.insert(&F);
+
+  CallGraphUpdater CGUpdater;
+  InformationCache InfoCache(M, AG, /* CGSCC */ nullptr);
+  if (runAttributorOnFunctions(InfoCache, Functions, AG, CGUpdater)) {
+    // FIXME: Think about passes we will preserve and add them here.
+    return PreservedAnalyses::none();
+  }
+  return PreservedAnalyses::all();
+}
+
+PreservedAnalyses AttributorCGSCCPass::run(LazyCallGraph::SCC &C,
+                                           CGSCCAnalysisManager &AM,
+                                           LazyCallGraph &CG,
+                                           CGSCCUpdateResult &UR) {
+  FunctionAnalysisManager &FAM =
+      AM.getResult<FunctionAnalysisManagerCGSCCProxy>(C, CG).getManager();
+  AnalysisGetter AG(FAM);
+
+  SetVector<Function *> Functions;
+  for (LazyCallGraph::Node &N : C)
+    Functions.insert(&N.getFunction());
+
+  if (Functions.empty())
+    return PreservedAnalyses::all();
+
+  Module &M = *Functions.back()->getParent();
+  CallGraphUpdater CGUpdater;
+  CGUpdater.initialize(CG, C, AM, UR);
+  InformationCache InfoCache(M, AG, /* CGSCC */ &Functions);
+  if (runAttributorOnFunctions(InfoCache, Functions, AG, CGUpdater)) {
     // FIXME: Think about passes we will preserve and add them here.
     return PreservedAnalyses::none();
   }
@@ -7652,7 +7769,13 @@ struct AttributorLegacyPass : public ModulePass {
       return false;
 
     AnalysisGetter AG;
-    return runAttributorOnModule(M, AG);
+    SetVector<Function *> Functions;
+    for (Function &F : M)
+      Functions.insert(&F);
+
+    CallGraphUpdater CGUpdater;
+    InformationCache InfoCache(M, AG, /* CGSCC */ nullptr);
+    return runAttributorOnFunctions(InfoCache, Functions, AG, CGUpdater);
   }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
@@ -7661,11 +7784,53 @@ struct AttributorLegacyPass : public ModulePass {
   }
 };
 
+struct AttributorCGSCCLegacyPass : public CallGraphSCCPass {
+  CallGraphUpdater CGUpdater;
+  static char ID;
+
+  AttributorCGSCCLegacyPass() : CallGraphSCCPass(ID) {
+    initializeAttributorCGSCCLegacyPassPass(*PassRegistry::getPassRegistry());
+  }
+
+  bool runOnSCC(CallGraphSCC &SCC) override {
+    if (skipSCC(SCC))
+      return false;
+
+    SetVector<Function *> Functions;
+    for (CallGraphNode *CGN : SCC)
+      if (Function *Fn = CGN->getFunction())
+        if (!Fn->isDeclaration())
+          Functions.insert(Fn);
+
+    if (Functions.empty())
+      return false;
+
+    AnalysisGetter AG;
+    CallGraph &CG = const_cast<CallGraph &>(SCC.getCallGraph());
+    CGUpdater.initialize(CG, SCC);
+    Module &M = *Functions.back()->getParent();
+    InformationCache InfoCache(M, AG, /* CGSCC */ &Functions);
+    return runAttributorOnFunctions(InfoCache, Functions, AG, CGUpdater);
+  }
+
+  bool doFinalization(CallGraph &CG) override { return CGUpdater.finalize(); }
+
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    // FIXME: Think about passes we will preserve and add them here.
+    AU.addRequired<TargetLibraryInfoWrapperPass>();
+    CallGraphSCCPass::getAnalysisUsage(AU);
+  }
+};
+
 } // end anonymous namespace
 
 Pass *llvm::createAttributorLegacyPass() { return new AttributorLegacyPass(); }
+Pass *llvm::createAttributorCGSCCLegacyPass() {
+  return new AttributorCGSCCLegacyPass();
+}
 
 char AttributorLegacyPass::ID = 0;
+char AttributorCGSCCLegacyPass::ID = 0;
 
 const char AAReturnedValues::ID = 0;
 const char AANoUnwind::ID = 0;
@@ -7818,3 +7983,11 @@ INITIALIZE_PASS_BEGIN(AttributorLegacyPass, "attributor",
 INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
 INITIALIZE_PASS_END(AttributorLegacyPass, "attributor",
                     "Deduce and propagate attributes", false, false)
+INITIALIZE_PASS_BEGIN(AttributorCGSCCLegacyPass, "attributor-cgscc",
+                      "Deduce and propagate attributes (CGSCC pass)", false,
+                      false)
+INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(CallGraphWrapperPass)
+INITIALIZE_PASS_END(AttributorCGSCCLegacyPass, "attributor-cgscc",
+                    "Deduce and propagate attributes (CGSCC pass)", false,
+                    false)

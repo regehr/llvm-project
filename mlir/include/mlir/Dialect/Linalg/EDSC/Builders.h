@@ -13,17 +13,24 @@
 #ifndef MLIR_DIALECT_LINALG_EDSC_BUILDERS_H_
 #define MLIR_DIALECT_LINALG_EDSC_BUILDERS_H_
 
-#include "mlir/Dialect/Linalg/EDSC/Intrinsics.h"
+#include "mlir/Dialect/Linalg/IR/LinalgOps.h"
+// TODO(ntv): Needed for SubViewOp::Range, clean this up.
+#include "mlir/Dialect/StandardOps/Ops.h"
 #include "mlir/Dialect/Utils/StructuredOpsUtils.h"
 #include "mlir/EDSC/Builders.h"
-#include "mlir/EDSC/Intrinsics.h"
-#include "mlir/IR/AffineExpr.h"
-#include "mlir/IR/Builders.h"
 
 namespace mlir {
+class AffineForOp;
 class BlockArgument;
+class SubViewOp;
+
+namespace loop {
+class ParallelOp;
+} // namespace loop
 
 namespace edsc {
+class AffineLoopNestBuilder;
+class ParallelLoopNestBuilder;
 
 /// A LoopRangeBuilder is a generic NestedBuilder for loop.for operations.
 /// More specifically it is meant to be used as a temporary object for
@@ -87,57 +94,6 @@ private:
   std::unique_ptr<BuilderType> builder;
 };
 
-enum class IterType { Parallel, Reduction };
-
-inline StringRef toString(IterType t) {
-  switch (t) {
-  case IterType::Parallel:
-    return getParallelIteratorTypeName();
-  case IterType::Reduction:
-    return getReductionIteratorTypeName();
-  }
-  llvm_unreachable("Unsupported IterType");
-}
-
-/// A StructuredIndexed represents an indexable quantity that is either:
-/// 1. a captured value, which is suitable for buffer and tensor operands, or;
-/// 2. a captured type, which is suitable for tensor return values.
-///
-/// A StructuredIndexed itself is indexed and passed to `makeGenericLinalgOp`.
-/// It enable an idiomatic syntax for index expressions such as:
-///
-/// ```
-///      StructuredIndexed A(buffer_or_tensor_value), B(buffer_or_tensor_value),
-///        C(buffer_value_or_tensor_type);
-///      makeGenericLinalgOp({A({m, n}), B({k, n})}, {C({m, n})}, ... );
-/// ```
-struct StructuredIndexed : public ValueHandle {
-  StructuredIndexed(Type type) : ValueHandle(type) {}
-  StructuredIndexed(Value value) : ValueHandle(value) {}
-  StructuredIndexed(ValueHandle valueHandle) : ValueHandle(valueHandle) {}
-  StructuredIndexed operator()(ArrayRef<AffineExpr> indexings) {
-    return StructuredIndexed(*this, indexings);
-  }
-
-  ArrayRef<AffineExpr> getExprs() { return exprs; }
-
-private:
-  StructuredIndexed(Type t, ArrayRef<AffineExpr> indexings)
-      : ValueHandle(t), exprs(indexings.begin(), indexings.end()) {
-    assert(t.isa<RankedTensorType>() && "RankedTensor expected");
-  }
-  StructuredIndexed(Value v, ArrayRef<AffineExpr> indexings)
-      : ValueHandle(v), exprs(indexings.begin(), indexings.end()) {
-    assert((v.getType().isa<MemRefType>() ||
-            v.getType().isa<RankedTensorType>()) &&
-           "MemRef or RankedTensor expected");
-  }
-  StructuredIndexed(ValueHandle vh, ArrayRef<AffineExpr> indexings)
-      : ValueHandle(vh), exprs(indexings.begin(), indexings.end()) {}
-
-  SmallVector<AffineExpr, 4> exprs;
-};
-
 inline void defaultRegionBuilder(ArrayRef<BlockArgument> args) {}
 
 /// Build a `linalg.generic` op with the specified `inputs`, `outputs` and
@@ -157,7 +113,7 @@ inline void defaultRegionBuilder(ArrayRef<BlockArgument> args) {}
 /// restriction output tensor results would need to be reordered, which would
 /// result in surprising behavior when combined with region definition.
 Operation *makeGenericLinalgOp(
-    ArrayRef<IterType> iteratorTypes, ArrayRef<StructuredIndexed> inputs,
+    ArrayRef<IteratorType> iteratorTypes, ArrayRef<StructuredIndexed> inputs,
     ArrayRef<StructuredIndexed> outputs,
     function_ref<void(ArrayRef<BlockArgument>)> regionBuilder =
         defaultRegionBuilder,
@@ -166,7 +122,6 @@ Operation *makeGenericLinalgOp(
 namespace ops {
 using edsc::StructuredIndexed;
 using edsc::ValueHandle;
-using edsc::intrinsics::linalg_yield;
 
 //===----------------------------------------------------------------------===//
 // EDSC builders for linalg generic operations.

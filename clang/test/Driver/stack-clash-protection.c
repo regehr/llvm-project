@@ -1,17 +1,17 @@
 // RUN: %clang -target i386-unknown-linux -fstack-clash-protection -### %s 2>&1 | FileCheck %s -check-prefix=SCP-i386
 // RUN: %clang -target i386-unknown-linux -fnostack-clash-protection -fstack-clash-protection -### %s 2>&1 | FileCheck %s -check-prefix=SCP-i386
 // RUN: %clang -target i386-unknown-linux -fstack-clash-protection -fnostack-clash-protection -### %s 2>&1 | FileCheck %s -check-prefix=SCP-i386-NO
-// SCP-i386: "-stack-clash-protection"
-// SCP-i386-NO-NOT: "-stack-clash-protection"
+// SCP-i386: "-fstack-clash-protection"
+// SCP-i386-NO-NOT: "-fstack-clash-protection"
 
 // RUN: %clang -target x86_64-scei-linux -fstack-clash-protection -### %s 2>&1 | FileCheck %s -check-prefix=SCP-x86
-// SCP-x86: "-stack-clash-protection"
+// SCP-x86: "-fstack-clash-protection"
 
 // RUN: %clang -target armv7k-apple-linux -fstack-clash-protection -### %s 2>&1 | FileCheck %s -check-prefix=SCP-armv7
-// SCP-armv7-NOT: "-stack-clash-protection"
+// SCP-armv7-NOT: "-fstack-clash-protection"
 // SCP-armv7: argument unused during compilation: '-fstack-clash-protection'
 
-// RUN: %clang -target x86_64-unknown-linux -fstack-clash-protection -c %s 2>&1 | FileCheck %s -check-prefix=SCP-warn
+// RUN: %clang -target x86_64-unknown-linux -fstack-clash-protection -S -emit-llvm -o %t.ll %s 2>&1 | FileCheck %s -check-prefix=SCP-warn
 // SCP-warn: warning: Unable to protect inline asm that clobbers stack pointer against stack clash
 
 // RUN: %clang -target x86_64-pc-unknown-linux -fstack-clash-protection -S -emit-llvm -o- %s | FileCheck %s -check-prefix=SCP-ll-linux64

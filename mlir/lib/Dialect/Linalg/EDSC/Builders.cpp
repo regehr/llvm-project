@@ -6,19 +6,18 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "mlir/Dialect/Linalg/EDSC/Builders.h"
-#include "mlir/Dialect/Linalg/EDSC/Intrinsics.h"
-#include "mlir/Dialect/Linalg/IR/LinalgOps.h"
-#include "mlir/EDSC/Builders.h"
-#include "mlir/EDSC/Intrinsics.h"
-#include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/Dialect/AffineOps/EDSC/Intrinsics.h"
+#include "mlir/Dialect/Linalg/EDSC/Intrinsics.h"
+#include "mlir/Dialect/LoopOps/EDSC/Builders.h"
+#include "mlir/Dialect/StandardOps/EDSC/Intrinsics.h"
+#include "mlir/Dialect/Utils/StructuredOpsUtils.h"
+#include "mlir/IR/AffineExpr.h"
 #include "mlir/Support/Functional.h"
 
 using namespace mlir;
 using namespace mlir::edsc;
 using namespace mlir::edsc::intrinsics;
-using namespace mlir::edsc::ops;
 using namespace mlir::linalg;
 using namespace mlir::loop;
 
@@ -131,20 +130,8 @@ GenericLoopNestRangeBuilder<loop::ParallelOp>::GenericLoopNestRangeBuilder(
 } // namespace edsc
 } // namespace mlir
 
-static void getMaxDimIndex(ArrayRef<StructuredIndexed> structuredIndices,
-                           unsigned &pos) {
-  for (auto sidx : structuredIndices) {
-    for (auto expr : sidx.getExprs()) {
-      expr.walk([&pos](AffineExpr e) {
-        if (auto d = e.dyn_cast<AffineDimExpr>())
-          pos = std::max(pos, d.getPosition());
-      });
-    }
-  }
-}
-
 Operation *mlir::edsc::makeGenericLinalgOp(
-    ArrayRef<IterType> iteratorTypes, ArrayRef<StructuredIndexed> inputs,
+    ArrayRef<IteratorType> iteratorTypes, ArrayRef<StructuredIndexed> inputs,
     ArrayRef<StructuredIndexed> outputs,
     function_ref<void(ArrayRef<BlockArgument>)> regionBuilder,
     ArrayRef<Value> otherValues, ArrayRef<Attribute> otherAttributes) {
@@ -156,20 +143,16 @@ Operation *mlir::edsc::makeGenericLinalgOp(
   auto *ctx = builder.getContext();
   unsigned nInputs = inputs.size();
   unsigned nOutputs = outputs.size();
-  unsigned maxPos = 0;
-  getMaxDimIndex(inputs, maxPos);
-  getMaxDimIndex(outputs, maxPos);
-  // maxPos is 0 indexed, need to turn this into a count (i.e. +1)
-  unsigned nDims = maxPos + 1;
 
-  SmallVector<AffineMap, 4> maps;
-  maps.reserve(nInputs + nOutputs);
-  for (auto in : inputs)
-    maps.push_back(
-        AffineMap::get(/*dimCount=*/nDims, /*symbolCount=*/0, in.getExprs()));
-  for (auto out : outputs)
-    maps.push_back(
-        AffineMap::get(/*dimCount=*/nDims, /*symbolCount=*/0, out.getExprs()));
+  SmallVector<SmallVector<AffineExpr, 4>, 4> exprsList;
+  exprsList.reserve(nInputs + nOutputs);
+  for (auto structuredIndexed : inputs)
+    exprsList.emplace_back(structuredIndexed.getExprs().begin(),
+                           structuredIndexed.getExprs().end());
+  for (auto structuredIndexed : outputs)
+    exprsList.emplace_back(structuredIndexed.getExprs().begin(),
+                           structuredIndexed.getExprs().end());
+  auto maps = AffineMap::inferFromExprList(exprsList);
 
   unsigned nViews = nInputs + nOutputs;
   SmallVector<Value, 4> values;
@@ -240,8 +223,8 @@ void mlir::edsc::ops::macRegionBuilder(ArrayRef<BlockArgument> args) {
 Operation *mlir::edsc::ops::linalg_pointwise(UnaryPointwiseOpBuilder unaryOp,
                                              StructuredIndexed I,
                                              StructuredIndexed O) {
-  SmallVector<edsc::IterType, 4> iterTypes(O.getExprs().size(),
-                                           edsc::IterType::Parallel);
+  SmallVector<IteratorType, 4> iterTypes(O.getExprs().size(),
+                                         IteratorType::Parallel);
   if (O.getType().isa<RankedTensorType>()) {
     auto fun = [&unaryOp](ArrayRef<BlockArgument> args) {
       assert(args.size() == 1 && "expected 1 block arguments");
@@ -260,8 +243,8 @@ Operation *mlir::edsc::ops::linalg_pointwise(UnaryPointwiseOpBuilder unaryOp,
 
 Operation *mlir::edsc::ops::linalg_pointwise_tanh(StructuredIndexed I,
                                                   StructuredIndexed O) {
-  using edsc::intrinsics::tanh;
-  UnaryPointwiseOpBuilder unOp([](ValueHandle a) -> Value { return tanh(a); });
+  UnaryPointwiseOpBuilder unOp(
+      [](ValueHandle a) -> Value { return std_tanh(a); });
   return linalg_pointwise(unOp, I, O);
 }
 
@@ -270,8 +253,8 @@ Operation *mlir::edsc::ops::linalg_pointwise(BinaryPointwiseOpBuilder binaryOp,
                                              StructuredIndexed I1,
                                              StructuredIndexed I2,
                                              StructuredIndexed O) {
-  SmallVector<edsc::IterType, 4> iterTypes(O.getExprs().size(),
-                                           edsc::IterType::Parallel);
+  SmallVector<IteratorType, 4> iterTypes(O.getExprs().size(),
+                                         IteratorType::Parallel);
   if (O.getType().isa<RankedTensorType>()) {
     auto fun = [&binaryOp](ArrayRef<BlockArgument> args) {
       assert(args.size() == 2 && "expected 2 block arguments");
@@ -301,9 +284,8 @@ Operation *mlir::edsc::ops::linalg_pointwise_max(StructuredIndexed I1,
                                                  StructuredIndexed I2,
                                                  StructuredIndexed O) {
   BinaryPointwiseOpBuilder binOp([](ValueHandle a, ValueHandle b) -> Value {
-    using edsc::intrinsics::select;
     using edsc::op::operator>;
-    return select(a > b, a, b).getValue();
+    return std_select(a > b, a, b).getValue();
   });
   return linalg_pointwise(binOp, I1, I2, O);
 }
@@ -315,7 +297,7 @@ Operation *mlir::edsc::ops::linalg_matmul(ValueHandle vA, ValueHandle vB,
   bindDims(ScopedContext::getContext(), m, n, k);
   StructuredIndexed A(vA), B(vB), C(vC);
   return makeGenericLinalgOp(
-    {IterType::Parallel, IterType::Parallel, IterType::Reduction},
+    {IteratorType::Parallel, IteratorType::Parallel, IteratorType::Reduction},
     {A({m, k}), B({k, n})},
     {C({m, n})},
     macRegionBuilder);
@@ -329,7 +311,7 @@ Operation *mlir::edsc::ops::linalg_matmul(ValueHandle vA, ValueHandle vB,
   bindDims(ScopedContext::getContext(), m, n, k);
   StructuredIndexed A(vA), B(vB), C(tC);
   return makeGenericLinalgOp(
-    {IterType::Parallel, IterType::Parallel, IterType::Reduction},
+    {IteratorType::Parallel, IteratorType::Parallel, IteratorType::Reduction},
     {A({m, k}), B({k, n})},
     {C({m, n})},
     mulRegionBuilder);
@@ -343,7 +325,7 @@ Operation *mlir::edsc::ops::linalg_matmul(ValueHandle vA, ValueHandle vB,
   bindDims(ScopedContext::getContext(), m, n, k);
   StructuredIndexed A(vA), B(vB), C(vC), D(tD);
   return makeGenericLinalgOp(
-    {IterType::Parallel, IterType::Parallel, IterType::Reduction},
+    {IteratorType::Parallel, IteratorType::Parallel, IteratorType::Reduction},
     {A({m, k}), B({k, n}), C({m, n})},
     {D({m, n})},
     macRegionBuilder);
@@ -360,8 +342,8 @@ Operation *mlir::edsc::ops::linalg_conv_nhwc(ValueHandle vI, ValueHandle vW,
   assert((strides.empty() || strides.size() == 2) && "only 2-D conv atm");
 
   // Some short names.
-  auto par = IterType::Parallel;
-  auto red = IterType::Reduction;
+  auto par = IteratorType::Parallel;
+  auto red = IteratorType::Reduction;
   auto s = strides;
   auto d = dilations;
 
@@ -393,8 +375,8 @@ Operation *mlir::edsc::ops::linalg_dilated_conv_nhwc(
   assert((strides.empty() || strides.size() == 2) && "only 2-D conv atm");
 
   // Some short names.
-  auto par = IterType::Parallel;
-  auto red = IterType::Reduction;
+  auto par = IteratorType::Parallel;
+  auto red = IteratorType::Reduction;
   auto s = strides;
   auto d = dilations;
 

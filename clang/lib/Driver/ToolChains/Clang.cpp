@@ -3014,7 +3014,7 @@ static void RenderSCPOptions(const ToolChain &TC, const ArgList &Args,
 
   if (Args.hasFlag(options::OPT_fstack_clash_protection,
                    options::OPT_fnostack_clash_protection, false))
-    CmdArgs.push_back("-stack-clash-protection");
+    CmdArgs.push_back("-fstack-clash-protection");
 }
 
 static void RenderTrivialAutoVarInitOptions(const Driver &D,
