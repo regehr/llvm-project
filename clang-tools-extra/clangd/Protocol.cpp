@@ -14,6 +14,7 @@
 #include "Logger.h"
 #include "URI.h"
 #include "clang/Basic/LLVM.h"
+#include "clang/Index/IndexSymbol.h"
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringSwitch.h"
@@ -261,9 +262,13 @@ SymbolKind indexSymbolKindToSymbolKind(index::SymbolKind Kind) {
   case index::SymbolKind::ConversionFunction:
     return SymbolKind::Function;
   case index::SymbolKind::Parameter:
+  case index::SymbolKind::NonTypeTemplateParm:
     return SymbolKind::Variable;
   case index::SymbolKind::Using:
     return SymbolKind::Namespace;
+  case index::SymbolKind::TemplateTemplateParm:
+  case index::SymbolKind::TemplateTypeParm:
+    return SymbolKind::TypeParameter;
   }
   llvm_unreachable("invalid symbol kind");
 }
@@ -869,6 +874,7 @@ llvm::json::Value toJSON(const CompletionItem &CI) {
     Result["additionalTextEdits"] = llvm::json::Array(CI.additionalTextEdits);
   if (CI.deprecated)
     Result["deprecated"] = CI.deprecated;
+  Result["score"] = CI.score;
   return std::move(Result);
 }
 

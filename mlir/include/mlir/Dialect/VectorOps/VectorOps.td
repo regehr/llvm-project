@@ -183,6 +183,62 @@ def Vector_ContractionOp :
   }];
 }
 
+def Vector_ReductionOp :
+  Vector_Op<"reduction", [NoSideEffect,
+     PredOpTrait<"source operand and result have same element type",
+                 TCresVTEtIsSameAsOpBase<0, 0>>]>,
+    Arguments<(ins StrAttr:$kind, AnyVector:$vector)>,
+    Results<(outs AnyType:$dest)> {
+  let summary = "reduction operation";
+  let description = [{
+    Reduces an 1-D vector "horizontally" into a scalar using the given
+    operation (add/mul/min/max for int/fp and and/or/xor for int only).
+    Note that these operations are restricted to 1-D vectors to remain
+    close to the corresponding LLVM intrinsics:
+
+    http://llvm.org/docs/LangRef.html#experimental-vector-reduction-intrinsics
+
+    Examples:
+    ```
+      %1 = vector.reduction "add", %0 : vector<16xf32> into f32
+
+      %3 = vector.reduction "xor", %2 : vector<4xi32> into i32
+    ```
+  }];
+  let verifier = [{ return ::verify(*this); }];
+  let assemblyFormat = [{
+    $kind `,` $vector attr-dict `:` type($vector) `into` type($dest)
+  }];
+  let extraClassDeclaration = [{
+    VectorType getVectorType() {
+      return vector().getType().cast<VectorType>();
+    }
+  }];
+}
+
+// TODO(ajcbik): quick version with "fused" accumulator; next step
+//               will merge Reduction/ReductionV2 into one with
+//               an optional accumulator instead
+def Vector_ReductionV2Op :
+  Vector_Op<"reductionv2", [NoSideEffect]>,
+    Arguments<(ins StrAttr:$kind, VectorOf<[F32, F64]>:$vector, AnyType:$acc)>,
+    Results<(outs AnyType:$dest)> {
+  let summary = "reduction operation";
+  let description = [{
+     As vector.reduction, but with a fused accumulator (add/mul for fp only).
+  }];
+  let verifier = ?;
+  let assemblyFormat = [{
+    $kind `,` $vector `,` $acc attr-dict `:`
+      type($vector) `,` type($acc) `into` type($dest)
+  }];
+  let extraClassDeclaration = [{
+    VectorType getVectorType() {
+      return vector().getType().cast<VectorType>();
+    }
+  }];
+}
+
 def Vector_BroadcastOp :
   Vector_Op<"broadcast", [NoSideEffect,
      PredOpTrait<"source operand and result have same element type",

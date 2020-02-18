@@ -103,49 +103,90 @@ const PPCFrameLowering::SpillSlot *PPCFrameLowering::getCalleeSavedSpillSlots(
     return nullptr;
   }
 
+// Floating-point register save area offsets.
+#define CALLEE_SAVED_FPRS \
+      {PPC::F31, -8},     \
+      {PPC::F30, -16},    \
+      {PPC::F29, -24},    \
+      {PPC::F28, -32},    \
+      {PPC::F27, -40},    \
+      {PPC::F26, -48},    \
+      {PPC::F25, -56},    \
+      {PPC::F24, -64},    \
+      {PPC::F23, -72},    \
+      {PPC::F22, -80},    \
+      {PPC::F21, -88},    \
+      {PPC::F20, -96},    \
+      {PPC::F19, -104},   \
+      {PPC::F18, -112},   \
+      {PPC::F17, -120},   \
+      {PPC::F16, -128},   \
+      {PPC::F15, -136},   \
+      {PPC::F14, -144}
+
+// 32-bit general purpose register save area offsets.
+#define CALLEE_SAVED_GPRS32 \
+      {PPC::R31, -4},       \
+      {PPC::R30, -8},       \
+      {PPC::R29, -12},      \
+      {PPC::R28, -16},      \
+      {PPC::R27, -20},      \
+      {PPC::R26, -24},      \
+      {PPC::R25, -28},      \
+      {PPC::R24, -32},      \
+      {PPC::R23, -36},      \
+      {PPC::R22, -40},      \
+      {PPC::R21, -44},      \
+      {PPC::R20, -48},      \
+      {PPC::R19, -52},      \
+      {PPC::R18, -56},      \
+      {PPC::R17, -60},      \
+      {PPC::R16, -64},      \
+      {PPC::R15, -68},      \
+      {PPC::R14, -72}
+
+// 64-bit general purpose register save area offsets.
+#define CALLEE_SAVED_GPRS64 \
+      {PPC::X31, -8},       \
+      {PPC::X30, -16},      \
+      {PPC::X29, -24},      \
+      {PPC::X28, -32},      \
+      {PPC::X27, -40},      \
+      {PPC::X26, -48},      \
+      {PPC::X25, -56},      \
+      {PPC::X24, -64},      \
+      {PPC::X23, -72},      \
+      {PPC::X22, -80},      \
+      {PPC::X21, -88},      \
+      {PPC::X20, -96},      \
+      {PPC::X19, -104},     \
+      {PPC::X18, -112},     \
+      {PPC::X17, -120},     \
+      {PPC::X16, -128},     \
+      {PPC::X15, -136},     \
+      {PPC::X14, -144}
+
+// Vector register save area offsets.
+#define CALLEE_SAVED_VRS \
+      {PPC::V31, -16},   \
+      {PPC::V30, -32},   \
+      {PPC::V29, -48},   \
+      {PPC::V28, -64},   \
+      {PPC::V27, -80},   \
+      {PPC::V26, -96},   \
+      {PPC::V25, -112},  \
+      {PPC::V24, -128},  \
+      {PPC::V23, -144},  \
+      {PPC::V22, -160},  \
+      {PPC::V21, -176},  \
+      {PPC::V20, -192}
+
   // Note that the offsets here overlap, but this is fixed up in
   // processFunctionBeforeFrameFinalized.
 
   static const SpillSlot Offsets[] = {
-      // Floating-point register save area offsets.
-      {PPC::F31, -8},
-      {PPC::F30, -16},
-      {PPC::F29, -24},
-      {PPC::F28, -32},
-      {PPC::F27, -40},
-      {PPC::F26, -48},
-      {PPC::F25, -56},
-      {PPC::F24, -64},
-      {PPC::F23, -72},
-      {PPC::F22, -80},
-      {PPC::F21, -88},
-      {PPC::F20, -96},
-      {PPC::F19, -104},
-      {PPC::F18, -112},
-      {PPC::F17, -120},
-      {PPC::F16, -128},
-      {PPC::F15, -136},
-      {PPC::F14, -144},
-
-      // General register save area offsets.
-      {PPC::R31, -4},
-      {PPC::R30, -8},
-      {PPC::R29, -12},
-      {PPC::R28, -16},
-      {PPC::R27, -20},
-      {PPC::R26, -24},
-      {PPC::R25, -28},
-      {PPC::R24, -32},
-      {PPC::R23, -36},
-      {PPC::R22, -40},
-      {PPC::R21, -44},
-      {PPC::R20, -48},
-      {PPC::R19, -52},
-      {PPC::R18, -56},
-      {PPC::R17, -60},
-      {PPC::R16, -64},
-      {PPC::R15, -68},
-      {PPC::R14, -72},
+      CALLEE_SAVED_FPRS,
+      CALLEE_SAVED_GPRS32,
 
       // CR save area offset.  We map each of the nonvolatile CR fields
       // to the slot for CR2, which is the first of the nonvolatile CR
@@ -156,19 +197,7 @@ const PPCFrameLowering::SpillSlot *PPCFrameLowering::getCalleeSavedSpillSlots(
       // VRSAVE save area offset.
       {PPC::VRSAVE, -4},
 
-      // Vector register save area
-      {PPC::V31, -16},
-      {PPC::V30, -32},
-      {PPC::V29, -48},
-      {PPC::V28, -64},
-      {PPC::V27, -80},
-      {PPC::V26, -96},
-      {PPC::V25, -112},
-      {PPC::V24, -128},
-      {PPC::V23, -144},
-      {PPC::V22, -160},
-      {PPC::V21, -176},
-      {PPC::V20, -192},
+      CALLEE_SAVED_VRS,
 
       // SPE register save area (overlaps Vector save area).
       {PPC::S31, -8},
@@ -191,62 +220,14 @@ const PPCFrameLowering::SpillSlot *PPCFrameLowering::getCalleeSavedSpillSlots(
       {PPC::S14, -144}};
 
   static const SpillSlot Offsets64[] = {
-      // Floating-point register save area offsets.
-      {PPC::F31, -8},
-      {PPC::F30, -16},
-      {PPC::F29, -24},
-      {PPC::F28, -32},
-      {PPC::F27, -40},
-      {PPC::F26, -48},
-      {PPC::F25, -56},
-      {PPC::F24, -64},
-      {PPC::F23, -72},
-      {PPC::F22, -80},
-      {PPC::F21, -88},
-      {PPC::F20, -96},
-      {PPC::F19, -104},
-      {PPC::F18, -112},
-      {PPC::F17, -120},
-      {PPC::F16, -128},
-      {PPC::F15, -136},
-      {PPC::F14, -144},
-
-      // General register save area offsets.
-      {PPC::X31, -8},
-      {PPC::X30, -16},
-      {PPC::X29, -24},
-      {PPC::X28, -32},
-      {PPC::X27, -40},
-      {PPC::X26, -48},
-      {PPC::X25, -56},
-      {PPC::X24, -64},
-      {PPC::X23, -72},
-      {PPC::X22, -80},
-      {PPC::X21, -88},
-      {PPC::X20, -96},
-      {PPC::X19, -104},
-      {PPC::X18, -112},
-      {PPC::X17, -120},
-      {PPC::X16, -128},
-      {PPC::X15, -136},
-      {PPC::X14, -144},
+      CALLEE_SAVED_FPRS,
+      CALLEE_SAVED_GPRS64,
 
       // VRSAVE save area offset.
       {PPC::VRSAVE, -4},
 
-      // Vector register save area
-      {PPC::V31, -16},
-      {PPC::V30, -32},
-      {PPC::V29, -48},
-      {PPC::V28, -64},
-      {PPC::V27, -80},
-      {PPC::V26, -96},
-      {PPC::V25, -112},
-      {PPC::V24, -128},
-      {PPC::V23, -144},
-      {PPC::V22, -160},
-      {PPC::V21, -176},
-      {PPC::V20, -192}};
+      CALLEE_SAVED_VRS
+  };
 
   if (Subtarget.isPPC64()) {
     NumEntries = array_lengthof(Offsets64);
@@ -2253,28 +2234,22 @@ bool PPCFrameLowering::spillCalleeSavedRegisters(
   return true;
 }
 
-static void restoreCRs(bool isPPC64, bool is31, bool CR2Spilled,
-                       bool CR3Spilled, bool CR4Spilled, MachineBasicBlock &MBB,
+static void restoreCRs(bool is31, bool CR2Spilled, bool CR3Spilled,
+                       bool CR4Spilled, MachineBasicBlock &MBB,
                        MachineBasicBlock::iterator MI,
                        ArrayRef<CalleeSavedInfo> CSI, unsigned CSIIndex) {
 
   MachineFunction *MF = MBB.getParent();
   const PPCInstrInfo &TII = *MF->getSubtarget<PPCSubtarget>().getInstrInfo();
   DebugLoc DL;
-  unsigned RestoreOp, MoveReg;
+  unsigned MoveReg = PPC::R12;
 
-  if (isPPC64)
-    // This is handled during epilogue generation.
-    return;
-  else {
-    // 32-bit:  FP-relative
-    MBB.insert(MI, addFrameReference(BuildMI(*MF, DL, TII.get(PPC::LWZ),
-                                             PPC::R12),
-                                     CSI[CSIIndex].getFrameIdx()));
-    RestoreOp = PPC::MTOCRF;
-    MoveReg = PPC::R12;
-  }
+  // 32-bit:  FP-relative
+  MBB.insert(MI,
+             addFrameReference(BuildMI(*MF, DL, TII.get(PPC::LWZ), MoveReg),
+                               CSI[CSIIndex].getFrameIdx()));
 
+  unsigned RestoreOp = PPC::MTOCRF;
   if (CR2Spilled)
     MBB.insert(MI, BuildMI(*MF, DL, TII.get(RestoreOp), PPC::CR2)
                .addReg(MoveReg, getKillRegState(!CR3Spilled && !CR4Spilled)));
@@ -2327,6 +2302,10 @@ eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
   return MBB.erase(I);
 }
 
+static bool isCalleeSavedCR(unsigned Reg) {
+  return PPC::CR2 == Reg || Reg == PPC::CR3 || Reg == PPC::CR4;
+}
+
 bool
 PPCFrameLowering::restoreCalleeSavedRegisters(MachineBasicBlock &MBB,
                                         MachineBasicBlock::iterator MI,
@@ -2365,6 +2344,11 @@ PPCFrameLowering::restoreCalleeSavedRegisters(MachineBasicBlock &MBB,
     if ((Reg == PPC::X2 || Reg == PPC::R2) && MustSaveTOC)
       continue;
 
+    // Restore of callee saved condition register field is handled during
+    // epilogue insertion.
+    if (isCalleeSavedCR(Reg) && !Subtarget.is32BitELFABI())
+      continue;
+
     if (Reg == PPC::CR2) {
       CR2Spilled = true;
       // The spill slot is associated only with CR2, which is the
@@ -2380,12 +2364,10 @@ PPCFrameLowering::restoreCalleeSavedRegisters(MachineBasicBlock &MBB,
     } else {
       // When we first encounter a non-CR register after seeing at
       // least one CR register, restore all spilled CRs together.
-      if ((CR2Spilled || CR3Spilled || CR4Spilled)
-          && !(PPC::CR2 <= Reg && Reg <= PPC::CR4)) {
+      if (CR2Spilled || CR3Spilled || CR4Spilled) {
         bool is31 = needsFP(*MF);
-        restoreCRs(Subtarget.isPPC64(), is31,
-                   CR2Spilled, CR3Spilled, CR4Spilled,
-                   MBB, I, CSI, CSIIndex);
+        restoreCRs(is31, CR2Spilled, CR3Spilled, CR4Spilled, MBB, I, CSI,
+                   CSIIndex);
         CR2Spilled = CR3Spilled = CR4Spilled = false;
       }
 
@@ -2423,9 +2405,10 @@ PPCFrameLowering::restoreCalleeSavedRegisters(MachineBasicBlock &MBB,
 
   // If we haven't yet spilled the CRs, do so now.
   if (CR2Spilled || CR3Spilled || CR4Spilled) {
+    assert(Subtarget.is32BitELFABI() &&
+           "Only set CR[2|3|4]Spilled on 32-bit SVR4.");
     bool is31 = needsFP(*MF);
-    restoreCRs(Subtarget.isPPC64(), is31, CR2Spilled, CR3Spilled, CR4Spilled,
-               MBB, I, CSI, CSIIndex);
+    restoreCRs(is31, CR2Spilled, CR3Spilled, CR4Spilled, MBB, I, CSI, CSIIndex);
   }
 
   return true;

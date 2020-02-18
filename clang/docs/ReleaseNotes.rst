@@ -51,7 +51,8 @@ Major New Features
 Improvements to Clang's diagnostics
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-- ...
+- -Wpointer-to-int-cast is a new warning group. This group warns about C-style
+  casts of pointers to a integer type too small to hold all possible values.
 
 Non-comprehensive list of changes in this release
 -------------------------------------------------
@@ -220,6 +221,25 @@ clang-format
   trailing commas in container literals (arrays and objects) that wrap across
   multiple lines. It is currently only available for JavaScript and disabled by
   default (``TCS_None``).
+
+- Option ``BraceWrapping.BeforeLambdaBody`` has been added to manage lambda
+  line break inside function parameter call in Allman style.
+
+  .. code-block:: c++
+
+      true:
+      connect(
+        []()
+        {
+          foo();
+          bar();
+        });
+
+      false:
+      connect([]() {
+          foo();
+          bar();
+        });
 
 libclang
 --------

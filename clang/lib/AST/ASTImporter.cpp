@@ -204,9 +204,7 @@ namespace clang {
 
     // Wrapper for an overload set.
     template <typename ToDeclT> struct CallOverloadedCreateFun {
-      template <typename... Args>
-      auto operator()(Args &&... args)
-          -> decltype(ToDeclT::Create(std::forward<Args>(args)...)) {
+      template <typename... Args> decltype(auto) operator()(Args &&... args) {
         return ToDeclT::Create(std::forward<Args>(args)...);
       }
     };
@@ -650,7 +648,7 @@ namespace clang {
 
     template<typename IIter, typename OIter>
     Error ImportArrayChecked(IIter Ibegin, IIter Iend, OIter Obegin) {
-      using ItemT = typename std::remove_reference<decltype(*Obegin)>::type;
+      using ItemT = std::remove_reference_t<decltype(*Obegin)>;
       for (; Ibegin != Iend; ++Ibegin, ++Obegin) {
         Expected<ItemT> ToOrErr = import(*Ibegin);
         if (!ToOrErr)
@@ -2580,6 +2578,7 @@ ExpectedDecl ASTNodeImporter::VisitEnumDecl(EnumDecl *D) {
     IDNS |= Decl::IDNS_Ordinary;
 
   // We may already have an enum of the same name; try to find and match it.
+  EnumDecl *PrevDecl = nullptr;
   if (!DC->isFunctionOrMethod() && SearchName) {
     SmallVector<NamedDecl *, 4> ConflictingDecls;
     auto FoundDecls =
@@ -2596,8 +2595,13 @@ ExpectedDecl ASTNodeImporter::VisitEnumDecl(EnumDecl *D) {
       if (auto *FoundEnum = dyn_cast<EnumDecl>(FoundDecl)) {
         if (!hasSameVisibilityContext(FoundEnum, D))
           continue;
-        if (IsStructuralMatch(D, FoundEnum))
-          return Importer.MapImported(D, FoundEnum);
+        if (IsStructuralMatch(D, FoundEnum)) {
+          EnumDecl *FoundDef = FoundEnum->getDefinition();
+          if (D->isThisDeclarationADefinition() && FoundDef)
+            return Importer.MapImported(D, FoundDef);
+          PrevDecl = FoundEnum->getMostRecentDecl();
+          break;
+        }
         ConflictingDecls.push_back(FoundDecl);
       }
     }
@@ -2625,7 +2629,7 @@ ExpectedDecl ASTNodeImporter::VisitEnumDecl(EnumDecl *D) {
   EnumDecl *D2;
   if (GetImportedOrCreateDecl(
           D2, D, Importer.getToContext(), DC, ToBeginLoc,
-          Loc, Name.getAsIdentifierInfo(), nullptr, D->isScoped(),
+          Loc, Name.getAsIdentifierInfo(), PrevDecl, D->isScoped(),
           D->isScopedUsingClassTag(), D->isFixed()))
     return D2;
 
@@ -8475,6 +8479,15 @@ Expected<FileID> ASTImporter::Import(FileID FromID, bool IsBuiltin) {
       if (!ToIncludeLoc)
         return ToIncludeLoc.takeError();
 
+      // Every FileID that is not the main FileID needs to have a valid include
+      // location so that the include chain points to the main FileID. When
+      // importing the main FileID (which has no include location), we need to
+      // create a fake include location in the main file to keep this property
+      // intact.
+      SourceLocation ToIncludeLocOrFakeLoc = *ToIncludeLoc;
+      if (FromID == FromSM.getMainFileID())
+        ToIncludeLocOrFakeLoc = ToSM.getLocForStartOfFile(ToSM.getMainFileID());
+
       if (Cache->OrigEntry && Cache->OrigEntry->getDir()) {
         // FIXME: We probably want to use getVirtualFile(), so we don't hit the
         // disk again
@@ -8486,7 +8499,7 @@ Expected<FileID> ASTImporter::Import(FileID FromID, bool IsBuiltin) {
         // point to a valid file and we get no Entry here. In this case try with
         // the memory buffer below.
         if (Entry)
-          ToID = ToSM.createFileID(*Entry, *ToIncludeLoc,
+          ToID = ToSM.createFileID(*Entry, ToIncludeLocOrFakeLoc,
                                    FromSLoc.getFile().getFileCharacteristic());
       }
     }

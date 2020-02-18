@@ -61,6 +61,33 @@ ArrayAttr vector::getVectorSubscriptAttr(Builder &builder,
 }
 
 //===----------------------------------------------------------------------===//
+// ReductionOp
+//===----------------------------------------------------------------------===//
+
+static LogicalResult verify(ReductionOp op) {
+  // Verify for 1-D vector.
+  int64_t rank = op.getVectorType().getRank();
+  if (rank != 1)
+    return op.emitOpError("unsupported reduction rank: ") << rank;
+
+  // Verify supported reduction kind.
+  auto kind = op.kind();
+  Type eltType = op.dest().getType();
+  if (kind == "add" || kind == "mul" || kind == "min" || kind == "max") {
+    if (eltType.isF32() || eltType.isF64() || eltType.isInteger(32) ||
+        eltType.isInteger(64))
+      return success();
+    return op.emitOpError("unsupported reduction type");
+  }
+  if (kind == "and" || kind == "or" || kind == "xor") {
+    if (eltType.isInteger(32) || eltType.isInteger(64))
+      return success();
+    return op.emitOpError("unsupported reduction type");
+  }
+  return op.emitOpError("unknown reduction kind: ") << kind;
+}
+
+//===----------------------------------------------------------------------===//
 // ContractionOp
 //===----------------------------------------------------------------------===//
 
@@ -991,7 +1018,7 @@ static LogicalResult verify(OuterProductOp op) {
 static void print(OpAsmPrinter &p, ReshapeOp op) {
   p << op.getOperationName() << " " << op.vector() << ", [" << op.input_shape()
     << "], [" << op.output_shape() << "], " << op.fixed_vector_sizes();
-  SmallVector<StringRef, 2> elidedAttrs = {
+  std::array<StringRef, 2> elidedAttrs = {
       ReshapeOp::getOperandSegmentSizeAttr(),
       ReshapeOp::getFixedVectorSizesAttrName()};
   p.printOptionalAttrDict(op.getAttrs(), elidedAttrs);
@@ -1116,7 +1143,7 @@ static Type inferStridedSliceOpResultType(VectorType vectorType,
   shape.reserve(vectorType.getRank());
   unsigned idx = 0;
   for (unsigned e = offsets.size(); idx < e; ++idx)
-    shape.push_back(sizes.getValue()[idx].cast<IntegerAttr>().getInt());
+    shape.push_back(sizes[idx].cast<IntegerAttr>().getInt());
   for (unsigned e = vectorType.getShape().size(); idx < e; ++idx)
     shape.push_back(vectorType.getShape()[idx]);
 

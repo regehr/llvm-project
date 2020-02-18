@@ -1818,7 +1818,7 @@ DeduceTemplateArgumentsByTypeMatch(Sema &S,
         // If this is a base class, try to perform template argument
         // deduction from it.
         if (NextT != RecordT) {
-          TemplateDeductionInfo BaseInfo(Info.getLocation());
+          TemplateDeductionInfo BaseInfo(TemplateDeductionInfo::ForBase, Info);
           Sema::TemplateDeductionResult BaseResult =
               DeduceTemplateArguments(S, TemplateParams, SpecParam,
                                       QualType(NextT, 0), BaseInfo, Deduced);
@@ -2747,8 +2747,8 @@ CheckDeducedArgumentConstraints(Sema& S, TemplateDeclT *Template,
 
 /// Complete template argument deduction for a partial specialization.
 template <typename T>
-static typename std::enable_if<IsPartialSpecialization<T>::value,
-                               Sema::TemplateDeductionResult>::type
+static std::enable_if_t<IsPartialSpecialization<T>::value,
+                        Sema::TemplateDeductionResult>
 FinishTemplateArgumentDeduction(
     Sema &S, T *Partial, bool IsPartialOrdering,
     const TemplateArgumentList &TemplateArgs,
@@ -3439,13 +3439,16 @@ Sema::TemplateDeductionResult Sema::FinishTemplateArgumentDeduction(
   //   ([temp.constr.decl]), those constraints are checked for satisfaction
   //   ([temp.constr.constr]). If the constraints are not satisfied, type
   //   deduction fails.
-  if (CheckInstantiatedFunctionTemplateConstraints(Info.getLocation(),
-          Specialization, Builder, Info.AssociatedConstraintsSatisfaction))
-    return TDK_MiscellaneousDeductionFailure;
+  if (!PartialOverloading ||
+      (Builder.size() == FunctionTemplate->getTemplateParameters()->size())) {
+    if (CheckInstantiatedFunctionTemplateConstraints(Info.getLocation(),
+            Specialization, Builder, Info.AssociatedConstraintsSatisfaction))
+      return TDK_MiscellaneousDeductionFailure;
 
-  if (!Info.AssociatedConstraintsSatisfaction.IsSatisfied) {
-    Info.reset(TemplateArgumentList::CreateCopy(Context, Builder));
-    return TDK_ConstraintsNotSatisfied;
+    if (!Info.AssociatedConstraintsSatisfaction.IsSatisfied) {
+      Info.reset(TemplateArgumentList::CreateCopy(Context, Builder));
+      return TDK_ConstraintsNotSatisfied;
+    }
   }
 
   if (OriginalCallArgs) {
