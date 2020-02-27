@@ -353,28 +353,32 @@ bool tools::isUseSeparateSections(const llvm::Triple &Triple) {
   return Triple.getOS() == llvm::Triple::CloudABI;
 }
 
-void tools::AddGoldPlugin(const ToolChain &ToolChain, const ArgList &Args,
+void tools::addLTOOptions(const ToolChain &ToolChain, const ArgList &Args,
                           ArgStringList &CmdArgs, const InputInfo &Output,
                           const InputInfo &Input, bool IsThinLTO) {
-  // Tell the linker to load the plugin. This has to come before AddLinkerInputs
-  // as gold requires -plugin to come before any -plugin-opt that -Wl might
-  // forward.
-  CmdArgs.push_back("-plugin");
+  const char *Linker = Args.MakeArgString(ToolChain.GetLinkerPath());
+  if (llvm::sys::path::filename(Linker) != "ld.lld" &&
+      llvm::sys::path::stem(Linker) != "ld.lld") {
+    // Tell the linker to load the plugin. This has to come before
+    // AddLinkerInputs as gold requires -plugin to come before any -plugin-opt
+    // that -Wl might forward.
+    CmdArgs.push_back("-plugin");
 
 #if defined(_WIN32)
-  const char *Suffix = ".dll";
+    const char *Suffix = ".dll";
 #elif defined(__APPLE__)
-  const char *Suffix = ".dylib";
+    const char *Suffix = ".dylib";
 #else
-  const char *Suffix = ".so";
+    const char *Suffix = ".so";
 #endif
 
-  SmallString<1024> Plugin;
-  llvm::sys::path::native(Twine(ToolChain.getDriver().Dir) +
-                              "/../lib" CLANG_LIBDIR_SUFFIX "/LLVMgold" +
-                              Suffix,
-                          Plugin);
-  CmdArgs.push_back(Args.MakeArgString(Plugin));
+    SmallString<1024> Plugin;
+    llvm::sys::path::native(Twine(ToolChain.getDriver().Dir) +
+                                "/../lib" CLANG_LIBDIR_SUFFIX "/LLVMgold" +
+                                Suffix,
+                            Plugin);
+    CmdArgs.push_back(Args.MakeArgString(Plugin));
+  }
 
   // Try to pass driver level flags relevant to LTO code generation down to
   // the plugin.
@@ -583,6 +587,11 @@ static bool addSanitizerDynamicList(const ToolChain &TC, const ArgList &Args,
 
 void tools::linkSanitizerRuntimeDeps(const ToolChain &TC,
                                      ArgStringList &CmdArgs) {
+  // Fuchsia never needs these.  Any sanitizer runtimes with system
+  // dependencies use the `.deplibs` feature instead.
+  if (TC.getTriple().isOSFuchsia())
+    return;
+
   // Force linking against the system libraries sanitizers depends on
   // (see PR15823 why this is necessary).
   CmdArgs.push_back("--no-as-needed");

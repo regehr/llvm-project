@@ -202,6 +202,7 @@ RegistryMaps::RegistryMaps() {
   REGISTER_MATCHER(declStmt);
   REGISTER_MATCHER(declaratorDecl);
   REGISTER_MATCHER(decltypeType);
+  REGISTER_MATCHER(deducedTemplateSpecializationType);
   REGISTER_MATCHER(defaultStmt);
   REGISTER_MATCHER(dependentSizedArrayType);
   REGISTER_MATCHER(designatedInitExpr);
@@ -242,6 +243,7 @@ RegistryMaps::RegistryMaps() {
   REGISTER_MATCHER(hasAnyConstructorInitializer);
   REGISTER_MATCHER(hasAnyDeclaration);
   REGISTER_MATCHER(hasAnyName);
+  REGISTER_MATCHER(hasAnyOperatorName);
   REGISTER_MATCHER(hasAnyParameter);
   REGISTER_MATCHER(hasAnyPlacementArg);
   REGISTER_MATCHER(hasAnySelector);

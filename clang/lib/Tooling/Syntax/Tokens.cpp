@@ -67,7 +67,8 @@ FileRange syntax::Token::range(const SourceManager &SM,
   auto F = First.range(SM);
   auto L = Last.range(SM);
   assert(F.file() == L.file() && "tokens from different files");
-  assert((F == L || F.endOffset() <= L.beginOffset()) && "wrong order of tokens");
+  assert((F == L || F.endOffset() <= L.beginOffset()) &&
+         "wrong order of tokens");
   return FileRange(F.file(), F.beginOffset(), L.endOffset());
 }
 
@@ -254,29 +255,42 @@ TokenBuffer::expansionStartingAt(const syntax::Token *Spelled) const {
                                   ExpandedTokens.data() + M->EndExpanded);
   return E;
 }
-
 llvm::ArrayRef<syntax::Token>
 syntax::spelledTokensTouching(SourceLocation Loc,
-                              const syntax::TokenBuffer &Tokens) {
+                              llvm::ArrayRef<syntax::Token> Tokens) {
   assert(Loc.isFileID());
-  llvm::ArrayRef<syntax::Token> All =
-      Tokens.spelledTokens(Tokens.sourceManager().getFileID(Loc));
+
   auto *Right = llvm::partition_point(
-      All, [&](const syntax::Token &Tok) { return Tok.location() < Loc; });
-  bool AcceptRight = Right != All.end() && Right->location() <= Loc;
-  bool AcceptLeft = Right != All.begin() && (Right - 1)->endLocation() >= Loc;
+      Tokens, [&](const syntax::Token &Tok) { return Tok.location() < Loc; });
+  bool AcceptRight = Right != Tokens.end() && Right->location() <= Loc;
+  bool AcceptLeft =
+      Right != Tokens.begin() && (Right - 1)->endLocation() >= Loc;
   return llvm::makeArrayRef(Right - (AcceptLeft ? 1 : 0),
                             Right + (AcceptRight ? 1 : 0));
 }
 
+llvm::ArrayRef<syntax::Token>
+syntax::spelledTokensTouching(SourceLocation Loc,
+                              const syntax::TokenBuffer &Tokens) {
+  return spelledTokensTouching(
+      Loc, Tokens.spelledTokens(Tokens.sourceManager().getFileID(Loc)));
+}
+
 const syntax::Token *
 syntax::spelledIdentifierTouching(SourceLocation Loc,
-                                  const syntax::TokenBuffer &Tokens) {
+                                  llvm::ArrayRef<syntax::Token> Tokens) {
   for (const syntax::Token &Tok : spelledTokensTouching(Loc, Tokens)) {
     if (Tok.kind() == tok::identifier)
       return &Tok;
   }
   return nullptr;
+}
+
+const syntax::Token *
+syntax::spelledIdentifierTouching(SourceLocation Loc,
+                                  const syntax::TokenBuffer &Tokens) {
+  return spelledIdentifierTouching(
+      Loc, Tokens.spelledTokens(Tokens.sourceManager().getFileID(Loc)));
 }
 
 std::vector<const syntax::Token *>
@@ -294,7 +308,8 @@ TokenBuffer::macroExpansions(FileID FID) const {
   return Expansions;
 }
 
-std::vector<syntax::Token> syntax::tokenize(FileID FID, const SourceManager &SM,
+std::vector<syntax::Token> syntax::tokenize(const FileRange &FR,
+                                            const SourceManager &SM,
                                             const LangOptions &LO) {
   std::vector<syntax::Token> Tokens;
   IdentifierTable Identifiers(LO);
@@ -309,16 +324,26 @@ std::vector<syntax::Token> syntax::tokenize(FileID FID, const SourceManager &SM,
     Tokens.push_back(syntax::Token(T));
   };
 
-  Lexer L(FID, SM.getBuffer(FID), SM, LO);
+  auto SrcBuffer = SM.getBufferData(FR.file());
+  Lexer L(SM.getLocForStartOfFile(FR.file()), LO, SrcBuffer.data(),
+          SrcBuffer.data() + FR.beginOffset(),
+          // We can't make BufEnd point to FR.endOffset, as Lexer requires a
+          // null terminated buffer.
+          SrcBuffer.data() + SrcBuffer.size());
 
   clang::Token T;
-  while (!L.LexFromRawLexer(T))
+  while (!L.LexFromRawLexer(T) && L.getCurrentBufferOffset() < FR.endOffset())
     AddToken(T);
-  // 'eof' is only the last token if the input is null-terminated. Never store
-  // it, for consistency.
-  if (T.getKind() != tok::eof)
+  // LexFromRawLexer returns true when it parses the last token of the file, add
+  // it iff it starts within the range we are interested in.
+  if (SM.getFileOffset(T.getLocation()) < FR.endOffset())
     AddToken(T);
   return Tokens;
+}
+
+std::vector<syntax::Token> syntax::tokenize(FileID FID, const SourceManager &SM,
+                                            const LangOptions &LO) {
+  return tokenize(syntax::FileRange(FID, 0, SM.getFileIDSize(FID)), SM, LO);
 }
 
 /// Records information reqired to construct mappings for the token buffer that

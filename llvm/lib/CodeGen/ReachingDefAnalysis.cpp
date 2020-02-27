@@ -136,30 +136,9 @@ void ReachingDefAnalysis::processBasicBlock(
 bool ReachingDefAnalysis::runOnMachineFunction(MachineFunction &mf) {
   MF = &mf;
   TRI = MF->getSubtarget().getRegisterInfo();
-
-  LiveRegs.clear();
-  NumRegUnits = TRI->getNumRegUnits();
-
-  MBBReachingDefs.resize(mf.getNumBlockIDs());
-
   LLVM_DEBUG(dbgs() << "********** REACHING DEFINITION ANALYSIS **********\n");
-
-  // Initialize the MBBOutRegsInfos
-  MBBOutRegsInfos.resize(mf.getNumBlockIDs());
-
-  // Traverse the basic blocks.
-  LoopTraversal Traversal;
-  LoopTraversal::TraversalOrder TraversedMBBOrder = Traversal.traverse(mf);
-  for (LoopTraversal::TraversedMBBInfo TraversedMBB : TraversedMBBOrder) {
-    processBasicBlock(TraversedMBB);
-  }
-
-  // Sorting all reaching defs found for a ceartin reg unit in a given BB.
-  for (MBBDefsInfo &MBBDefs : MBBReachingDefs) {
-    for (MBBRegUnitDefs &RegUnitDefs : MBBDefs)
-      llvm::sort(RegUnitDefs);
-  }
-
+  init();
+  traverse();
   return false;
 }
 
@@ -168,6 +147,33 @@ void ReachingDefAnalysis::releaseMemory() {
   MBBOutRegsInfos.clear();
   MBBReachingDefs.clear();
   InstIds.clear();
+  LiveRegs.clear();
+}
+
+void ReachingDefAnalysis::reset() {
+  releaseMemory();
+  init();
+  traverse();
+}
+
+void ReachingDefAnalysis::init() {
+  NumRegUnits = TRI->getNumRegUnits();
+  MBBReachingDefs.resize(MF->getNumBlockIDs());
+  // Initialize the MBBOutRegsInfos
+  MBBOutRegsInfos.resize(MF->getNumBlockIDs());
+  LoopTraversal Traversal;
+  TraversedMBBOrder = Traversal.traverse(*MF);
+}
+
+void ReachingDefAnalysis::traverse() {
+  // Traverse the basic blocks.
+  for (LoopTraversal::TraversedMBBInfo TraversedMBB : TraversedMBBOrder)
+    processBasicBlock(TraversedMBB);
+  // Sorting all reaching defs found for a ceartin reg unit in a given BB.
+  for (MBBDefsInfo &MBBDefs : MBBReachingDefs) {
+    for (MBBRegUnitDefs &RegUnitDefs : MBBDefs)
+      llvm::sort(RegUnitDefs);
+  }
 }
 
 int ReachingDefAnalysis::getReachingDef(MachineInstr *MI, int PhysReg) const {
@@ -189,7 +195,7 @@ int ReachingDefAnalysis::getReachingDef(MachineInstr *MI, int PhysReg) const {
   return LatestDef;
 }
 
-MachineInstr* ReachingDefAnalysis::getReachingMIDef(MachineInstr *MI,
+MachineInstr* ReachingDefAnalysis::getReachingLocalMIDef(MachineInstr *MI,
                                                     int PhysReg) const {
   return getInstFromId(MI->getParent(), getReachingDef(MI, PhysReg));
 }
@@ -215,9 +221,11 @@ MachineInstr *ReachingDefAnalysis::getInstFromId(MachineBasicBlock *MBB,
     return nullptr;
 
   for (auto &MI : *MBB) {
-    if (InstIds.count(&MI) && InstIds.lookup(&MI) == InstId)
+    auto F = InstIds.find(&MI);
+    if (F != InstIds.end() && F->second == InstId)
       return &MI;
   }
+
   return nullptr;
 }
 
@@ -242,7 +250,7 @@ void ReachingDefAnalysis::getReachingLocalUses(MachineInstr *Def, int PhysReg,
 
     // If/when we find a new reaching def, we know that there's no more uses
     // of 'Def'.
-    if (getReachingMIDef(&*MI, PhysReg) != Def)
+    if (getReachingLocalMIDef(&*MI, PhysReg) != Def)
       return;
 
     for (auto &MO : MI->operands()) {
@@ -303,6 +311,59 @@ ReachingDefAnalysis::getGlobalUses(MachineInstr *MI, int PhysReg,
   }
 }
 
+void
+ReachingDefAnalysis::getLiveOuts(MachineBasicBlock *MBB, int PhysReg,
+                                 InstSet &Defs, BlockSet &VisitedBBs) const {
+  if (VisitedBBs.count(MBB))
+    return;
+
+  VisitedBBs.insert(MBB);
+  LivePhysRegs LiveRegs(*TRI);
+  LiveRegs.addLiveOuts(*MBB);
+  if (!LiveRegs.contains(PhysReg))
+    return;
+
+  if (auto *Def = getLocalLiveOutMIDef(MBB, PhysReg))
+    Defs.insert(Def);
+  else
+    for (auto *Pred : MBB->predecessors())
+      getLiveOuts(Pred, PhysReg, Defs, VisitedBBs);
+}
+
+MachineInstr *ReachingDefAnalysis::getUniqueReachingMIDef(MachineInstr *MI,
+                                                          int PhysReg) const {
+  // If there's a local def before MI, return it.
+  MachineInstr *LocalDef = getReachingLocalMIDef(MI, PhysReg);
+  if (InstIds.lookup(LocalDef) < InstIds.lookup(MI))
+    return LocalDef;
+
+  SmallPtrSet<MachineBasicBlock*, 4> VisitedBBs;
+  SmallPtrSet<MachineInstr*, 2> Incoming;
+  for (auto *Pred : MI->getParent()->predecessors())
+    getLiveOuts(Pred, PhysReg, Incoming, VisitedBBs);
+
+  // If we have a local def and an incoming instruction, then there's not a
+  // unique instruction def.
+  if (!Incoming.empty() && LocalDef)
+    return nullptr;
+  else if (Incoming.size() == 1)
+    return *Incoming.begin();
+  else
+    return LocalDef;
+}
+
+MachineInstr *ReachingDefAnalysis::getMIOperand(MachineInstr *MI,
+                                                unsigned Idx) const {
+  assert(MI->getOperand(Idx).isReg() && "Expected register operand");
+  return getUniqueReachingMIDef(MI, MI->getOperand(Idx).getReg());
+}
+
+MachineInstr *ReachingDefAnalysis::getMIOperand(MachineInstr *MI,
+                                                MachineOperand &MO) const {
+  assert(MO.isReg() && "Expected register operand");
+  return getUniqueReachingMIDef(MI, MO.getReg());
+}
+
 bool ReachingDefAnalysis::isRegUsedAfter(MachineInstr *MI, int PhysReg) const {
   MachineBasicBlock *MBB = MI->getParent();
   LivePhysRegs LiveRegs(*TRI);
@@ -329,7 +390,7 @@ bool ReachingDefAnalysis::isRegDefinedAfter(MachineInstr *MI,
     return true;
 
   if (auto *Def = getLocalLiveOutMIDef(MBB, PhysReg))
-    return Def == getReachingMIDef(MI, PhysReg);
+    return Def == getReachingLocalMIDef(MI, PhysReg);
 
   return false;
 }
@@ -371,6 +432,12 @@ MachineInstr* ReachingDefAnalysis::getLocalLiveOutMIDef(MachineBasicBlock *MBB,
   return Def < 0 ? nullptr : getInstFromId(MBB, Def);
 }
 
+static bool mayHaveSideEffects(MachineInstr &MI) {
+  return MI.mayLoadOrStore() || MI.mayRaiseFPException() ||
+         MI.hasUnmodeledSideEffects() || MI.isTerminator() ||
+         MI.isCall() || MI.isBarrier() || MI.isBranch() || MI.isReturn();
+}
+
 // Can we safely move 'From' to just before 'To'? To satisfy this, 'From' must
 // not define a register that is used by any instructions, after and including,
 // 'To'. These instructions also must not redefine any of Froms operands.
@@ -392,10 +459,13 @@ bool ReachingDefAnalysis::isSafeToMove(MachineInstr *From,
   }
 
   // Now walk checking that the rest of the instructions will compute the same
-  // value.
+  // value and that we're not overwriting anything. Don't move the instruction
+  // past any memory, control-flow or other ambigious instructions.
   for (auto I = ++Iterator(From), E = Iterator(To); I != E; ++I) {
+    if (mayHaveSideEffects(*I))
+      return false;
     for (auto &MO : I->operands())
-      if (MO.isReg() && MO.getReg() && MO.isUse() && Defs.count(MO.getReg()))
+      if (MO.isReg() && MO.getReg() && Defs.count(MO.getReg()))
         return false;
   }
   return true;
@@ -430,8 +500,7 @@ ReachingDefAnalysis::isSafeToRemove(MachineInstr *MI, InstSet &Visited,
                                     InstSet &ToRemove, InstSet &Ignore) const {
   if (Visited.count(MI) || Ignore.count(MI))
     return true;
-  else if (MI->mayLoadOrStore() || MI->hasUnmodeledSideEffects() ||
-           MI->isBranch() || MI->isTerminator() || MI->isReturn()) {
+  else if (mayHaveSideEffects(*MI)) {
     // Unless told to ignore the instruction, don't remove anything which has
     // side effects.
     return false;
@@ -456,6 +525,32 @@ ReachingDefAnalysis::isSafeToRemove(MachineInstr *MI, InstSet &Visited,
   return true;
 }
 
+void ReachingDefAnalysis::collectLocalKilledOperands(MachineInstr *MI,
+                                                     InstSet &Dead) const {
+  Dead.insert(MI);
+  auto IsDead = [this](MachineInstr *Def, int PhysReg) {
+    unsigned LiveDefs = 0;
+    for (auto &MO : Def->defs())
+      if (!MO.isDead())
+        ++LiveDefs;
+
+    if (LiveDefs > 1)
+      return false;
+
+    SmallPtrSet<MachineInstr*, 4> Uses;
+    getGlobalUses(Def, PhysReg, Uses);
+    return Uses.size() == 1;
+  };
+
+  for (auto &MO : MI->uses()) {
+    if (!MO.isReg() || MO.getReg() == 0 || !MO.isKill())
+      continue;
+    if (MachineInstr *Def = getReachingLocalMIDef(MI, MO.getReg()))
+      if (IsDead(Def, MO.getReg()))
+        collectLocalKilledOperands(Def, Dead);
+  }
+}
+
 bool ReachingDefAnalysis::isSafeToDefRegAt(MachineInstr *MI,
                                            int PhysReg) const {
   SmallPtrSet<MachineInstr*, 1> Ignore;
@@ -466,7 +561,7 @@ bool ReachingDefAnalysis::isSafeToDefRegAt(MachineInstr *MI, int PhysReg,
                                            InstSet &Ignore) const {
   // Check for any uses of the register after MI.
   if (isRegUsedAfter(MI, PhysReg)) {
-    if (auto *Def = getReachingMIDef(MI, PhysReg)) {
+    if (auto *Def = getReachingLocalMIDef(MI, PhysReg)) {
       SmallPtrSet<MachineInstr*, 2> Uses;
       getReachingLocalUses(Def, PhysReg, Uses);
       for (auto *Use : Uses)

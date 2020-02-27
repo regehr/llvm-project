@@ -16,7 +16,7 @@
 #include "mlir/Analysis/LoopAnalysis.h"
 #include "mlir/Analysis/Utils.h"
 #include "mlir/Dialect/AffineOps/AffineOps.h"
-#include "mlir/Dialect/StandardOps/Ops.h"
+#include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/LoopUtils.h"
@@ -72,10 +72,9 @@ static bool doubleBuffer(Value oldMemRef, AffineForOp forOp) {
     SmallVector<int64_t, 4> newShape(1 + oldMemRefType.getRank());
     newShape[0] = 2;
     std::copy(oldShape.begin(), oldShape.end(), newShape.begin() + 1);
-    auto newMemRefType =
-        MemRefType::get(newShape, oldMemRefType.getElementType(), {},
-                        oldMemRefType.getMemorySpace());
-    return newMemRefType;
+    return MemRefType::Builder(oldMemRefType)
+        .setShape(newShape)
+        .setAffineMaps({});
   };
 
   auto oldMemRefType = oldMemRef.getType().cast<MemRefType>();

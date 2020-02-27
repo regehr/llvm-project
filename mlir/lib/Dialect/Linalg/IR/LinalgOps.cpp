@@ -12,7 +12,7 @@
 
 #include "mlir/Dialect/Linalg/IR/LinalgOps.h"
 #include "mlir/Dialect/Linalg/IR/LinalgTypes.h"
-#include "mlir/Dialect/StandardOps/Ops.h"
+#include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Builders.h"
@@ -241,7 +241,8 @@ template <typename GenericOpType>
 static LogicalResult verifyFuncArgs(GenericOpType op, FunctionType funType);
 
 template <typename GenericOpType>
-LogicalResult verifyFuncArgsGeneric(GenericOpType op, FunctionType funType) {
+static LogicalResult verifyFuncArgsGeneric(GenericOpType op,
+                                           FunctionType funType) {
   auto res = verifyFuncArgs(op, funType);
   if (failed(res))
     return res;
@@ -360,11 +361,10 @@ static LogicalResult verifyGenericOp(GenericOpType op) {
       if (!cst || cst.getValue() != 0)
         return op.emitOpError("expected indexing_map #")
                << idx << " to be 0 to match 0-D view: " << view;
-    }
-
-    if (m.getNumResults() != view.getRank())
+    } else if (m.getNumResults() != view.getRank()) {
       return op.emitOpError("expected indexing_map #")
              << idx << " results to match view rank: " << view;
+    }
   }
 
   auto concatMap = concatAffineMaps(indexingMaps);
@@ -378,30 +378,6 @@ static LogicalResult verifyGenericOp(GenericOpType op) {
 
 static LogicalResult verify(GenericOp op) { return verifyGenericOp(op); }
 static LogicalResult verify(IndexedGenericOp op) { return verifyGenericOp(op); }
-
-//===----------------------------------------------------------------------===//
-// RangeOp
-//===----------------------------------------------------------------------===//
-
-static void print(OpAsmPrinter &p, RangeOp op) {
-  p << op.getOperationName() << " " << op.min() << ":" << op.max() << ":"
-    << op.step();
-  p.printOptionalAttrDict(op.getAttrs());
-  p << " : " << op.getResult().getType();
-}
-
-static ParseResult parseRangeOp(OpAsmParser &parser, OperationState &result) {
-  SmallVector<OpAsmParser::OperandType, 3> rangeInfo(3);
-  RangeType type;
-  auto indexTy = parser.getBuilder().getIndexType();
-  return failure(parser.parseOperand(rangeInfo[0]) || parser.parseColon() ||
-                 parser.parseOperand(rangeInfo[1]) || parser.parseColon() ||
-                 parser.parseOperand(rangeInfo[2]) ||
-                 parser.parseOptionalAttrDict(result.attributes) ||
-                 parser.parseColonType(type) ||
-                 parser.resolveOperands(rangeInfo, indexTy, result.operands) ||
-                 parser.addTypeToList(type, result.types));
-}
 
 //===----------------------------------------------------------------------===//
 // ReshapeOp
@@ -504,7 +480,7 @@ computeReshapeCollapsedType(MemRefType type,
 
   // Early-exit: if `type` is contiguous, the result must be contiguous.
   if (canonicalizeStridedLayout(type).getAffineMaps().empty())
-    return MemRefType::get(newSizes, type.getElementType(), {});
+    return MemRefType::Builder(type).setShape(newSizes).setAffineMaps({});
 
   // Convert back to int64_t because we don't have enough information to create
   // new strided layouts from AffineExpr only. This corresponds to a case where
@@ -523,7 +499,7 @@ computeReshapeCollapsedType(MemRefType type,
   auto layout =
       makeStridedLinearLayoutMap(intStrides, intOffset, type.getContext());
   return canonicalizeStridedLayout(
-      MemRefType::get(newSizes, type.getElementType(), {layout}));
+      MemRefType::Builder(type).setShape(newSizes).setAffineMaps({layout}));
 }
 
 /// Helper functions assert Attribute of the proper type in attr and returns the
@@ -583,28 +559,6 @@ void mlir::linalg::ReshapeOp::build(
                       b->getAffineMapArrayAttr(maps));
 }
 
-static void print(OpAsmPrinter &p, ReshapeOp op) {
-  p << op.getOperationName() << " " << op.view() << " " << op.reassociation();
-  p.printOptionalAttrDict(op.getAttrs(),
-                          {ReshapeOp::getReassociationAttrName()});
-  p << " : " << op.getViewType() << " into " << op.getResult().getType();
-}
-
-static ParseResult parseReshapeOp(OpAsmParser &parser, OperationState &result) {
-  OpAsmParser::OperandType view;
-  ArrayAttr reassociation;
-  MemRefType type, resultType;
-  return failure(parser.parseOperand(view) ||
-                 parser.parseAttribute(reassociation,
-                                       ReshapeOp::getReassociationAttrName(),
-                                       result.attributes) ||
-                 parser.parseOptionalAttrDict(result.attributes) ||
-                 parser.parseColonType(type) ||
-                 parser.parseKeywordType("into", resultType) ||
-                 parser.resolveOperand(view, type, result.operands) ||
-                 parser.addTypeToList(resultType, result.types));
-}
-
 static LogicalResult verify(ReshapeOp op) {
   MemRefType expandedType = op.getViewType();
   MemRefType collapsedType = op.getResult().getType().cast<MemRefType>();
@@ -659,11 +613,10 @@ void mlir::linalg::SliceOp::build(Builder *b, OperationState &result,
   unsigned rank = memRefType.getRank();
   // TODO(ntv): propagate static size and stride information when available.
   SmallVector<int64_t, 4> sizes(rank, -1); // -1 encodes dynamic size.
-  Type elementType = memRefType.getElementType();
-  result.addTypes({MemRefType::get(
-      sizes, elementType,
-      {makeStridedLinearLayoutMap(strides, offset, b->getContext())},
-      memRefType.getMemorySpace())});
+  result.addTypes({MemRefType::Builder(memRefType)
+                       .setShape(sizes)
+                       .setAffineMaps(makeStridedLinearLayoutMap(
+                           strides, offset, b->getContext()))});
 }
 
 static void print(OpAsmPrinter &p, SliceOp op) {
@@ -744,8 +697,8 @@ void mlir::linalg::TransposeOp::build(Builder *b, OperationState &result,
   auto map = makeStridedLinearLayoutMap(strides, offset, b->getContext());
   map = permutationMap ? map.compose(permutationMap) : map;
   // Compute result type.
-  auto resultType = MemRefType::get(sizes, memRefType.getElementType(), map,
-                                    memRefType.getMemorySpace());
+  MemRefType resultType =
+      MemRefType::Builder(memRefType).setShape(sizes).setAffineMaps(map);
 
   build(b, result, resultType, view, attrs);
   result.addAttribute(TransposeOp::getPermutationAttrName(), permutation);
@@ -838,43 +791,6 @@ static LogicalResult verify(YieldOp op) {
 }
 
 /////// Operations corresponding to library calls defined with Tablegen ////////
-// For such operations correspond to library calls (i.e. defined in
-// LinalgStructuredOps.td), we define an overloaded `print` function and a
-// parse`className` function.
-
-// A LinalgStructuredOp prints as:
-//
-// ```mlir
-//   concrete_op_name (ssa-inputs, ssa-outputs) : view-types
-// ```
-//
-// for example:
-//
-// ```
-//   linalg.matmul(%0, %1, %2) :
-//     memref<?x?xf32, stride_specification>,
-//     memref<?x?xf32, stride_specification>,
-//     memref<?x?xf32, stride_specification>
-// ```
-//
-// Where %0, %1 and %2 are ssa-values of type MemRefType with strides.
-static void printLinalgStructuredOp(OpAsmPrinter &p, Operation *op) {
-  assert(op->getAbstractOperation() && "unregistered operation");
-  p << op->getName().getStringRef() << "(" << op->getOperands() << ")";
-  p.printOptionalAttrDict(op->getAttrs());
-  p << " : " << op->getOperandTypes();
-}
-
-static ParseResult parseLinalgStructuredOp(OpAsmParser &parser,
-                                           OperationState &result) {
-  SmallVector<OpAsmParser::OperandType, 3> ops;
-  SmallVector<Type, 3> types;
-  return failure(
-      parser.parseOperandList(ops, OpAsmParser::Delimiter::Paren) ||
-      parser.parseOptionalAttrDict(result.attributes) ||
-      parser.parseColonTypeList(types) ||
-      parser.resolveOperands(ops, types, parser.getNameLoc(), result.operands));
-}
 
 static LogicalResult verify(FillOp op) {
   auto viewType = op.getOutputShapedType(0);
@@ -964,8 +880,9 @@ namespace linalg {
 } // namespace linalg
 } // namespace mlir
 
-static AffineMap extractOrIdentityMap(Optional<AffineMap> maybeMap,
-                                      unsigned rank, MLIRContext *context) {
+AffineMap mlir::linalg::extractOrIdentityMap(Optional<AffineMap> maybeMap,
+                                             unsigned rank,
+                                             MLIRContext *context) {
   if (maybeMap)
     return maybeMap.getValue();
   if (rank == 0)
@@ -973,131 +890,33 @@ static AffineMap extractOrIdentityMap(Optional<AffineMap> maybeMap,
   return AffineMap::getMultiDimIdentityMap(rank, context);
 }
 
-// Returns `num` AffineDimExpr dimensions at positions [curIdx, curIdx + num)
-// and increments `curIdx` to `curIdx + num`.
-static SmallVector<AffineExpr, 4>
-makeAffineDimExprs(unsigned num, unsigned &curIdx, MLIRContext *context) {
+SmallVector<AffineExpr, 4>
+mlir::linalg::makeAffineDimExprs(unsigned num, unsigned &startIdx,
+                                 MLIRContext *context) {
   SmallVector<AffineExpr, 4> res;
   res.reserve(num);
   for (unsigned i = 0; i < num; ++i)
-    res.push_back(getAffineDimExpr(curIdx++, context));
+    res.push_back(getAffineDimExpr(startIdx++, context));
   return res;
 }
 
-static SmallVector<AffineExpr, 4>
-weightedConvInputIndex(ConvOp op, ArrayRef<AffineExpr> a,
-                       ArrayRef<AffineExpr> b) {
-  assert(a.size() == b.size());
+SmallVector<AffineExpr, 4>
+mlir::linalg::weightedConvInputIndex(ConvOp op, ArrayRef<AffineExpr> xs,
+                                     ArrayRef<AffineExpr> zs) {
+  assert(xs.size() == zs.size());
   SmallVector<AffineExpr, 4> res;
-  res.reserve(a.size());
-  for (unsigned i = 0, e = a.size(); i < e; ++i) {
-    res.push_back(op.getStride(i) * a[i] + op.getDilation(i) * b[i]);
-  }
+  res.reserve(xs.size());
+  for (unsigned i = 0, e = xs.size(); i < e; ++i)
+    res.push_back(op.getStride(i) * xs[i] + op.getDilation(i) * zs[i]);
   return res;
 }
 
-static SmallVector<AffineExpr, 4> concat(ArrayRef<AffineExpr> a,
-                                         ArrayRef<AffineExpr> b) {
-  SmallVector<AffineExpr, 4> res;
-  res.reserve(a.size() + b.size());
-  res.assign(a.begin(), a.end());
-  res.append(b.begin(), b.end());
-  return res;
-}
-
-// Note: both functions below would completely disappear with a simple tensor
-// kernel language.
-//
-// Ideally this should all be Tablegen'd but there is no good story for
-// AffineMap for now.
-SmallVector<AffineMap, 4> mlir::linalg::loopToOperandRangesMaps(Operation *op) {
-  MLIRContext *context = op->getContext();
-  if (auto copyOp = dyn_cast<CopyOp>(op)) {
-    // I(input_perm(ivs)) -> O(output_perm(ivs))
-    auto maybeInputMap = copyOp.inputPermutation();
-    auto maybeOutputMap = copyOp.outputPermutation();
-    unsigned inputRank = copyOp.getInputShapedType(0).getRank();
-    unsigned outputRank = copyOp.getOutputShapedType(0).getRank();
-    return SmallVector<AffineMap, 4>{
-        extractOrIdentityMap(maybeInputMap, inputRank, context),
-        extractOrIdentityMap(maybeOutputMap, outputRank, context)};
-  }
-  if (auto fillOp = dyn_cast<FillOp>(op)) {
-    // filling_value -> O(ivs)
-    unsigned rank = fillOp.getNumParallelLoops();
-    return SmallVector<AffineMap, 4>{
-        extractOrIdentityMap(llvm::None, rank, context)};
-  }
-  auto i = getAffineDimExpr(0, context);
-  auto j = getAffineDimExpr(1, context);
-  auto k = getAffineDimExpr(2, context);
-  if (isa<DotOp>(op))
-    // A(r_i) * B(r_i) -> C()
-    return SmallVector<AffineMap, 4>{AffineMap::get(1, 0, {i}),
-                                     AffineMap::get(1, 0, {i}), AffineMap()};
-  if (isa<MatvecOp>(op))
-    //   A(i, r_j) * B(r_j) -> C(i)
-    return SmallVector<AffineMap, 4>{AffineMap::get(2, 0, {i, j}),
-                                     AffineMap::get(2, 0, {j}),
-                                     AffineMap::get(2, 0, {i})};
-  if (isa<MatmulOp>(op))
-    //   A(i, r_k) * B(r_k, j) -> C(i, j)
-    return SmallVector<AffineMap, 4>{AffineMap::get(3, 0, {i, k}),
-                                     AffineMap::get(3, 0, {k, j}),
-                                     AffineMap::get(3, 0, {i, j})};
-  if (auto convOp = dyn_cast<ConvOp>(op)) {
-    //   F(z0, ..., zN-1, q, k) * I(b, x0 + z0, ..., xN-1 + zN-1, q) ->
-    //     O(b, x0, ..., xN-1, k)
-    // for N equal to `nWindow`.
-    auto nWin = convOp.getNumWindowLoops();
-    assert(nWin > 0 && "expected at least one window dimension");
-    unsigned idx = 0;
-    // In the following, AffineDimExprs are indexed in loop order:
-    //   [ b, xs, k,           q,                     zs]
-    //    parallels     non-window reductions     windows
-    //
-    // Parallel dims are exactly the dimensions indexing `output`:
-    //     output[b, x[0], ..., x[N-1], k]; i.e.
-    //  * batch dimensions (bs with #bs = 1 for now)
-    //  * "image" dimensions (xs with #xs = #zs = output_rank - #bs - #ks)
-    //  * output filter dimensions (ks with #ks = 1 for now)
-    auto bs = makeAffineDimExprs(convOp.getNumBatchDimensions(), idx, context);
-    auto xs = makeAffineDimExprs(nWin, idx, context);
-    auto ks = makeAffineDimExprs(convOp.getNumOutputFeatureDimensions(), idx,
-                                 context);
-    // Non-window reduction dim: sum_{z[0], ..., z[N-1], q}
-    auto qs =
-        makeAffineDimExprs(convOp.getNumInputFeatureDimensions(), idx, context);
-    // Window reduction dims: sum_{z[0], ..., z[N-1], q}
-    auto zs = makeAffineDimExprs(nWin, idx, context);
-    // Construct the weighedSum expression.
-    auto ws = weightedConvInputIndex(convOp, xs, zs);
-    return SmallVector<AffineMap, 4>{
-        // filter[z[0], ..., z[N-1], q, k]
-        AffineMap::get(idx, 0, concat(concat(zs, qs), ks)),
-        // input[b,
-        //       x[0]*s[0] + d[0]*z[0], ..., x[N-1]*s[N-1] + d[N-1]*z[N-1],
-        //       q]
-        AffineMap::get(idx, 0, concat(concat(bs, ws), qs)),
-        // output[b, x[0], ..., x[N-1], k]
-        AffineMap::get(idx, 0, concat(concat(bs, xs), ks))};
-  } else if (auto genericOp = dyn_cast<GenericOp>(op)) {
-    SmallVector<AffineMap, 4> res;
-    unsigned nViews = genericOp.getNumInputsAndOutputs();
-    res.reserve(nViews);
-    for (unsigned i = 0, e = nViews; i < e; ++i) {
-      res.push_back(genericOp.getIndexingMap(i));
-    }
-    return res;
-  } else if (auto indexedGenericOp = dyn_cast<IndexedGenericOp>(op)) {
-    SmallVector<AffineMap, 4> res;
-    unsigned nViews = indexedGenericOp.getNumInputsAndOutputs();
-    res.reserve(nViews);
-    for (unsigned i = 0, e = nViews; i < e; ++i)
-      res.push_back(indexedGenericOp.getIndexingMap(i));
-    return res;
-  }
-  llvm_unreachable("Missing loopToOperandRangesMaps for op");
+SmallVector<AffineExpr, 4> mlir::linalg::concat(ArrayRef<AffineExpr> a,
+                                                ArrayRef<AffineExpr> b) {
+  auto rangeA = llvm::make_range(a.begin(), a.end());
+  auto rangeB = llvm::make_range(b.begin(), b.end());
+  auto concatRanges = llvm::concat<const AffineExpr>(rangeA, rangeB);
+  return llvm::to_vector<4>(concatRanges);
 }
 
 static void appendMangledType(llvm::raw_string_ostream &ss, Type t) {
@@ -1114,7 +933,7 @@ static void appendMangledType(llvm::raw_string_ostream &ss, Type t) {
     interleave(
         vec.getShape(), [&](int64_t i) { ss << i; }, [&]() { ss << "x"; });
     appendMangledType(ss, vec.getElementType());
-  } else if (t.isIntOrIndexOrFloat()) {
+  } else if (t.isSignlessIntOrIndexOrFloat()) {
     ss << t;
   } else {
     llvm_unreachable("Invalid type for linalg library name mangling");
@@ -1133,33 +952,6 @@ std::string mlir::linalg::generateLibraryCallName(Operation *op) {
       types.begin(), types.end(), [&](Type t) { appendMangledType(ss, t); },
       [&]() { ss << "_"; });
   return ss.str();
-}
-
-static ArrayAttr getIndexingMaps(Operation *op) {
-  LinalgOp linalgOp = cast<LinalgOp>(op);
-  SmallVector<Attribute, 4> maps;
-  maps.reserve(linalgOp.getNumInputsAndOutputs());
-  for (AffineMap map : loopToOperandRangesMaps(op))
-    maps.push_back(AffineMapAttr::get(map));
-  return ArrayAttr::get(maps, op->getContext());
-}
-ArrayAttr mlir::linalg::ConvOp::indexing_maps() {
-  return getIndexingMaps(getOperation());
-}
-ArrayAttr mlir::linalg::CopyOp::indexing_maps() {
-  return getIndexingMaps(getOperation());
-}
-ArrayAttr mlir::linalg::DotOp::indexing_maps() {
-  return getIndexingMaps(getOperation());
-}
-ArrayAttr mlir::linalg::FillOp::indexing_maps() {
-  return getIndexingMaps(getOperation());
-}
-ArrayAttr mlir::linalg::MatmulOp::indexing_maps() {
-  return getIndexingMaps(getOperation());
-}
-ArrayAttr mlir::linalg::MatvecOp::indexing_maps() {
-  return getIndexingMaps(getOperation());
 }
 
 // TODO(ntv, rriddle): Consider making all this boilerplate easy to autogenerate

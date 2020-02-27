@@ -13,7 +13,7 @@
 
 #include "mlir/Conversion/LoopToStandard/ConvertLoopToStandard.h"
 #include "mlir/Dialect/LoopOps/LoopOps.h"
-#include "mlir/Dialect/StandardOps/Ops.h"
+#include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/MLIRContext.h"
@@ -272,7 +272,7 @@ ParallelLowering::matchAndRewrite(ParallelOp parallelOp,
   }
 
   // Now copy over the contents of the body.
-  for (auto &op : parallelOp.body().front().without_terminator())
+  for (auto &op : parallelOp.getBody()->without_terminator())
     rewriter.clone(op, mapping);
 
   rewriter.eraseOp(parallelOp);

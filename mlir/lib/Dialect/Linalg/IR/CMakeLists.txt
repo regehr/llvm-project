@@ -1,12 +1,12 @@
 set(LIBS
 
   MLIRIR
+  MLIRStandardOps
   )
 
 add_llvm_library(MLIRLinalgOps
   LinalgOps.cpp
   LinalgTypes.cpp
-  LinalgRegistration.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Dialect/Linalg
@@ -19,5 +19,6 @@ add_dependencies(MLIRLinalgOps
   ${LIBS}
   MLIRLinalgOpsIncGen
   MLIRLinalgStructuredOpsIncGen
+  MLIRLinalgStructuredOpsInterfaceIncGen
   )
 target_link_libraries(MLIRLinalgOps ${LIBS})

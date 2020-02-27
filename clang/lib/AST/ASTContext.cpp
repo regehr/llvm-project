@@ -731,12 +731,8 @@ canonicalizeImmediatelyDeclaredConstraint(const ASTContext &C, Expr *IDC,
       NewConverted.push_back(Arg);
   }
   Expr *NewIDC = ConceptSpecializationExpr::Create(
-      C, NestedNameSpecifierLoc(), /*TemplateKWLoc=*/SourceLocation(),
-      CSE->getConceptNameInfo(), /*FoundDecl=*/CSE->getNamedConcept(),
-      CSE->getNamedConcept(),
-      // Actually canonicalizing a TemplateArgumentLoc is difficult so we
-      // simply omit the ArgsAsWritten
-      /*ArgsAsWritten=*/nullptr, NewConverted, nullptr);
+      C, CSE->getNamedConcept(), NewConverted, nullptr,
+      CSE->isInstantiationDependent(), CSE->containsUnexpandedParameterPack());
 
   if (auto *OrigFold = dyn_cast<CXXFoldExpr>(IDC))
     NewIDC = new (C) CXXFoldExpr(OrigFold->getType(), SourceLocation(), NewIDC,
@@ -878,6 +874,7 @@ CXXABI *ASTContext::createCXXABI(const TargetInfo &T) {
   case TargetCXXABI::GenericMIPS:
   case TargetCXXABI::GenericItanium:
   case TargetCXXABI::WebAssembly:
+  case TargetCXXABI::XL:
     return CreateItaniumCXXABI(*this);
   case TargetCXXABI::Microsoft:
     return CreateMicrosoftCXXABI(*this);
@@ -10045,6 +10042,8 @@ bool ASTContext::DeclMustBeEmitted(const Decl *D) {
     return true;
   else if (isa<PragmaDetectMismatchDecl>(D))
     return true;
+  else if (isa<OMPRequiresDecl>(D))
+    return true;
   else if (isa<OMPThreadPrivateDecl>(D))
     return !D->getDeclContext()->isDependentContext();
   else if (isa<OMPAllocateDecl>(D))
@@ -10255,6 +10254,7 @@ MangleContext *ASTContext::createMangleContext(const TargetInfo *T) {
   case TargetCXXABI::iOS64:
   case TargetCXXABI::WebAssembly:
   case TargetCXXABI::WatchOS:
+  case TargetCXXABI::XL:
     return ItaniumMangleContext::create(*this, getDiagnostics());
   case TargetCXXABI::Microsoft:
     return MicrosoftMangleContext::create(*this, getDiagnostics());

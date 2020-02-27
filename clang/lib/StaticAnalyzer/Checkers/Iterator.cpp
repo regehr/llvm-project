@@ -177,6 +177,20 @@ ProgramStateRef setIteratorPosition(ProgramStateRef State, const SVal &Val,
   return nullptr;
 }
 
+ProgramStateRef createIteratorPosition(ProgramStateRef State, const SVal &Val,
+                                       const MemRegion *Cont, const Stmt* S,
+                                       const LocationContext *LCtx,
+                                       unsigned blockCount) {
+  auto &StateMgr = State->getStateManager();
+  auto &SymMgr = StateMgr.getSymbolManager();
+  auto &ACtx = StateMgr.getContext();
+
+  auto Sym = SymMgr.conjureSymbol(S, LCtx, ACtx.LongTy, blockCount);
+  State = assumeNoOverflow(State, Sym, 4);
+  return setIteratorPosition(State, Val,
+                             IteratorPosition::getPosition(Cont, Sym));
+}
+
 ProgramStateRef advancePosition(ProgramStateRef State, const SVal &Iter,
                                 OverloadedOperatorKind Op,
                                 const SVal &Distance) {
@@ -186,22 +200,29 @@ ProgramStateRef advancePosition(ProgramStateRef State, const SVal &Iter,
 
   auto &SymMgr = State->getStateManager().getSymbolManager();
   auto &SVB = State->getStateManager().getSValBuilder();
+  auto &BVF = State->getStateManager().getBasicVals();
 
   assert ((Op == OO_Plus || Op == OO_PlusEqual ||
            Op == OO_Minus || Op == OO_MinusEqual) &&
           "Advance operator must be one of +, -, += and -=.");
   auto BinOp = (Op == OO_Plus || Op == OO_PlusEqual) ? BO_Add : BO_Sub;
-  if (const auto IntDist = Distance.getAs<nonloc::ConcreteInt>()) {
-    // For concrete integers we can calculate the new position
-    const auto NewPos =
-      Pos->setTo(SVB.evalBinOp(State, BinOp,
-                               nonloc::SymbolVal(Pos->getOffset()),
-                               *IntDist, SymMgr.getType(Pos->getOffset()))
-                 .getAsSymbol());
-    return setIteratorPosition(State, Iter, NewPos);
-  }
+  const auto IntDistOp = Distance.getAs<nonloc::ConcreteInt>();
+  if (!IntDistOp)
+    return nullptr;
 
-  return nullptr;
+  // For concrete integers we can calculate the new position
+  nonloc::ConcreteInt IntDist = *IntDistOp;
+
+  if (IntDist.getValue().isNegative()) {
+    IntDist = nonloc::ConcreteInt(BVF.getValue(-IntDist.getValue()));
+    BinOp = (BinOp == BO_Add) ? BO_Sub : BO_Add;
+  }
+  const auto NewPos =
+    Pos->setTo(SVB.evalBinOp(State, BinOp,
+                             nonloc::SymbolVal(Pos->getOffset()),
+                             IntDist, SymMgr.getType(Pos->getOffset()))
+               .getAsSymbol());
+  return setIteratorPosition(State, Iter, NewPos);
 }
 
 // This function tells the analyzer's engine that symbols produced by our

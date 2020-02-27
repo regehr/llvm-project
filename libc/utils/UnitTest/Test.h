@@ -6,10 +6,14 @@
 //
 //===----------------------------------------------------------------------===//
 
-// This file can only include headers from utils/CPP/. No other header should be
-// included.
+#ifndef LLVM_LIBC_UTILS_UNITTEST_H
+#define LLVM_LIBC_UTILS_UNITTEST_H
+
+// This file can only include headers from utils/CPP/ or utils/testutils. No
+// other headers should be included.
 
 #include "utils/CPP/TypeTraits.h"
+#include "utils/testutils/ExecuteFunction.h"
 
 namespace __llvm_libc {
 namespace testing {
@@ -63,9 +67,8 @@ protected:
   // is the result of the |Cond| operation on |LHS| and |RHS|. Though not bad,
   // |Cond| on mismatched |LHS| and |RHS| types can potentially succeed because
   // of type promotion.
-  template <
-      typename ValType,
-      cpp::EnableIfType<cpp::IsIntegralNotBool<ValType>::Value, ValType> = 0>
+  template <typename ValType,
+            cpp::EnableIfType<cpp::IsIntegral<ValType>::Value, ValType> = 0>
   static bool test(RunContext &Ctx, TestCondition Cond, ValType LHS,
                    ValType RHS, const char *LHSStr, const char *RHSStr,
                    const char *File, unsigned long Line) {
@@ -89,6 +92,26 @@ protected:
   static bool testStrNe(RunContext &Ctx, const char *LHS, const char *RHS,
                         const char *LHSStr, const char *RHSStr,
                         const char *File, unsigned long Line);
+
+  static bool testProcessExits(RunContext &Ctx, testutils::FunctionCaller *Func,
+                               int ExitCode, const char *LHSStr,
+                               const char *RHSStr, const char *File,
+                               unsigned long Line);
+
+  static bool testProcessKilled(RunContext &Ctx,
+                                testutils::FunctionCaller *Func, int Signal,
+                                const char *LHSStr, const char *RHSStr,
+                                const char *File, unsigned long Line);
+
+  template <typename Func> testutils::FunctionCaller *createCallable(Func f) {
+    struct Callable : public testutils::FunctionCaller {
+      Func f;
+      Callable(Func f) : f(f) {}
+      void operator()() override { f(); }
+    };
+
+    return new Callable(f);
+  }
 
 private:
   virtual void Run(RunContext &Ctx) = 0;
@@ -176,3 +199,35 @@ private:
 #define ASSERT_STRNE(LHS, RHS)                                                 \
   if (!EXPECT_STRNE(LHS, RHS))                                                 \
   return
+
+#define EXPECT_TRUE(VAL) EXPECT_EQ((VAL), true)
+
+#define ASSERT_TRUE(VAL)                                                       \
+  if (!EXPECT_TRUE(VAL))                                                       \
+  return
+
+#define EXPECT_FALSE(VAL) EXPECT_EQ((VAL), false)
+
+#define ASSERT_FALSE(VAL)                                                      \
+  if (!EXPECT_FALSE(VAL))                                                      \
+  return
+
+#define EXPECT_EXITS(FUNC, EXIT)                                               \
+  __llvm_libc::testing::Test::testProcessExits(                                \
+      Ctx, __llvm_libc::testing::Test::createCallable(FUNC), EXIT, #FUNC,      \
+      #EXIT, __FILE__, __LINE__)
+
+#define ASSERT_EXITS(FUNC, EXIT)                                               \
+  if (!EXPECT_EXITS(FUNC, EXIT))                                               \
+  return
+
+#define EXPECT_DEATH(FUNC, SIG)                                                \
+  __llvm_libc::testing::Test::testProcessKilled(                               \
+      Ctx, __llvm_libc::testing::Test::createCallable(FUNC), SIG, #FUNC, #SIG, \
+      __FILE__, __LINE__)
+
+#define ASSERT_DEATH(FUNC, EXIT)                                               \
+  if (!EXPECT_DEATH(FUNC, EXIT))                                               \
+  return
+
+#endif // LLVM_LIBC_UTILS_UNITTEST_H

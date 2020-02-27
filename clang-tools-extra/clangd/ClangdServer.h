@@ -130,8 +130,11 @@ public:
     llvm::Optional<std::string> ResourceDir = llvm::None;
 
     /// Time to wait after a new file version before computing diagnostics.
-    std::chrono::steady_clock::duration UpdateDebounce =
-        std::chrono::milliseconds(500);
+    DebouncePolicy UpdateDebounce = DebouncePolicy{
+        /*Min=*/std::chrono::milliseconds(50),
+        /*Max=*/std::chrono::milliseconds(500),
+        /*RebuildRatio=*/1,
+    };
 
     bool SuggestMissingIncludes = false;
 
@@ -142,13 +145,12 @@ public:
     /// Enable semantic highlighting features.
     bool SemanticHighlighting = false;
 
-    /// Enable cross-file rename feature.
-    bool CrossFileRename = false;
-
     /// Returns true if the tweak should be enabled.
     std::function<bool(const Tweak &)> TweakFilter = [](const Tweak &T) {
       return !T.hidden(); // only enable non-hidden tweaks.
     };
+
+    explicit operator TUScheduler::Options() const;
   };
   // Sensible default options for use in tests.
   // Features like indexing must be enabled if desired.
@@ -170,7 +172,8 @@ public:
   /// separate thread. When the parsing is complete, DiagConsumer passed in
   /// constructor will receive onDiagnosticsReady callback.
   void addDocument(PathRef File, StringRef Contents,
-                   WantDiagnostics WD = WantDiagnostics::Auto);
+                   WantDiagnostics WD = WantDiagnostics::Auto,
+                   bool ForceRebuild = false);
 
   /// Get the contents of \p File, which should have been added.
   llvm::StringRef getDocument(PathRef File) const;
@@ -251,6 +254,7 @@ public:
 
   /// Test the validity of a rename operation.
   void prepareRename(PathRef File, Position Pos,
+                     const RenameOptions &RenameOpts,
                      Callback<llvm::Optional<Range>> CB);
 
   /// Rename all occurrences of the symbol at the \p Pos in \p File to
@@ -258,6 +262,9 @@ public:
   /// If WantFormat is false, the final TextEdit will be not formatted,
   /// embedders could use this method to get all occurrences of the symbol (e.g.
   /// highlighting them in prepare stage).
+  void rename(PathRef File, Position Pos, llvm::StringRef NewName,
+              const RenameOptions &Opts, Callback<FileEdits> CB);
+  // FIXME: remove this compatibility method in favor above.
   void rename(PathRef File, Position Pos, llvm::StringRef NewName,
               bool WantFormat, Callback<FileEdits> CB);
 
@@ -336,8 +343,6 @@ private:
   // If this is true, suggest include insertion fixes for diagnostic errors that
   // can be caused by missing includes (e.g. member access in incomplete type).
   bool SuggestMissingIncludes = false;
-
-  bool CrossFileRename = false;
 
   std::function<bool(const Tweak &)> TweakFilter;
 

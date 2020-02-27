@@ -32,20 +32,26 @@ class getVOP3ModPat<VOPProfile P, SDPatternOperator node> {
                   ret1));
 }
 
-class getVOP3PModPat<VOPProfile P, SDPatternOperator node> {
+class getVOP3PModPat<VOPProfile P, SDPatternOperator node, bit HasExplicitClamp> {
+  dag src0_dag = (P.Src0VT (VOP3PMods P.Src0VT:$src0, i32:$src0_modifiers));
+  dag src1_dag = (P.Src1VT (VOP3PMods P.Src1VT:$src1, i32:$src1_modifiers));
+  dag src2_dag = (P.Src2VT (VOP3PMods P.Src2VT:$src2, i32:$src2_modifiers));
+  dag clamp_dag = (i1 timm:$clamp);
+
   list<dag> ret3 = [(set P.DstVT:$vdst,
-    (DivergentFragOrOp<node, P>.ret (P.Src0VT !if(P.HasClamp, (VOP3PMods0 P.Src0VT:$src0, i32:$src0_modifiers, i1:$clamp),
-                                    (VOP3PMods P.Src0VT:$src0, i32:$src0_modifiers))),
-          (P.Src1VT (VOP3PMods P.Src1VT:$src1, i32:$src1_modifiers)),
-          (P.Src2VT (VOP3PMods P.Src2VT:$src2, i32:$src2_modifiers))))];
+    !if(HasExplicitClamp,
+        (DivergentFragOrOp<node, P>.ret src0_dag, src1_dag, src2_dag, clamp_dag),
+        (DivergentFragOrOp<node, P>.ret src0_dag, src1_dag, src2_dag)))];
 
   list<dag> ret2 = [(set P.DstVT:$vdst,
-    (DivergentFragOrOp<node, P>.ret !if(P.HasClamp, (P.Src0VT (VOP3PMods0 P.Src0VT:$src0, i32:$src0_modifiers, i1:$clamp)),
-                          (P.Src0VT (VOP3PMods P.Src0VT:$src0, i32:$src0_modifiers))),
-          (P.Src1VT (VOP3PMods P.Src1VT:$src1, i32:$src1_modifiers))))];
+    !if(HasExplicitClamp,
+        (DivergentFragOrOp<node, P>.ret src0_dag, src1_dag, clamp_dag),
+        (DivergentFragOrOp<node, P>.ret src0_dag, src1_dag)))];
 
   list<dag> ret1 = [(set P.DstVT:$vdst,
-    (DivergentFragOrOp<node, P>.ret (P.Src0VT (VOP3PMods0 P.Src0VT:$src0, i32:$src0_modifiers, i1:$clamp))))];
+    !if(HasExplicitClamp,
+        (DivergentFragOrOp<node, P>.ret src0_dag, clamp_dag),
+        (DivergentFragOrOp<node, P>.ret src0_dag)))];
 
   list<dag> ret = !if(!eq(P.NumSrcArgs, 3), ret3,
                   !if(!eq(P.NumSrcArgs, 2), ret2,
@@ -385,10 +391,12 @@ def V_TRIG_PREOP_F64 : VOP3Inst <"v_trig_preop_f64", VOP3_Profile<VOP_F64_F64_I3
 }
 
 let SchedRW = [Write64Bit] in {
-let SubtargetPredicate = isGFX6GFX7GFX10 in {
+let SubtargetPredicate = isGFX6GFX7 in {
 def V_LSHL_B64 : VOP3Inst <"v_lshl_b64", VOP3_Profile<VOP_I64_I64_I32>, shl>;
 def V_LSHR_B64 : VOP3Inst <"v_lshr_b64", VOP3_Profile<VOP_I64_I64_I32>, srl>;
 def V_ASHR_I64 : VOP3Inst <"v_ashr_i64", VOP3_Profile<VOP_I64_I64_I32>, sra>;
+} // End SubtargetPredicate = isGFX6GFX7
+let SubtargetPredicate = isGFX6GFX7GFX10 in {
 def V_MULLIT_F32 : VOP3Inst <"v_mullit_f32", VOP3_Profile<VOP_F32_F32_F32_F32>>;
 } // End SubtargetPredicate = isGFX6GFX7GFX10
 

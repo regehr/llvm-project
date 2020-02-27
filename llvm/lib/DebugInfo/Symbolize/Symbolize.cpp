@@ -62,12 +62,11 @@ Expected<DILineInfo>
 LLVMSymbolizer::symbolizeCode(const ObjectFile &Obj,
                               object::SectionedAddress ModuleOffset) {
   StringRef ModuleName = Obj.getFileName();
-  auto I = Modules.find(std::string(ModuleName));
+  auto I = Modules.find(ModuleName);
   if (I != Modules.end())
     return symbolizeCodeCommon(I->second.get(), ModuleOffset);
 
-  std::unique_ptr<DIContext> Context =
-        DWARFContext::create(Obj, nullptr, DWARFContext::defaultErrorHandler);
+  std::unique_ptr<DIContext> Context = DWARFContext::create(Obj);
   Expected<SymbolizableModule *> InfoOrErr =
                      createModuleInfo(&Obj, std::move(Context), ModuleName);
   if (!InfoOrErr)
@@ -564,9 +563,7 @@ LLVMSymbolizer::getOrCreateModuleInfo(const std::string &ModuleName) {
     }
   }
   if (!Context)
-    Context =
-        DWARFContext::create(*Objects.second, nullptr,
-                             DWARFContext::defaultErrorHandler, Opts.DWPName);
+    Context = DWARFContext::create(*Objects.second, nullptr, Opts.DWPName);
   return createModuleInfo(Objects.first, std::move(Context), ModuleName);
 }
 

@@ -40,9 +40,9 @@ define i32* @get_external_default_global() {
 define i32* @get_strong_local_global() {
   ret i32* @strong_local_global
 }
-; CHECK: leaq strong_local_global(%rip), %rax
-; STATIC: movl $strong_local_global, %eax
-; CHECK32: leal strong_local_global@GOTOFF(%eax), %eax
+; CHECK: leaq .Lstrong_local_global$local(%rip), %rax
+; STATIC: movl $.Lstrong_local_global$local, %eax
+; CHECK32: leal .Lstrong_local_global$local@GOTOFF(%eax), %eax
 
 @weak_local_global = weak dso_local global i32 42
 define i32* @get_weak_local_global() {
@@ -108,9 +108,9 @@ define i32* @get_weak_default_alias() {
 define i32* @get_strong_local_alias() {
   ret i32* @strong_local_alias
 }
-; CHECK: leaq strong_local_alias(%rip), %rax
-; STATIC: movl $strong_local_alias, %eax
-; CHECK32: leal strong_local_alias@GOTOFF(%eax), %eax
+; CHECK: leaq .Lstrong_local_alias$local(%rip), %rax
+; STATIC: movl $.Lstrong_local_alias$local, %eax
+; CHECK32: leal .Lstrong_local_alias$local@GOTOFF(%eax), %eax
 
 @weak_local_alias = weak dso_local alias i32, i32* @aliasee
 define i32* @get_weak_local_alias() {
@@ -175,9 +175,9 @@ define void()* @get_strong_local_function() {
 }
 ; COMMON:     {{^}}strong_local_function:
 ; COMMON-NEXT .Lstrong_local_function:
-; CHECK: leaq strong_local_function(%rip), %rax
-; STATIC: movl $strong_local_function, %eax
-; CHECK32: leal strong_local_function@GOTOFF(%eax), %eax
+; CHECK: leaq .Lstrong_local_function$local(%rip), %rax
+; STATIC: movl $.Lstrong_local_function$local, %eax
+; CHECK32: leal .Lstrong_local_function$local@GOTOFF(%eax), %eax
 
 define weak dso_local void @weak_local_function() {
   ret void
@@ -228,3 +228,17 @@ define void()* @get_external_preemptable_function() {
 
 ; COMMON:     {{^}}strong_local_global:
 ; COMMON-NEXT .Lstrong_local_global:
+
+; COMMON:      .globl strong_default_alias
+; COMMON-NEXT: .set strong_default_alias, aliasee
+; COMMON-NEXT: .weak weak_default_alias
+; COMMON-NEXT: .set weak_default_alias, aliasee
+; COMMON-NEXT: .globl strong_local_alias
+; COMMON-NEXT: .set strong_local_alias, aliasee
+; COMMON-NEXT: .set .Lstrong_local_alias$local, aliasee
+; COMMON-NEXT: .weak weak_local_alias
+; COMMON-NEXT: .set weak_local_alias, aliasee
+; COMMON-NEXT: .globl strong_preemptable_alias
+; COMMON-NEXT: .set strong_preemptable_alias, aliasee
+; COMMON-NEXT: .weak weak_preemptable_alias
+; COMMON-NEXT: .set weak_preemptable_alias, aliasee

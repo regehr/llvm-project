@@ -3,8 +3,8 @@ mlir_tablegen(SPIRVCanonicalization.inc -gen-rewriters)
 add_public_tablegen_target(MLIRSPIRVCanonicalizationIncGen)
 
 add_llvm_library(MLIRSPIRV
-  DialectRegistration.cpp
   LayoutUtils.cpp
+  SPIRVCanonicalization.cpp
   SPIRVDialect.cpp
   SPIRVOps.cpp
   SPIRVLowering.cpp

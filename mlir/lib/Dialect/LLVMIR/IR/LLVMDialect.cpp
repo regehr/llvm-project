@@ -153,51 +153,6 @@ static ParseResult parseAllocaOp(OpAsmParser &parser, OperationState &result) {
 }
 
 //===----------------------------------------------------------------------===//
-// Printing/parsing for LLVM::GEPOp.
-//===----------------------------------------------------------------------===//
-
-static void printGEPOp(OpAsmPrinter &p, GEPOp &op) {
-  SmallVector<Type, 8> types(op.getOperandTypes());
-  auto funcTy = FunctionType::get(types, op.getType(), op.getContext());
-
-  p << op.getOperationName() << ' ' << op.base() << '['
-    << op.getOperands().drop_front() << ']';
-  p.printOptionalAttrDict(op.getAttrs());
-  p << " : " << funcTy;
-}
-
-// <operation> ::= `llvm.getelementptr` ssa-use `[` ssa-use-list `]`
-//                 attribute-dict? `:` type
-static ParseResult parseGEPOp(OpAsmParser &parser, OperationState &result) {
-  OpAsmParser::OperandType base;
-  SmallVector<OpAsmParser::OperandType, 8> indices;
-  Type type;
-  llvm::SMLoc trailingTypeLoc;
-  if (parser.parseOperand(base) ||
-      parser.parseOperandList(indices, OpAsmParser::Delimiter::Square) ||
-      parser.parseOptionalAttrDict(result.attributes) || parser.parseColon() ||
-      parser.getCurrentLocation(&trailingTypeLoc) || parser.parseType(type))
-    return failure();
-
-  // Deconstruct the trailing function type to extract the types of the base
-  // pointer and result (same type) and the types of the indices.
-  auto funcType = type.dyn_cast<FunctionType>();
-  if (!funcType || funcType.getNumResults() != 1 ||
-      funcType.getNumInputs() == 0)
-    return parser.emitError(trailingTypeLoc,
-                            "expected trailing function type with at least "
-                            "one argument and one result");
-
-  if (parser.resolveOperand(base, funcType.getInput(0), result.operands) ||
-      parser.resolveOperands(indices, funcType.getInputs().drop_front(),
-                             parser.getNameLoc(), result.operands))
-    return failure();
-
-  result.addTypes(funcType.getResults());
-  return success();
-}
-
-//===----------------------------------------------------------------------===//
 // Printing/parsing for LLVM::LoadOp.
 //===----------------------------------------------------------------------===//
 
@@ -279,15 +234,14 @@ static ParseResult parseStoreOp(OpAsmParser &parser, OperationState &result) {
 static LogicalResult verify(InvokeOp op) {
   if (op.getNumResults() > 1)
     return op.emitOpError("must have 0 or 1 result");
-  if (op.getNumSuccessors() != 2)
-    return op.emitOpError("must have normal and unwind destinations");
 
-  if (op.getSuccessor(1)->empty())
+  Block *unwindDest = op.unwindDest();
+  if (unwindDest->empty())
     return op.emitError(
         "must have at least one operation in unwind destination");
 
   // In unwind destination, first operation must be LandingpadOp
-  if (!isa<LandingpadOp>(op.getSuccessor(1)->front()))
+  if (!isa<LandingpadOp>(unwindDest->front()))
     return op.emitError("first operation in unwind destination should be a "
                         "llvm.landingpad operation");
 
@@ -827,103 +781,6 @@ static ParseResult parseInsertValueOp(OpAsmParser &parser,
 }
 
 //===----------------------------------------------------------------------===//
-// Printing/parsing for LLVM::SelectOp.
-//===----------------------------------------------------------------------===//
-
-static void printSelectOp(OpAsmPrinter &p, SelectOp &op) {
-  p << op.getOperationName() << ' ' << op.condition() << ", " << op.trueValue()
-    << ", " << op.falseValue();
-  p.printOptionalAttrDict(op.getAttrs());
-  p << " : " << op.condition().getType() << ", " << op.trueValue().getType();
-}
-
-// <operation> ::= `llvm.select` ssa-use `,` ssa-use `,` ssa-use
-//                 attribute-dict? `:` type, type
-static ParseResult parseSelectOp(OpAsmParser &parser, OperationState &result) {
-  OpAsmParser::OperandType condition, trueValue, falseValue;
-  Type conditionType, argType;
-
-  if (parser.parseOperand(condition) || parser.parseComma() ||
-      parser.parseOperand(trueValue) || parser.parseComma() ||
-      parser.parseOperand(falseValue) ||
-      parser.parseOptionalAttrDict(result.attributes) ||
-      parser.parseColonType(conditionType) || parser.parseComma() ||
-      parser.parseType(argType))
-    return failure();
-
-  if (parser.resolveOperand(condition, conditionType, result.operands) ||
-      parser.resolveOperand(trueValue, argType, result.operands) ||
-      parser.resolveOperand(falseValue, argType, result.operands))
-    return failure();
-
-  result.addTypes(argType);
-  return success();
-}
-
-//===----------------------------------------------------------------------===//
-// Printing/parsing for LLVM::BrOp.
-//===----------------------------------------------------------------------===//
-
-static void printBrOp(OpAsmPrinter &p, BrOp &op) {
-  p << op.getOperationName() << ' ';
-  p.printSuccessorAndUseList(op.getOperation(), 0);
-  p.printOptionalAttrDict(op.getAttrs());
-}
-
-// <operation> ::= `llvm.br` bb-id (`[` ssa-use-and-type-list `]`)?
-// attribute-dict?
-static ParseResult parseBrOp(OpAsmParser &parser, OperationState &result) {
-  Block *dest;
-  SmallVector<Value, 4> operands;
-  if (parser.parseSuccessorAndUseList(dest, operands) ||
-      parser.parseOptionalAttrDict(result.attributes))
-    return failure();
-
-  result.addSuccessor(dest, operands);
-  return success();
-}
-
-//===----------------------------------------------------------------------===//
-// Printing/parsing for LLVM::CondBrOp.
-//===----------------------------------------------------------------------===//
-
-static void printCondBrOp(OpAsmPrinter &p, CondBrOp &op) {
-  p << op.getOperationName() << ' ' << op.getOperand(0) << ", ";
-  p.printSuccessorAndUseList(op.getOperation(), 0);
-  p << ", ";
-  p.printSuccessorAndUseList(op.getOperation(), 1);
-  p.printOptionalAttrDict(op.getAttrs());
-}
-
-// <operation> ::= `llvm.cond_br` ssa-use `,`
-//                  bb-id (`[` ssa-use-and-type-list `]`)? `,`
-//                  bb-id (`[` ssa-use-and-type-list `]`)? attribute-dict?
-static ParseResult parseCondBrOp(OpAsmParser &parser, OperationState &result) {
-  Block *trueDest;
-  Block *falseDest;
-  SmallVector<Value, 4> trueOperands;
-  SmallVector<Value, 4> falseOperands;
-  OpAsmParser::OperandType condition;
-
-  Builder &builder = parser.getBuilder();
-  auto *llvmDialect =
-      builder.getContext()->getRegisteredDialect<LLVM::LLVMDialect>();
-  auto i1Type = LLVM::LLVMType::getInt1Ty(llvmDialect);
-
-  if (parser.parseOperand(condition) || parser.parseComma() ||
-      parser.parseSuccessorAndUseList(trueDest, trueOperands) ||
-      parser.parseComma() ||
-      parser.parseSuccessorAndUseList(falseDest, falseOperands) ||
-      parser.parseOptionalAttrDict(result.attributes) ||
-      parser.resolveOperand(condition, i1Type, result.operands))
-    return failure();
-
-  result.addSuccessor(trueDest, trueOperands);
-  result.addSuccessor(falseDest, falseOperands);
-  return success();
-}
-
-//===----------------------------------------------------------------------===//
 // Printing/parsing for LLVM::ReturnOp.
 //===----------------------------------------------------------------------===//
 
@@ -957,29 +814,7 @@ static ParseResult parseReturnOp(OpAsmParser &parser, OperationState &result) {
 }
 
 //===----------------------------------------------------------------------===//
-// Printing/parsing for LLVM::UndefOp.
-//===----------------------------------------------------------------------===//
-
-static void printUndefOp(OpAsmPrinter &p, UndefOp &op) {
-  p << op.getOperationName();
-  p.printOptionalAttrDict(op.getAttrs());
-  p << " : " << op.res().getType();
-}
-
-// <operation> ::= `llvm.mlir.undef` attribute-dict? : type
-static ParseResult parseUndefOp(OpAsmParser &parser, OperationState &result) {
-  Type type;
-
-  if (parser.parseOptionalAttrDict(result.attributes) ||
-      parser.parseColonType(type))
-    return failure();
-
-  result.addTypes(type);
-  return success();
-}
-
-//===----------------------------------------------------------------------===//
-// Printer, parser and verifier for LLVM::AddressOfOp.
+// Verifier for LLVM::AddressOfOp.
 //===----------------------------------------------------------------------===//
 
 GlobalOp AddressOfOp::getGlobal() {
@@ -989,27 +824,6 @@ GlobalOp AddressOfOp::getGlobal() {
   assert(module && "unexpected operation outside of a module");
   return dyn_cast_or_null<LLVM::GlobalOp>(
       mlir::SymbolTable::lookupSymbolIn(module, global_name()));
-}
-
-static void printAddressOfOp(OpAsmPrinter &p, AddressOfOp op) {
-  p << op.getOperationName() << " ";
-  p.printSymbolName(op.global_name());
-  p.printOptionalAttrDict(op.getAttrs(), {"global_name"});
-  p << " : " << op.getResult().getType();
-}
-
-static ParseResult parseAddressOfOp(OpAsmParser &parser,
-                                    OperationState &result) {
-  Attribute symRef;
-  Type type;
-  if (parser.parseAttribute(symRef, "global_name", result.attributes) ||
-      parser.parseOptionalAttrDict(result.attributes) ||
-      parser.parseColonType(type) || parser.addTypeToList(type, result.types))
-    return failure();
-
-  if (!symRef.isa<SymbolRefAttr>())
-    return parser.emitError(parser.getNameLoc(), "expected symbol reference");
-  return success();
 }
 
 static LogicalResult verify(AddressOfOp op) {
@@ -1023,32 +837,6 @@ static LogicalResult verify(AddressOfOp op) {
     return op.emitOpError(
         "the type must be a pointer to the type of the referred global");
 
-  return success();
-}
-
-//===----------------------------------------------------------------------===//
-// Printing/parsing for LLVM::ConstantOp.
-//===----------------------------------------------------------------------===//
-
-static void printConstantOp(OpAsmPrinter &p, ConstantOp &op) {
-  p << op.getOperationName() << '(' << op.value() << ')';
-  p.printOptionalAttrDict(op.getAttrs(), {"value"});
-  p << " : " << op.res().getType();
-}
-
-// <operation> ::= `llvm.mlir.constant` `(` attribute `)` attribute-list? : type
-static ParseResult parseConstantOp(OpAsmParser &parser,
-                                   OperationState &result) {
-  Attribute valueAttr;
-  Type type;
-
-  if (parser.parseLParen() ||
-      parser.parseAttribute(valueAttr, "value", result.attributes) ||
-      parser.parseRParen() || parser.parseOptionalAttrDict(result.attributes) ||
-      parser.parseColonType(type))
-    return failure();
-
-  result.addTypes(type);
   return success();
 }
 
@@ -1427,7 +1215,7 @@ static void printLLVMFuncOp(OpAsmPrinter &p, LLVMFuncOp op) {
     argTypes.push_back(fnType.getFunctionParamType(i));
 
   LLVMType returnType = fnType.getFunctionResultType();
-  if (!returnType.getUnderlyingType()->isVoidTy())
+  if (!returnType.isVoidTy())
     resTypes.push_back(returnType);
 
   impl::printFunctionSignature(p, op, argTypes, op.isVarArg(), resTypes);
@@ -1462,14 +1250,12 @@ unsigned LLVMFuncOp::getNumFuncArguments() {
 // Hook for OpTrait::FunctionLike, returns the number of function results.
 // Depends on the type attribute being correct as checked by verifyType
 unsigned LLVMFuncOp::getNumFuncResults() {
-  llvm::FunctionType *funcType =
-      cast<llvm::FunctionType>(getType().getUnderlyingType());
   // We model LLVM functions that return void as having zero results,
   // and all others as having one result.
   // If we modeled a void return as one result, then it would be possible to
   // attach an MLIR result attribute to it, and it isn't clear what semantics we
   // would assign to that.
-  if (funcType->getReturnType()->isVoidTy())
+  if (getType().getFunctionResultType().isVoidTy())
     return 0;
   return 1;
 }
@@ -1516,22 +1302,8 @@ static LogicalResult verify(LLVMFuncOp op) {
 }
 
 //===----------------------------------------------------------------------===//
-// Printing, parsing and verification for LLVM::NullOp.
+// Verification for LLVM::NullOp.
 //===----------------------------------------------------------------------===//
-
-static void printNullOp(OpAsmPrinter &p, LLVM::NullOp op) {
-  p << NullOp::getOperationName();
-  p.printOptionalAttrDict(op.getAttrs());
-  p << " : " << op.getType();
-}
-
-// <operation> = `llvm.mlir.null` : type
-static ParseResult parseNullOp(OpAsmParser &parser, OperationState &result) {
-  Type type;
-  return failure(parser.parseOptionalAttrDict(result.attributes) ||
-                 parser.parseColonType(type) ||
-                 parser.addTypeToList(type, result.types));
-}
 
 // Only LLVM pointer types are supported.
 static LogicalResult verify(LLVM::NullOp op) {
@@ -1822,8 +1594,6 @@ LogicalResult LLVMDialect::verifyRegionArgAttribute(Operation *op,
   return success();
 }
 
-static DialectRegistration<LLVMDialect> llvmDialect;
-
 //===----------------------------------------------------------------------===//
 // LLVMType.
 //===----------------------------------------------------------------------===//
@@ -2028,9 +1798,12 @@ LLVMType LLVMType::getVectorTy(LLVMType elementType, unsigned numElements) {
     return llvm::VectorType::get(elementType.getUnderlyingType(), numElements);
   });
 }
+
 LLVMType LLVMType::getVoidTy(LLVMDialect *dialect) {
   return dialect->impl->voidTy;
 }
+
+bool LLVMType::isVoidTy() { return getUnderlyingType()->isVoidTy(); }
 
 //===----------------------------------------------------------------------===//
 // Utility functions.
