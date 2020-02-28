@@ -43,6 +43,10 @@
 using namespace llvm;
 using namespace llvm::PatternMatch;
 
+cl::opt<bool> DisablePeepholes(
+    "disable-peepholes", cl::init(false),
+    cl::desc("Don't run peephole passes."));
+
 #define DEBUG_TYPE "instsimplify"
 
 enum { RecursionLimit = 3 };
