@@ -75,8 +75,9 @@ static Value *SimplifyGEPInst(Type *, ArrayRef<Value *>, const SimplifyQuery &,
 
 static Value *foldSelectWithBinaryOp(Value *Cond, Value *TrueVal,
                                      Value *FalseVal) {
-  return nullptr;
-  
+  if (DisablePeepholes)
+    return nullptr;
+
   BinaryOperator::BinaryOps BinOpCode;
   if (auto *BO = dyn_cast<BinaryOperator>(Cond))
     BinOpCode = BO->getOpcode();
