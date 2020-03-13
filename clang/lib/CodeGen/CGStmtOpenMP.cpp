@@ -57,7 +57,8 @@ class OMPLexicalScope : public CodeGenFunction::LexicalScope {
   static bool isCapturedVar(CodeGenFunction &CGF, const VarDecl *VD) {
     return CGF.LambdaCaptureFields.lookup(VD) ||
            (CGF.CapturedStmtInfo && CGF.CapturedStmtInfo->lookup(VD)) ||
-           (CGF.CurCodeDecl && isa<BlockDecl>(CGF.CurCodeDecl));
+           (CGF.CurCodeDecl && isa<BlockDecl>(CGF.CurCodeDecl) &&
+            cast<BlockDecl>(CGF.CurCodeDecl)->capturesVariable(VD));
   }
 
 public:
@@ -3800,7 +3801,29 @@ void CodeGenFunction::EmitOMPFlushDirective(const OMPFlushDirective &S) {
       S.getBeginLoc(), AO);
 }
 
-void CodeGenFunction::EmitOMPDepobjDirective(const OMPDepobjDirective &S) {}
+void CodeGenFunction::EmitOMPDepobjDirective(const OMPDepobjDirective &S) {
+  const auto *DO = S.getSingleClause<OMPDepobjClause>();
+  LValue DOLVal = EmitLValue(DO->getDepobj());
+  if (const auto *DC = S.getSingleClause<OMPDependClause>()) {
+    SmallVector<std::pair<OpenMPDependClauseKind, const Expr *>, 4>
+        Dependencies;
+    for (const Expr *IRef : DC->varlists())
+      Dependencies.emplace_back(DC->getDependencyKind(), IRef);
+    Address DepAddr = CGM.getOpenMPRuntime().emitDependClause(
+        *this, Dependencies, /*ForDepobj=*/true, DC->getBeginLoc()).second;
+    EmitStoreOfScalar(DepAddr.getPointer(), DOLVal);
+    return;
+  }
+  if (const auto *DC = S.getSingleClause<OMPDestroyClause>()) {
+    CGM.getOpenMPRuntime().emitDestroyClause(*this, DOLVal, DC->getBeginLoc());
+    return;
+  }
+  if (const auto *UC = S.getSingleClause<OMPUpdateClause>()) {
+    CGM.getOpenMPRuntime().emitUpdateClause(
+        *this, DOLVal, UC->getDependencyKind(), UC->getBeginLoc());
+    return;
+  }
+}
 
 void CodeGenFunction::EmitOMPDistributeLoop(const OMPLoopDirective &S,
                                             const CodeGenLoopTy &CodeGenLoop,
@@ -5529,7 +5552,11 @@ void CodeGenFunction::EmitOMPTaskLoopBasedDirective(const OMPLoopDirective &S) {
   assert(isOpenMPTaskLoopDirective(S.getDirectiveKind()));
   // Emit outlined function for task construct.
   const CapturedStmt *CS = S.getCapturedStmt(OMPD_taskloop);
-  Address CapturedStruct = GenerateCapturedStmtArgument(*CS);
+  Address CapturedStruct = Address::invalid();
+  {
+    OMPLexicalScope Scope(*this, S, OMPD_taskloop, /*EmitPreInitStmt=*/false);
+    CapturedStruct = GenerateCapturedStmtArgument(*CS);
+  }
   QualType SharedsTy = getContext().getRecordType(CS->getCapturedRecordDecl());
   const Expr *IfCond = nullptr;
   for (const auto *C : S.getClausesOfKind<OMPIfClause>()) {

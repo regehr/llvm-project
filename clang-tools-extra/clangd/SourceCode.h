@@ -69,11 +69,6 @@ Position offsetToPosition(llvm::StringRef Code, size_t Offset);
 /// FIXME: This should return an error if the location is invalid.
 Position sourceLocToPosition(const SourceManager &SM, SourceLocation Loc);
 
-/// Returns the taken range at \p TokLoc.
-llvm::Optional<Range> getTokenRange(const SourceManager &SM,
-                                    const LangOptions &LangOpts,
-                                    SourceLocation TokLoc);
-
 /// Return the file location, corresponding to \p P. Note that one should take
 /// care to avoid comparing the result with expansion locations.
 llvm::Expected<SourceLocation> sourceLocationInMainFile(const SourceManager &SM,
@@ -255,7 +250,7 @@ llvm::StringSet<> collectWords(llvm::StringRef Content);
 ///
 /// visibleNamespaces are {"foo::", "", "a::", "b::", "foo::b::"}, not "a::b::".
 std::vector<std::string> visibleNamespaces(llvm::StringRef Code,
-                                           const format::FormatStyle &Style);
+                                           const LangOptions &LangOpts);
 
 /// Represents locations that can accept a definition.
 struct EligibleRegion {
@@ -276,7 +271,7 @@ struct EligibleRegion {
 /// \p FullyQualifiedName should not contain anonymous namespaces.
 EligibleRegion getEligiblePoints(llvm::StringRef Code,
                                  llvm::StringRef FullyQualifiedName,
-                                 const format::FormatStyle &Style);
+                                 const LangOptions &LangOpts);
 
 struct DefinedMacro {
   llvm::StringRef Name;
