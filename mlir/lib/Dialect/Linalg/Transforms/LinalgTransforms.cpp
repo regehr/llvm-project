@@ -16,7 +16,7 @@
 #include "mlir/Dialect/Linalg/Utils/Utils.h"
 #include "mlir/Dialect/StandardOps/EDSC/Intrinsics.h"
 #include "mlir/Dialect/Utils/StructuredOpsUtils.h"
-#include "mlir/Dialect/VectorOps/VectorOps.h"
+#include "mlir/Dialect/Vector/VectorOps.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
@@ -193,6 +193,12 @@ SmallVector<Value, 0> mlir::linalg::vectorizeLinalgOp(PatternRewriter &rewriter,
   auto linalgOp = cast<linalg::LinalgOp>(op);
   assert(linalgOp.hasBufferSemantics() &&
          "expected linalg op with buffer semantics");
+  if (auto convOp = dyn_cast<linalg::ConvOp>(op)) {
+    // TODO(ntv): add a level of indirection to linalg.generic.
+    if (convOp.padding())
+      llvm_unreachable("Unexpected conv with padding");
+  }
+
   edsc::ScopedContext scope(rewriter, op->getLoc());
 
   if (auto fillOp = dyn_cast<linalg::FillOp>(op)) {
@@ -294,6 +300,12 @@ mlir::linalg::promoteSubviewsLinalgOp(PatternRewriter &rewriter,
 
   assert(succeeded(promoteSubviewsLinalgOpPrecondition(op)) &&
          "DRR failure case must be a precondition");
+
+  if (auto convOp = dyn_cast<linalg::ConvOp>(op)) {
+    // TODO(ntv): add a level of indirection to linalg.generic.
+    if (convOp.padding())
+      llvm_unreachable("Unexpected conv with padding");
+  }
 
   LinalgOp linOp = cast<LinalgOp>(op);
   assert(linOp.hasBufferSemantics() &&

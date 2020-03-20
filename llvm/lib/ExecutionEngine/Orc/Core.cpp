@@ -516,8 +516,15 @@ void MaterializationResponsibility::failMaterialization() {
 void MaterializationResponsibility::replace(
     std::unique_ptr<MaterializationUnit> MU) {
 
-  for (auto &KV : MU->getSymbols())
+  // If the replacement MU is empty then return.
+  if (MU->getSymbols().empty())
+    return;
+
+  for (auto &KV : MU->getSymbols()) {
+    assert(SymbolFlags.count(KV.first) &&
+           "Replacing definition outside this responsibility set");
     SymbolFlags.erase(KV.first);
+  }
 
   if (MU->getInitializerSymbol() == InitSymbol)
     InitSymbol = nullptr;
@@ -934,7 +941,11 @@ void JITDylib::replace(std::unique_ptr<MaterializationUnit> MU) {
                  "Unexpected materializer entry in map");
           SymI->second.setAddress(SymI->second.getAddress());
           SymI->second.setMaterializerAttached(true);
-          UnmaterializedInfos[KV.first] = UMI;
+
+          auto &UMIEntry = UnmaterializedInfos[KV.first];
+          assert((!UMIEntry || !UMIEntry->MU) &&
+                 "Replacing symbol with materializer still attached");
+          UMIEntry = UMI;
         }
 
         return nullptr;
@@ -1761,14 +1772,14 @@ void JITDylib::dump(raw_ostream &OS) {
       else
         OS << "<not resolved> ";
 
-      OS << KV.second.getState();
+      OS << KV.second.getFlags() << " " << KV.second.getState();
 
       if (KV.second.hasMaterializerAttached()) {
         OS << " (Materializer ";
         auto I = UnmaterializedInfos.find(KV.first);
         assert(I != UnmaterializedInfos.end() &&
                "Lazy symbol should have UnmaterializedInfo");
-        OS << I->second->MU.get() << ")\n";
+        OS << I->second->MU.get() << ", " << I->second->MU->getName() << ")\n";
       } else
         OS << "\n";
     }
