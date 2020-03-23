@@ -382,7 +382,8 @@ bool AggressiveInstCombinerLegacyPass::runOnFunction(Function &F) {
 
 PreservedAnalyses AggressiveInstCombinePass::run(Function &F,
                                                  FunctionAnalysisManager &AM) {
-  return PreservedAnalyses::all();
+  if (DisablePeepholes)
+    return PreservedAnalyses::all();
 
   auto &TLI = AM.getResult<TargetLibraryAnalysis>(F);
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
