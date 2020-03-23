@@ -249,7 +249,9 @@ static bool valueDominatesPHI(Value *V, PHINode *P, const DominatorTree *DT) {
 static Value *ExpandBinOp(Instruction::BinaryOps Opcode, Value *LHS, Value *RHS,
                           Instruction::BinaryOps OpcodeToExpand,
                           const SimplifyQuery &Q, unsigned MaxRecurse) {
-  return nullptr;
+  if (DisablePeepholes)
+    return nullptr;
+
   // Recursion is always used, so bail out at once if we already hit the limit.
   if (!MaxRecurse--)
     return nullptr;
@@ -309,7 +311,9 @@ static Value *SimplifyAssociativeBinOp(Instruction::BinaryOps Opcode,
                                        Value *LHS, Value *RHS,
                                        const SimplifyQuery &Q,
                                        unsigned MaxRecurse) {
-  return nullptr;
+  if (DisablePeepholes)
+    return nullptr;
+
   assert(Instruction::isAssociative(Opcode) && "Not an associative operation!");
 
   // Recursion is always used, so bail out at once if we already hit the limit.
@@ -409,7 +413,9 @@ static Value *SimplifyAssociativeBinOp(Instruction::BinaryOps Opcode,
 static Value *ThreadBinOpOverSelect(Instruction::BinaryOps Opcode, Value *LHS,
                                     Value *RHS, const SimplifyQuery &Q,
                                     unsigned MaxRecurse) {
-  return nullptr;
+  if (DisablePeepholes)
+    return nullptr;
+
   // Recursion is always used, so bail out at once if we already hit the limit.
   if (!MaxRecurse--)
     return nullptr;
@@ -488,7 +494,9 @@ static Value *ThreadBinOpOverSelect(Instruction::BinaryOps Opcode, Value *LHS,
 static Value *ThreadCmpOverSelect(CmpInst::Predicate Pred, Value *LHS,
                                   Value *RHS, const SimplifyQuery &Q,
                                   unsigned MaxRecurse) {
-  return nullptr;
+  if (DisablePeepholes)
+    return nullptr;
+
   // Recursion is always used, so bail out at once if we already hit the limit.
   if (!MaxRecurse--)
     return nullptr;
@@ -535,6 +543,9 @@ static Value *ThreadCmpOverSelect(CmpInst::Predicate Pred, Value *LHS,
 static Value *ThreadBinOpOverPHI(Instruction::BinaryOps Opcode, Value *LHS,
                                  Value *RHS, const SimplifyQuery &Q,
                                  unsigned MaxRecurse) {
+  if (DisablePeepholes)
+    return nullptr;
+
   // Recursion is always used, so bail out at once if we already hit the limit.
   if (!MaxRecurse--)
     return nullptr;
@@ -577,7 +588,9 @@ static Value *ThreadBinOpOverPHI(Instruction::BinaryOps Opcode, Value *LHS,
 /// otherwise returns null.
 static Value *ThreadCmpOverPHI(CmpInst::Predicate Pred, Value *LHS, Value *RHS,
                                const SimplifyQuery &Q, unsigned MaxRecurse) {
-  return nullptr;
+  if (DisablePeepholes)
+    return nullptr;
+
   // Recursion is always used, so bail out at once if we already hit the limit.
   if (!MaxRecurse--)
     return nullptr;
@@ -623,7 +636,9 @@ static Constant *foldOrCommuteConstant(Instruction::BinaryOps Opcode,
     if (auto *CRHS = dyn_cast<Constant>(Op1))
       return ConstantFoldBinaryOpOperands(Opcode, CLHS, CRHS, Q.DL);
 
-    return nullptr;
+    if (DisablePeepholes)
+      return nullptr;
+
     // Canonicalize the constant to the RHS if this is a commutative operation.
     if (Instruction::isCommutative(Opcode))
       std::swap(Op0, Op1);
@@ -635,9 +650,11 @@ static Constant *foldOrCommuteConstant(Instruction::BinaryOps Opcode,
 /// If not, this returns null.
 static Value *SimplifyAddInst(Value *Op0, Value *Op1, bool IsNSW, bool IsNUW,
                               const SimplifyQuery &Q, unsigned MaxRecurse) {
-  return nullptr;
   if (Constant *C = foldOrCommuteConstant(Instruction::Add, Op0, Op1, Q))
     return C;
+
+  if (DisablePeepholes)
+    return nullptr;
 
   // X + undef -> undef
   if (match(Op1, m_Undef()))
@@ -736,7 +753,9 @@ static Constant *stripAndComputeConstantOffsets(const DataLayout &DL, Value *&V,
 /// If the difference is not a constant, returns zero.
 static Constant *computePointerDifference(const DataLayout &DL, Value *LHS,
                                           Value *RHS) {
-  return nullptr;
+  if (DisablePeepholes)
+    return nullptr;
+
   Constant *LHSOffset = stripAndComputeConstantOffsets(DL, LHS);
   Constant *RHSOffset = stripAndComputeConstantOffsets(DL, RHS);
 
@@ -759,8 +778,9 @@ static Value *SimplifySubInst(Value *Op0, Value *Op1, bool isNSW, bool isNUW,
   if (Constant *C = foldOrCommuteConstant(Instruction::Sub, Op0, Op1, Q))
     return C;
 
-  return nullptr;
-  
+  if (DisablePeepholes)
+    return nullptr;
+
   // X - undef -> undef
   // undef - X -> undef
   if (match(Op0, m_Undef()) || match(Op1, m_Undef()))
@@ -896,8 +916,9 @@ static Value *SimplifyMulInst(Value *Op0, Value *Op1, const SimplifyQuery &Q,
   if (Constant *C = foldOrCommuteConstant(Instruction::Mul, Op0, Op1, Q))
     return C;
 
-  return nullptr;
-  
+  if (DisablePeepholes)
+    return nullptr;
+
   // X * undef -> 0
   // X * 0 -> 0
   if (match(Op1, m_CombineOr(m_Undef(), m_Zero())))
@@ -954,8 +975,9 @@ Value *llvm::SimplifyMulInst(Value *Op0, Value *Op1, const SimplifyQuery &Q) {
 /// Check for common or similar folds of integer division or integer remainder.
 /// This applies to all 4 opcodes (sdiv/udiv/srem/urem).
 static Value *simplifyDivRem(Value *Op0, Value *Op1, bool IsDiv) {
-  return nullptr;
-  
+  if (DisablePeepholes)
+    return nullptr;
+
   Type *Ty = Op0->getType();
 
   // X / undef -> undef
@@ -1023,8 +1045,9 @@ static bool isICmpTrue(ICmpInst::Predicate Pred, Value *LHS, Value *RHS,
 /// to simplify X % Y to X.
 static bool isDivZero(Value *X, Value *Y, const SimplifyQuery &Q,
                       unsigned MaxRecurse, bool IsSigned) {
-  return false;
-  
+  if (DisablePeepholes)
+    return false;
+
   // Recursion is always used, so bail out at once if we already hit the limit.
   if (!MaxRecurse--)
     return false;
@@ -1079,8 +1102,9 @@ static Value *simplifyDiv(Instruction::BinaryOps Opcode, Value *Op0, Value *Op1,
   if (Constant *C = foldOrCommuteConstant(Opcode, Op0, Op1, Q))
     return C;
 
-  return nullptr;
-  
+  if (DisablePeepholes)
+    return nullptr;
+
   if (Value *V = simplifyDivRem(Op0, Op1, true))
     return V;
 
@@ -1139,8 +1163,9 @@ static Value *simplifyRem(Instruction::BinaryOps Opcode, Value *Op0, Value *Op1,
   if (Constant *C = foldOrCommuteConstant(Opcode, Op0, Op1, Q))
     return C;
 
-  return nullptr;
-  
+  if (DisablePeepholes)
+    return nullptr;
+
   if (Value *V = simplifyDivRem(Op0, Op1, false))
     return V;
 
@@ -1182,7 +1207,9 @@ static Value *simplifyRem(Instruction::BinaryOps Opcode, Value *Op0, Value *Op1,
 /// If not, this returns null.
 static Value *SimplifySDivInst(Value *Op0, Value *Op1, const SimplifyQuery &Q,
                                unsigned MaxRecurse) {
-  return nullptr;
+  if (DisablePeepholes)
+    return nullptr;
+
   // If two operands are negated and no signed overflow, return -1.
   if (isKnownNegation(Op0, Op1, /*NeedNSW=*/true))
     return Constant::getAllOnesValue(Op0->getType());
@@ -1209,7 +1236,9 @@ Value *llvm::SimplifyUDivInst(Value *Op0, Value *Op1, const SimplifyQuery &Q) {
 /// If not, this returns null.
 static Value *SimplifySRemInst(Value *Op0, Value *Op1, const SimplifyQuery &Q,
                                unsigned MaxRecurse) {
-  return nullptr;
+  if (DisablePeepholes)
+    return nullptr;
+
   // If the divisor is 0, the result is undefined, so assume the divisor is -1.
   // srem Op0, (sext i1 X) --> srem Op0, -1 --> 0
   Value *X;
@@ -1272,8 +1301,9 @@ static Value *SimplifyShift(Instruction::BinaryOps Opcode, Value *Op0,
   if (Constant *C = foldOrCommuteConstant(Opcode, Op0, Op1, Q))
     return C;
 
-  return nullptr;
-  
+  if (DisablePeepholes)
+    return nullptr;
+
   // 0 shift by X -> 0
   if (match(Op0, m_Zero()))
     return Constant::getNullValue(Op0->getType());
@@ -1322,8 +1352,9 @@ static Value *SimplifyShift(Instruction::BinaryOps Opcode, Value *Op0,
 static Value *SimplifyRightShift(Instruction::BinaryOps Opcode, Value *Op0,
                                  Value *Op1, bool isExact, const SimplifyQuery &Q,
                                  unsigned MaxRecurse) {
-  return nullptr;
-  
+  if (DisablePeepholes)
+    return nullptr;
+
   if (Value *V = SimplifyShift(Opcode, Op0, Op1, Q, MaxRecurse))
     return V;
 
@@ -1350,8 +1381,9 @@ static Value *SimplifyRightShift(Instruction::BinaryOps Opcode, Value *Op0,
 /// If not, this returns null.
 static Value *SimplifyShlInst(Value *Op0, Value *Op1, bool isNSW, bool isNUW,
                               const SimplifyQuery &Q, unsigned MaxRecurse) {
-  return nullptr;
-  
+  if (DisablePeepholes)
+    return nullptr;
+
   if (Value *V = SimplifyShift(Instruction::Shl, Op0, Op1, Q, MaxRecurse))
     return V;
 
@@ -1384,8 +1416,9 @@ Value *llvm::SimplifyShlInst(Value *Op0, Value *Op1, bool isNSW, bool isNUW,
 /// If not, this returns null.
 static Value *SimplifyLShrInst(Value *Op0, Value *Op1, bool isExact,
                                const SimplifyQuery &Q, unsigned MaxRecurse) {
-  return nullptr;
-  
+  if (DisablePeepholes)
+    return nullptr;
+
   if (Value *V = SimplifyRightShift(Instruction::LShr, Op0, Op1, isExact, Q,
                                     MaxRecurse))
       return V;
@@ -1424,8 +1457,9 @@ Value *llvm::SimplifyLShrInst(Value *Op0, Value *Op1, bool isExact,
 /// If not, this returns null.
 static Value *SimplifyAShrInst(Value *Op0, Value *Op1, bool isExact,
                                const SimplifyQuery &Q, unsigned MaxRecurse) {
-  return nullptr;
-  
+  if (DisablePeepholes)
+    return nullptr;
+
   if (Value *V = SimplifyRightShift(Instruction::AShr, Op0, Op1, isExact, Q,
                                     MaxRecurse))
     return V;
@@ -1458,8 +1492,9 @@ Value *llvm::SimplifyAShrInst(Value *Op0, Value *Op1, bool isExact,
 static Value *simplifyUnsignedRangeCheck(ICmpInst *ZeroICmp,
                                          ICmpInst *UnsignedICmp, bool IsAnd,
                                          const SimplifyQuery &Q) {
-  return nullptr;
-  
+  if (DisablePeepholes)
+    return nullptr;
+
   Value *X, *Y;
 
   ICmpInst::Predicate EqPred;
@@ -1563,7 +1598,9 @@ static Value *simplifyUnsignedRangeCheck(ICmpInst *ZeroICmp,
 /// Commuted variants are assumed to be handled by calling this function again
 /// with the parameters swapped.
 static Value *simplifyAndOfICmpsWithSameOperands(ICmpInst *Op0, ICmpInst *Op1) {
-  return nullptr;
+  if (DisablePeepholes)
+    return nullptr;
+
   ICmpInst::Predicate Pred0, Pred1;
   Value *A ,*B;
   if (!match(Op0, m_ICmp(Pred0, m_Value(A), m_Value(B))) ||
@@ -1589,7 +1626,9 @@ static Value *simplifyAndOfICmpsWithSameOperands(ICmpInst *Op0, ICmpInst *Op1) {
 /// Commuted variants are assumed to be handled by calling this function again
 /// with the parameters swapped.
 static Value *simplifyOrOfICmpsWithSameOperands(ICmpInst *Op0, ICmpInst *Op1) {
-  return nullptr;
+  if (DisablePeepholes)
+    return nullptr;
+
   ICmpInst::Predicate Pred0, Pred1;
   Value *A ,*B;
   if (!match(Op0, m_ICmp(Pred0, m_Value(A), m_Value(B))) ||
@@ -1618,7 +1657,9 @@ static Value *simplifyOrOfICmpsWithSameOperands(ICmpInst *Op0, ICmpInst *Op1) {
 /// the other.
 static Value *simplifyAndOrOfICmpsWithConstants(ICmpInst *Cmp0, ICmpInst *Cmp1,
                                                 bool IsAnd) {
-  return nullptr;
+  if (DisablePeepholes)
+    return nullptr;
+
   // Look for this pattern: {and/or} (icmp X, C0), (icmp X, C1)).
   if (Cmp0->getOperand(0) != Cmp1->getOperand(0))
     return nullptr;
@@ -1656,7 +1697,9 @@ static Value *simplifyAndOrOfICmpsWithConstants(ICmpInst *Cmp0, ICmpInst *Cmp1,
 
 static Value *simplifyAndOrOfICmpsWithZero(ICmpInst *Cmp0, ICmpInst *Cmp1,
                                            bool IsAnd) {
-  return nullptr;
+  if (DisablePeepholes)
+    return nullptr;
+
   ICmpInst::Predicate P0 = Cmp0->getPredicate(), P1 = Cmp1->getPredicate();
   if (!match(Cmp0->getOperand(1), m_Zero()) ||
       !match(Cmp1->getOperand(1), m_Zero()) || P0 != P1)
@@ -1694,7 +1737,9 @@ static Value *simplifyAndOrOfICmpsWithZero(ICmpInst *Cmp0, ICmpInst *Cmp1,
 
 static Value *simplifyAndOfICmpsWithAdd(ICmpInst *Op0, ICmpInst *Op1,
                                         const InstrInfoQuery &IIQ) {
-  return nullptr;
+  if (DisablePeepholes)
+    return nullptr;
+
   // (icmp (add V, C0), C1) & (icmp V, C0)
   ICmpInst::Predicate Pred0, Pred1;
   const APInt *C0, *C1;
@@ -1742,7 +1787,9 @@ static Value *simplifyAndOfICmpsWithAdd(ICmpInst *Op0, ICmpInst *Op1,
 
 static Value *simplifyAndOfICmps(ICmpInst *Op0, ICmpInst *Op1,
                                  const SimplifyQuery &Q) {
-  return nullptr;
+  if (DisablePeepholes)
+    return nullptr;
+
   if (Value *X = simplifyUnsignedRangeCheck(Op0, Op1, /*IsAnd=*/true, Q))
     return X;
   if (Value *X = simplifyUnsignedRangeCheck(Op1, Op0, /*IsAnd=*/true, Q))
@@ -1769,7 +1816,9 @@ static Value *simplifyAndOfICmps(ICmpInst *Op0, ICmpInst *Op1,
 
 static Value *simplifyOrOfICmpsWithAdd(ICmpInst *Op0, ICmpInst *Op1,
                                        const InstrInfoQuery &IIQ) {
-  return nullptr;
+  if (DisablePeepholes)
+    return nullptr;
+
   // (icmp (add V, C0), C1) | (icmp V, C0)
   ICmpInst::Predicate Pred0, Pred1;
   const APInt *C0, *C1;
@@ -1817,7 +1866,9 @@ static Value *simplifyOrOfICmpsWithAdd(ICmpInst *Op0, ICmpInst *Op1,
 
 static Value *simplifyOrOfICmps(ICmpInst *Op0, ICmpInst *Op1,
                                 const SimplifyQuery &Q) {
-  return nullptr;
+  if (DisablePeepholes)
+    return nullptr;
+
   if (Value *X = simplifyUnsignedRangeCheck(Op0, Op1, /*IsAnd=*/false, Q))
     return X;
   if (Value *X = simplifyUnsignedRangeCheck(Op1, Op0, /*IsAnd=*/false, Q))
@@ -1844,7 +1895,9 @@ static Value *simplifyOrOfICmps(ICmpInst *Op0, ICmpInst *Op1,
 
 static Value *simplifyAndOrOfFCmps(const TargetLibraryInfo *TLI,
                                    FCmpInst *LHS, FCmpInst *RHS, bool IsAnd) {
-  return nullptr;
+  if (DisablePeepholes)
+    return nullptr;
+
   Value *LHS0 = LHS->getOperand(0), *LHS1 = LHS->getOperand(1);
   Value *RHS0 = RHS->getOperand(0), *RHS1 = RHS->getOperand(1);
   if (LHS0->getType() != RHS0->getType())
@@ -1883,7 +1936,9 @@ static Value *simplifyAndOrOfFCmps(const TargetLibraryInfo *TLI,
 
 static Value *simplifyAndOrOfCmps(const SimplifyQuery &Q,
                                   Value *Op0, Value *Op1, bool IsAnd) {
-  return nullptr;
+  if (DisablePeepholes)
+    return nullptr;
+
   // Look through casts of the 'and' operands to find compares.
   auto *Cast0 = dyn_cast<CastInst>(Op0);
   auto *Cast1 = dyn_cast<CastInst>(Op1);
@@ -1923,7 +1978,9 @@ static Value *simplifyAndOrOfCmps(const SimplifyQuery &Q,
 ///   %Op1 = extractvalue { i4, i1 } %Agg, 1
 static bool omitCheckForZeroBeforeMulWithOverflowInternal(Value *Op1,
                                                           Value *X) {
-  return false;
+  if (DisablePeepholes)
+    return false;
+
   auto *Extract = dyn_cast<ExtractValueInst>(Op1);
   // We should only be extracting the overflow bit.
   if (!Extract || !Extract->getIndices().equals(1))
@@ -1950,7 +2007,9 @@ static bool omitCheckForZeroBeforeMulWithOverflowInternal(Value *Op1,
 ///   %??? = and i1 %Op0, %Op1
 /// We can just return  %Op1
 static Value *omitCheckForZeroBeforeMulWithOverflow(Value *Op0, Value *Op1) {
-  return nullptr;
+  if (DisablePeepholes)
+    return nullptr;
+
   ICmpInst::Predicate Pred;
   Value *X;
   if (!match(Op0, m_ICmp(Pred, m_Value(X), m_Zero())) ||
@@ -1975,7 +2034,9 @@ static Value *omitCheckForZeroBeforeMulWithOverflow(Value *Op0, Value *Op1) {
 /// We can just return  %NotOp1
 static Value *omitCheckForZeroBeforeInvertedMulWithOverflow(Value *Op0,
                                                             Value *NotOp1) {
-  return nullptr;
+  if (DisablePeepholes)
+    return nullptr;
+
   ICmpInst::Predicate Pred;
   Value *X;
   if (!match(Op0, m_ICmp(Pred, m_Value(X), m_Zero())) ||
@@ -1999,8 +2060,9 @@ static Value *SimplifyAndInst(Value *Op0, Value *Op1, const SimplifyQuery &Q,
   if (Constant *C = foldOrCommuteConstant(Instruction::And, Op0, Op1, Q))
     return C;
 
-  return nullptr;
-  
+  if (DisablePeepholes)
+    return nullptr;
+
   // X & undef -> 0
   if (match(Op1, m_Undef()))
     return Constant::getNullValue(Op0->getType());
@@ -2157,8 +2219,9 @@ static Value *SimplifyOrInst(Value *Op0, Value *Op1, const SimplifyQuery &Q,
   if (Constant *C = foldOrCommuteConstant(Instruction::Or, Op0, Op1, Q))
     return C;
 
-  return nullptr;
-  
+  if (DisablePeepholes)
+    return nullptr;
+
   // X | undef -> -1
   // X | -1 = -1
   // Do not return Op1 because it may contain undef elements if it's a vector.
@@ -2300,7 +2363,9 @@ Value *llvm::SimplifyOrInst(Value *Op0, Value *Op1, const SimplifyQuery &Q) {
 /// If not, this returns null.
 static Value *SimplifyXorInst(Value *Op0, Value *Op1, const SimplifyQuery &Q,
                               unsigned MaxRecurse) {
-  return nullptr;
+  if (DisablePeepholes)
+    return nullptr;
+
   if (Constant *C = foldOrCommuteConstant(Instruction::Xor, Op0, Op1, Q))
     return C;
 
@@ -2352,7 +2417,9 @@ static Type *GetCompareTy(Value *Op) {
 /// Helper function for analyzing max/min idioms.
 static Value *ExtractEquivalentCondition(Value *V, CmpInst::Predicate Pred,
                                          Value *LHS, Value *RHS) {
-  return nullptr;
+  if (DisablePeepholes)
+    return nullptr;
+
   SelectInst *SI = dyn_cast<SelectInst>(V);
   if (!SI)
     return nullptr;
@@ -2401,7 +2468,9 @@ computePointerICmp(const DataLayout &DL, const TargetLibraryInfo *TLI,
                    const DominatorTree *DT, CmpInst::Predicate Pred,
                    AssumptionCache *AC, const Instruction *CxtI,
                    const InstrInfoQuery &IIQ, Value *LHS, Value *RHS) {
-  return nullptr;
+  if (DisablePeepholes)
+    return nullptr;
+
   // First, skip past any trivial no-ops.
   LHS = LHS->stripPointerCasts();
   RHS = RHS->stripPointerCasts();
@@ -2586,7 +2655,9 @@ computePointerICmp(const DataLayout &DL, const TargetLibraryInfo *TLI,
 /// Fold an icmp when its operands have i1 scalar type.
 static Value *simplifyICmpOfBools(CmpInst::Predicate Pred, Value *LHS,
                                   Value *RHS, const SimplifyQuery &Q) {
-  return nullptr;
+  if (DisablePeepholes)
+    return nullptr;
+
   Type *ITy = GetCompareTy(LHS); // The return type.
   Type *OpTy = LHS->getType();   // The operand type.
   if (!OpTy->isIntOrIntVectorTy(1))
@@ -2661,7 +2732,9 @@ static Value *simplifyICmpOfBools(CmpInst::Predicate Pred, Value *LHS,
 /// Try hard to fold icmp with zero RHS because this is a common case.
 static Value *simplifyICmpWithZero(CmpInst::Predicate Pred, Value *LHS,
                                    Value *RHS, const SimplifyQuery &Q) {
-  return nullptr;
+  if (DisablePeepholes)
+    return nullptr;
+
   if (!match(RHS, m_Zero()))
     return nullptr;
 
@@ -2724,7 +2797,9 @@ static Value *simplifyICmpWithZero(CmpInst::Predicate Pred, Value *LHS,
 
 static Value *simplifyICmpWithConstant(CmpInst::Predicate Pred, Value *LHS,
                                        Value *RHS, const InstrInfoQuery &IIQ) {
-  return nullptr;
+  if (DisablePeepholes)
+    return nullptr;
+
   Type *ITy = GetCompareTy(RHS); // The return type.
 
   Value *X;
@@ -2767,7 +2842,9 @@ static Value *simplifyICmpWithConstant(CmpInst::Predicate Pred, Value *LHS,
 static Value *simplifyICmpWithBinOp(CmpInst::Predicate Pred, Value *LHS,
                                     Value *RHS, const SimplifyQuery &Q,
                                     unsigned MaxRecurse) {
-  return nullptr;
+  if (DisablePeepholes)
+    return nullptr;
+
   Type *ITy = GetCompareTy(LHS); // The return type.
 
   BinaryOperator *LBO = dyn_cast<BinaryOperator>(LHS);
@@ -3082,7 +3159,9 @@ static Value *simplifyICmpWithBinOp(CmpInst::Predicate Pred, Value *LHS,
 static Value *simplifyICmpWithMinMax(CmpInst::Predicate Pred, Value *LHS,
                                      Value *RHS, const SimplifyQuery &Q,
                                      unsigned MaxRecurse) {
-  return nullptr;
+  if (DisablePeepholes)
+    return nullptr;
+
   Type *ITy = GetCompareTy(LHS); // The return type.
   Value *A, *B;
   CmpInst::Predicate P = CmpInst::BAD_ICMP_PREDICATE;
@@ -3592,7 +3671,9 @@ static Value *SimplifyFCmpInst(unsigned Predicate, Value *LHS, Value *RHS,
     if (Constant *CRHS = dyn_cast<Constant>(RHS))
       return ConstantFoldCompareInstOperands(Pred, CLHS, CRHS, Q.DL, Q.TLI);
 
-  return nullptr;
+    if (DisablePeepholes)
+      return nullptr;
+
     // If we have a constant, make sure it is on the RHS.
     std::swap(LHS, RHS);
     Pred = CmpInst::getSwappedPredicate(Pred);
@@ -4435,7 +4516,7 @@ Value *llvm::SimplifyExtractElementInst(Value *Vec, Value *Idx,
 static Value *SimplifyPHINode(PHINode *PN, const SimplifyQuery &Q) {
 
   // JDR: can't disable this w/o breaking the compiler
-  
+
   // If all of the PHI's incoming values are the same then replace the PHI node
   // with the common value.
   Value *CommonValue = nullptr;

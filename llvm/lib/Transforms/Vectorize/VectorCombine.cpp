@@ -297,6 +297,7 @@ public:
   bool runOnFunction(Function &F) override {
     if (DisablePeepholes)
       return false;
+
     if (skipFunction(F))
       return false;
     auto &TTI = getAnalysis<TargetTransformInfoWrapperPass>().getTTI(F);

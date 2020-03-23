@@ -111,6 +111,8 @@
 using namespace llvm;
 using namespace llvm::PatternMatch;
 
+extern bool DisablePeepholes;
+
 #define DEBUG_TYPE "instcombine"
 
 STATISTIC(NumCombined , "Number of insts combined");
@@ -3846,7 +3848,8 @@ void InstructionCombiningPass::getAnalysisUsage(AnalysisUsage &AU) const {
 }
 
 bool InstructionCombiningPass::runOnFunction(Function &F) {
-  return false;
+  if (DisablePeepholes)
+    return false;
 
   if (skipFunction(F))
     return false;
