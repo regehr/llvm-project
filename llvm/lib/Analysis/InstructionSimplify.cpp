@@ -43,9 +43,13 @@
 using namespace llvm;
 using namespace llvm::PatternMatch;
 
+#if 0
 cl::opt<bool> DisablePeepholes(
     "disable-peepholes", cl::init(false),
     cl::desc("Don't run peephole passes."));
+#else
+bool DisablePeepholes = false;
+#endif
 
 #define DEBUG_TYPE "instsimplify"
 
