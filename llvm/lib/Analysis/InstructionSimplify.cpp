@@ -43,7 +43,7 @@
 using namespace llvm;
 using namespace llvm::PatternMatch;
 
-bool DisablePeepholes = true;
+bool DisablePeepholes = false;
 
 // "true" for 2nd template argument means use external storage
 static cl::opt<bool, true>
