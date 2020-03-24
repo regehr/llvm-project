@@ -43,8 +43,9 @@
 using namespace llvm;
 using namespace llvm::PatternMatch;
 
-bool DisablePeepholes = false;
+bool DisablePeepholes = true;
 
+// "true" for 2nd template argument means use external storage
 static cl::opt<bool, true>
 DisablePeepholesOption("disable-all-peepholes",
                        cl::desc("Don't perform peephole optimizations"),
@@ -217,9 +218,6 @@ static Value *handleOtherCmpSelSimplifications(Value *TCmp, Value *FCmp,
 
 /// Does the given value dominate the specified phi node?
 static bool valueDominatesPHI(Value *V, PHINode *P, const DominatorTree *DT) {
-  if (DisablePeepholes)
-    return false;
-
   Instruction *I = dyn_cast<Instruction>(V);
   if (!I)
     // Arguments and constants dominate all instructions.
@@ -5656,9 +5654,6 @@ Value *llvm::SimplifyFreezeInst(Value *Op0, const SimplifyQuery &Q) {
 
 Value *llvm::SimplifyInstruction(Instruction *I, const SimplifyQuery &SQ,
                                  OptimizationRemarkEmitter *ORE) {
-  if (DisablePeepholes)
-    return nullptr;
-
   const SimplifyQuery Q = SQ.CxtI ? SQ : SQ.getWithInstruction(I);
   Value *Result;
 
