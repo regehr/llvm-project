@@ -444,15 +444,15 @@ static bool isScalarLoadLegal(const MachineInstr &MI) {
                        AS == AMDGPUAS::CONSTANT_ADDRESS_32BIT;
 
   // There are no extending SMRD/SMEM loads, and they require 4-byte alignment.
-  return MMO->getSize() >= 4 && MMO->getAlignment() >= 4 &&
-    // Can't do a scalar atomic load.
-    !MMO->isAtomic() &&
-    // Don't use scalar loads for volatile accesses to non-constant address
-    // spaces.
-    (IsConst || !MMO->isVolatile()) &&
-    // Memory must be known constant, or not written before this load.
-    (IsConst || MMO->isInvariant() || memOpHasNoClobbered(MMO)) &&
-    AMDGPUInstrInfo::isUniformMMO(MMO);
+  return MMO->getSize() >= 4 && MMO->getAlign() >= Align(4) &&
+         // Can't do a scalar atomic load.
+         !MMO->isAtomic() &&
+         // Don't use scalar loads for volatile accesses to non-constant address
+         // spaces.
+         (IsConst || !MMO->isVolatile()) &&
+         // Memory must be known constant, or not written before this load.
+         (IsConst || MMO->isInvariant() || memOpHasNoClobbered(MMO)) &&
+         AMDGPUInstrInfo::isUniformMMO(MMO);
 }
 
 RegisterBankInfo::InstructionMappings
@@ -3284,6 +3284,7 @@ AMDGPURegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
   case AMDGPU::G_FCANONICALIZE:
   case AMDGPU::G_INTRINSIC_TRUNC:
   case AMDGPU::G_BSWAP: // TODO: Somehow expand for scalar?
+  case AMDGPU::G_FSHR: // TODO: Expand for scalar
   case AMDGPU::G_AMDGPU_FFBH_U32:
   case AMDGPU::G_AMDGPU_FMIN_LEGACY:
   case AMDGPU::G_AMDGPU_FMAX_LEGACY:

@@ -1200,7 +1200,7 @@ void IRTranslator::getStackGuard(Register DstReg,
                MachineMemOperand::MODereferenceable;
   MachineMemOperand *MemRef =
       MF->getMachineMemOperand(MPInfo, Flags, DL->getPointerSizeInBits() / 8,
-                               DL->getPointerABIAlignment(0).value());
+                               DL->getPointerABIAlignment(0));
   MIB.setMemRefs({MemRef});
 }
 
@@ -1220,8 +1220,12 @@ unsigned IRTranslator::getSimpleIntrinsicOpcode(Intrinsic::ID ID) {
       break;
     case Intrinsic::bswap:
       return TargetOpcode::G_BSWAP;
-  case Intrinsic::bitreverse:
+    case Intrinsic::bitreverse:
       return TargetOpcode::G_BITREVERSE;
+    case Intrinsic::fshl:
+      return TargetOpcode::G_FSHL;
+    case Intrinsic::fshr:
+      return TargetOpcode::G_FSHR;
     case Intrinsic::ceil:
       return TargetOpcode::G_FCEIL;
     case Intrinsic::cos:
@@ -1384,8 +1388,9 @@ bool IRTranslator::translateKnownIntrinsic(const CallInst &CI, Intrinsic::ID ID,
 
     // FIXME: Get alignment
     MIRBuilder.buildInstr(TargetOpcode::G_VASTART, {}, {getOrCreateVReg(*Ptr)})
-        .addMemOperand(MF->getMachineMemOperand(
-            MachinePointerInfo(Ptr), MachineMemOperand::MOStore, ListSize, 1));
+        .addMemOperand(MF->getMachineMemOperand(MachinePointerInfo(Ptr),
+                                                MachineMemOperand::MOStore,
+                                                ListSize, Align(1)));
     return true;
   }
   case Intrinsic::dbg_value: {
@@ -1711,14 +1716,12 @@ bool IRTranslator::translateCall(const User &U, MachineIRBuilder &MIRBuilder) {
   TargetLowering::IntrinsicInfo Info;
   // TODO: Add a GlobalISel version of getTgtMemIntrinsic.
   if (TLI.getTgtMemIntrinsic(Info, CI, *MF, ID)) {
-    MaybeAlign Align = Info.align;
-    if (!Align)
-      Align = MaybeAlign(
-          DL->getABITypeAlignment(Info.memVT.getTypeForEVT(F->getContext())));
+    Align Alignment = Info.align.getValueOr(
+        DL->getABITypeAlign(Info.memVT.getTypeForEVT(F->getContext())));
 
     uint64_t Size = Info.memVT.getStoreSize();
-    MIB.addMemOperand(MF->getMachineMemOperand(
-        MachinePointerInfo(Info.ptrVal), Info.flags, Size, Align->value()));
+    MIB.addMemOperand(MF->getMachineMemOperand(MachinePointerInfo(Info.ptrVal),
+                                               Info.flags, Size, Alignment));
   }
 
   return true;

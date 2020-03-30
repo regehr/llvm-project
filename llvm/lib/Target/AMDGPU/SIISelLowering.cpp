@@ -1439,7 +1439,7 @@ SDValue SITargetLowering::convertArgType(SelectionDAG &DAG, EVT VT, EVT MemVT,
   }
 
   if (MemVT.isFloatingPoint())
-    Val = getFPExtOrFPTrunc(DAG, Val, SL, VT);
+    Val = getFPExtOrFPRound(DAG, Val, SL, VT);
   else if (Signed)
     Val = DAG.getSExtOrTrunc(Val, SL, VT);
   else
@@ -4538,13 +4538,14 @@ SDValue SITargetLowering::LowerRETURNADDR(SDValue Op,
   return DAG.getCopyFromReg(DAG.getEntryNode(), DL, Reg, VT);
 }
 
-SDValue SITargetLowering::getFPExtOrFPTrunc(SelectionDAG &DAG,
+SDValue SITargetLowering::getFPExtOrFPRound(SelectionDAG &DAG,
                                             SDValue Op,
                                             const SDLoc &DL,
                                             EVT VT) const {
   return Op.getValueType().bitsLE(VT) ?
       DAG.getNode(ISD::FP_EXTEND, DL, VT, Op) :
-      DAG.getNode(ISD::FTRUNC, DL, VT, Op);
+    DAG.getNode(ISD::FP_ROUND, DL, VT, Op,
+                DAG.getTargetConstant(0, DL, MVT::i32));
 }
 
 SDValue SITargetLowering::lowerFP_ROUND(SDValue Op, SelectionDAG &DAG) const {
@@ -4570,7 +4571,7 @@ SDValue SITargetLowering::lowerFMINNUM_FMAXNUM(SDValue Op,
   const SIMachineFunctionInfo *Info = MF.getInfo<SIMachineFunctionInfo>();
   bool IsIEEEMode = Info->getMode().IEEE;
 
-  // FIXME: Assert during eslection that this is only selected for
+  // FIXME: Assert during selection that this is only selected for
   // ieee_mode. Currently a combine can produce the ieee version for non-ieee
   // mode functions, but this happens to be OK since it's only done in cases
   // where there is known no sNaN.
@@ -6021,6 +6022,16 @@ SDValue SITargetLowering::LowerINTRINSIC_WO_CHAIN(SDValue Op,
   case Intrinsic::amdgcn_alignbit:
     return DAG.getNode(ISD::FSHR, DL, VT,
                        Op.getOperand(1), Op.getOperand(2), Op.getOperand(3));
+  case Intrinsic::amdgcn_reloc_constant: {
+    Module *M = const_cast<Module *>(MF.getFunction().getParent());
+    const MDNode *Metadata = cast<MDNodeSDNode>(Op.getOperand(1))->getMD();
+    auto SymbolName = cast<MDString>(Metadata->getOperand(0))->getString();
+    auto RelocSymbol = cast<GlobalVariable>(
+        M->getOrInsertGlobal(SymbolName, Type::getInt32Ty(M->getContext())));
+    SDValue GA = DAG.getTargetGlobalAddress(RelocSymbol, DL, MVT::i32, 0,
+                                            SIInstrInfo::MO_ABS32_LO);
+    return {DAG.getMachineNode(AMDGPU::S_MOV_B32, DL, MVT::i32, GA), 0};
+  }
   default:
     if (const AMDGPU::ImageDimIntrinsicInfo *ImageDimIntr =
             AMDGPU::getImageDimIntrinsicInfo(IntrinsicID))

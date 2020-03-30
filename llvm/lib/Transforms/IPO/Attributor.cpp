@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file implements an inter procedural pass that deduces and/or propagating
+// This file implements an interprocedural pass that deduces and/or propagates
 // attributes. This is done in an abstract interpretation style fixpoint
 // iteration. See the Attributor.h file comment and the class descriptions in
 // that file for more information.
@@ -54,9 +54,9 @@ using namespace llvm;
 #define DEBUG_TYPE "attributor"
 
 STATISTIC(NumFnWithExactDefinition,
-          "Number of function with exact definitions");
+          "Number of functions with exact definitions");
 STATISTIC(NumFnWithoutExactDefinition,
-          "Number of function without exact definitions");
+          "Number of functions without exact definitions");
 STATISTIC(NumAttributesTimedOut,
           "Number of abstract attributes timed out before fixpoint");
 STATISTIC(NumAttributesValidFixpoint,
@@ -677,7 +677,7 @@ SubsumingPositionIterator::SubsumingPositionIterator(const IRPosition &IRP) {
 }
 
 bool IRPosition::hasAttr(ArrayRef<Attribute::AttrKind> AKs,
-                         bool IgnoreSubsumingPositions) const {
+                         bool IgnoreSubsumingPositions, Attributor *A) const {
   SmallVector<Attribute, 4> Attrs;
   for (const IRPosition &EquivIRP : SubsumingPositionIterator(*this)) {
     for (Attribute::AttrKind AK : AKs)
@@ -689,12 +689,16 @@ bool IRPosition::hasAttr(ArrayRef<Attribute::AttrKind> AKs,
     if (IgnoreSubsumingPositions)
       break;
   }
+  if (A)
+    for (Attribute::AttrKind AK : AKs)
+      if (getAttrsFromAssumes(AK, Attrs, *A))
+        return true;
   return false;
 }
 
 void IRPosition::getAttrs(ArrayRef<Attribute::AttrKind> AKs,
                           SmallVectorImpl<Attribute> &Attrs,
-                          bool IgnoreSubsumingPositions) const {
+                          bool IgnoreSubsumingPositions, Attributor *A) const {
   for (const IRPosition &EquivIRP : SubsumingPositionIterator(*this)) {
     for (Attribute::AttrKind AK : AKs)
       EquivIRP.getAttrsFromIRAttr(AK, Attrs);
@@ -704,6 +708,9 @@ void IRPosition::getAttrs(ArrayRef<Attribute::AttrKind> AKs,
     if (IgnoreSubsumingPositions)
       break;
   }
+  if (A)
+    for (Attribute::AttrKind AK : AKs)
+     getAttrsFromAssumes(AK, Attrs, *A);
 }
 
 bool IRPosition::getAttrsFromIRAttr(Attribute::AttrKind AK,
@@ -721,6 +728,31 @@ bool IRPosition::getAttrsFromIRAttr(Attribute::AttrKind AK,
   if (HasAttr)
     Attrs.push_back(AttrList.getAttribute(getAttrIdx(), AK));
   return HasAttr;
+}
+
+bool IRPosition::getAttrsFromAssumes(Attribute::AttrKind AK,
+                                     SmallVectorImpl<Attribute> &Attrs,
+                                     Attributor &A) const {
+  assert(getPositionKind() != IRP_INVALID && "Did expect a valid position!");
+  Value &AssociatedValue = getAssociatedValue();
+
+  const Assume2KnowledgeMap &A2K =
+      A.getInfoCache().getKnowledgeMap().lookup({&AssociatedValue, AK});
+
+  // Check if we found any potential assume use, if not we don't need to create
+  // explorer iterators.
+  if (A2K.empty())
+    return false;
+
+  LLVMContext &Ctx = AssociatedValue.getContext();
+  unsigned AttrsSize = Attrs.size();
+  MustBeExecutedContextExplorer &Explorer =
+      A.getInfoCache().getMustBeExecutedContextExplorer();
+  auto EIt = Explorer.begin(getCtxI()), EEnd = Explorer.end(getCtxI());
+  for (auto &It : A2K)
+    if (Explorer.findInContextOf(It.first, EIt, EEnd))
+      Attrs.push_back(Attribute::get(Ctx, AK, It.second.Max));
+  return AttrsSize != Attrs.size();
 }
 
 void IRPosition::verify() {
@@ -1302,7 +1334,7 @@ ChangeStatus AAReturnedValuesImpl::manifest(Attributor &A) {
   // Bookkeeping.
   assert(isValidState());
   STATS_DECLTRACK(KnownReturnValues, FunctionReturn,
-                  "Number of function with known return values");
+                  "Number of functions with known return values");
 
   // Check if we have an assumed unique return value that we could manifest.
   Optional<Value *> UniqueRV = getAssumedUniqueReturnValue(A);
@@ -1312,7 +1344,7 @@ ChangeStatus AAReturnedValuesImpl::manifest(Attributor &A) {
 
   // Bookkeeping.
   STATS_DECLTRACK(UniqueReturnValue, FunctionReturn,
-                  "Number of function with unique return");
+                  "Number of functions with a unique return");
 
   // Callback to replace the uses of CB with the constant C.
   auto ReplaceCallSiteUsersWith = [&A](CallBase &CB, Constant &C) {
@@ -2057,7 +2089,8 @@ struct AANonNullImpl : AANonNull {
   /// See AbstractAttribute::initialize(...).
   void initialize(Attributor &A) override {
     if (!NullIsDefined &&
-        hasAttr({Attribute::NonNull, Attribute::Dereferenceable}))
+        hasAttr({Attribute::NonNull, Attribute::Dereferenceable},
+                /* IgnoreSubsumingPositions */ false, &A))
       indicateOptimisticFixpoint();
     else if (isa<ConstantPointerNull>(getAssociatedValue()))
       indicatePessimisticFixpoint();
@@ -3643,7 +3676,7 @@ struct AADereferenceableImpl : AADereferenceable {
   void initialize(Attributor &A) override {
     SmallVector<Attribute, 4> Attrs;
     getAttrs({Attribute::Dereferenceable, Attribute::DereferenceableOrNull},
-             Attrs);
+             Attrs, /* IgnoreSubsumingPositions */ false, &A);
     for (const Attribute &Attr : Attrs)
       takeKnownDerefBytesMaximum(Attr.getValueAsInt());
 
@@ -4394,8 +4427,9 @@ struct AACaptureUseTracker final : public CaptureTracker {
 
   /// See CaptureTracker::shouldExplore(...).
   bool shouldExplore(const Use *U) override {
-    // Check liveness.
-    return !A.isAssumedDead(*U, &NoCaptureAA, &IsDeadAA);
+    // Check liveness and ignore droppable users.
+    return !U->getUser()->isDroppable() &&
+           !A.isAssumedDead(*U, &NoCaptureAA, &IsDeadAA);
   }
 
   /// Update the state according to \p CapturedInMem, \p CapturedInInt, and
@@ -4999,7 +5033,7 @@ struct AAHeapToStackImpl : public AAHeapToStack {
       Constant *Size;
       if (isCallocLikeFn(MallocCall, TLI)) {
         auto *Num = cast<ConstantInt>(MallocCall->getOperand(0));
-        auto *SizeT = dyn_cast<ConstantInt>(MallocCall->getOperand(1));
+        auto *SizeT = cast<ConstantInt>(MallocCall->getOperand(1));
         APInt TotalSize = SizeT->getValue() * Num->getValue();
         Size =
             ConstantInt::get(MallocCall->getOperand(0)->getType(), TotalSize);
@@ -5025,6 +5059,7 @@ struct AAHeapToStackImpl : public AAHeapToStack {
         A.deleteAfterManifest(*MallocCall);
       }
 
+      // Zero out the allocated memory if it was a calloc.
       if (isCallocLikeFn(MallocCall, TLI)) {
         auto *BI = new BitCastInst(AI, MallocCall->getType(), "calloc_bc",
                                    AI->getNextNode());
@@ -5182,7 +5217,7 @@ ChangeStatus AAHeapToStackImpl::updateImpl(Attributor &A) {
 struct AAHeapToStackFunction final : public AAHeapToStackImpl {
   AAHeapToStackFunction(const IRPosition &IRP) : AAHeapToStackImpl(IRP) {}
 
-  /// See AbstractAttribute::trackStatistics()
+  /// See AbstractAttribute::trackStatistics().
   void trackStatistics() const override {
     STATS_DECL(MallocCalls, Function,
                "Number of malloc calls converted to allocas");
@@ -6155,6 +6190,10 @@ ChangeStatus AAMemoryBehaviorFloating::updateImpl(Attributor &A) {
                       << " [Dead: " << (A.isAssumedDead(*U, this, &LivenessAA))
                       << "]\n");
     if (A.isAssumedDead(*U, this, &LivenessAA))
+      continue;
+
+    // Droppable users, e.g., llvm::assume does not actually perform any action.
+    if (UserI->isDroppable())
       continue;
 
     // Check if the users of UserI should also be visited.
@@ -7414,6 +7453,10 @@ bool Attributor::checkForAllUses(function_ref<bool(const Use &, bool &)> Pred,
       LLVM_DEBUG(dbgs() << "[Attributor] Dead use, skip!\n");
       continue;
     }
+    if (U->getUser()->isDroppable()) {
+      LLVM_DEBUG(dbgs() << "[Attributor] Droppable user, skip!\n");
+      continue;
+    }
 
     bool Follow = false;
     if (!Pred(*U, Follow))
@@ -8308,11 +8351,18 @@ void Attributor::initializeInformationCache(Function &F) {
              "New call site/base instruction type needs to be known in the "
              "Attributor.");
       break;
+    case Instruction::Call:
+      // Calls are interesting but for `llvm.assume` calls we also fill the
+      // KnowledgeMap as we find them.
+      if (IntrinsicInst *Assume = dyn_cast<IntrinsicInst>(&I)) {
+        if (Assume->getIntrinsicID() == Intrinsic::assume)
+          fillMapFromAssume(*Assume, InfoCache.KnowledgeMap);
+      }
+      LLVM_FALLTHROUGH;
     case Instruction::Load:
       // The alignment of a pointer is interesting for loads.
     case Instruction::Store:
       // The alignment of a pointer is interesting for stores.
-    case Instruction::Call:
     case Instruction::CallBr:
     case Instruction::Invoke:
     case Instruction::CleanupRet:

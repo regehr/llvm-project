@@ -266,7 +266,7 @@ static void ClearSubclassDataAfterReassociation(BinaryOperator &I) {
 /// cast to eliminate one of the associative operations:
 /// (op (cast (op X, C2)), C1) --> (cast (op X, op (C1, C2)))
 /// (op (cast (op X, C2)), C1) --> (op (cast X), op (C1, C2))
-static bool simplifyAssocCastAssoc(BinaryOperator *BinOp1) {
+static bool simplifyAssocCastAssoc(BinaryOperator *BinOp1, InstCombiner &IC) {
   auto *Cast = dyn_cast<CastInst>(BinOp1->getOperand(0));
   if (!Cast || !Cast->hasOneUse())
     return false;
@@ -299,8 +299,8 @@ static bool simplifyAssocCastAssoc(BinaryOperator *BinOp1) {
   Type *DestTy = C1->getType();
   Constant *CastC2 = ConstantExpr::getCast(CastOpcode, C2, DestTy);
   Constant *FoldedC = ConstantExpr::get(AssocOpcode, C1, CastC2);
-  Cast->setOperand(0, BinOp2->getOperand(0));
-  BinOp1->setOperand(1, FoldedC);
+  IC.replaceOperand(*Cast, 0, BinOp2->getOperand(0));
+  IC.replaceOperand(*BinOp1, 1, FoldedC);
   return true;
 }
 
@@ -395,7 +395,7 @@ bool InstCombiner::SimplifyAssociativeOrCommutative(BinaryOperator &I) {
     }
 
     if (I.isAssociative() && I.isCommutative()) {
-      if (simplifyAssocCastAssoc(&I)) {
+      if (simplifyAssocCastAssoc(&I, *this)) {
         Changed = true;
         ++NumReassoc;
         continue;
@@ -1977,8 +1977,6 @@ Instruction *InstCombiner::visitGetElementPtrInst(GetElementPtrInst &GEP) {
     if (DI == -1) {
       // All the GEPs feeding the PHI are identical. Clone one down into our
       // BB so that it can be merged with the current GEP.
-      GEP.getParent()->getInstList().insert(
-          GEP.getParent()->getFirstInsertionPt(), NewGEP);
     } else {
       // All the GEPs feeding the PHI differ at a single offset. Clone a GEP
       // into the current block so it can be merged, and create a new PHI to
@@ -1996,12 +1994,11 @@ Instruction *InstCombiner::visitGetElementPtrInst(GetElementPtrInst &GEP) {
                            PN->getIncomingBlock(I));
 
       NewGEP->setOperand(DI, NewPN);
-      GEP.getParent()->getInstList().insert(
-          GEP.getParent()->getFirstInsertionPt(), NewGEP);
-      NewGEP->setOperand(DI, NewPN);
     }
 
-    GEP.setOperand(0, NewGEP);
+    GEP.getParent()->getInstList().insert(
+        GEP.getParent()->getFirstInsertionPt(), NewGEP);
+    replaceOperand(GEP, 0, NewGEP);
     PtrOp = NewGEP;
   }
 
@@ -2101,8 +2098,8 @@ Instruction *InstCombiner::visitGetElementPtrInst(GetElementPtrInst &GEP) {
       // Update the GEP in place if possible.
       if (Src->getNumOperands() == 2) {
         GEP.setIsInBounds(isMergedGEPInBounds(*Src, *cast<GEPOperator>(&GEP)));
-        GEP.setOperand(0, Src->getOperand(0));
-        GEP.setOperand(1, Sum);
+        replaceOperand(GEP, 0, Src->getOperand(0));
+        replaceOperand(GEP, 1, Sum);
         return &GEP;
       }
       Indices.append(Src->op_begin()+1, Src->op_end()-1);
@@ -2220,9 +2217,8 @@ Instruction *InstCombiner::visitGetElementPtrInst(GetElementPtrInst &GEP) {
             // array.  Because the array type is never stepped over (there
             // is a leading zero) we can fold the cast into this GEP.
             if (StrippedPtrTy->getAddressSpace() == GEP.getAddressSpace()) {
-              GEP.setOperand(0, StrippedPtr);
               GEP.setSourceElementType(XATy);
-              return &GEP;
+              return replaceOperand(GEP, 0, StrippedPtr);
             }
             // Cannot replace the base pointer directly because StrippedPtr's
             // address space is different. Instead, create a new GEP followed by
@@ -3354,7 +3350,7 @@ Instruction *InstCombiner::visitFreeze(FreezeInst &I) {
 /// instruction past all of the instructions between it and the end of its
 /// block.
 static bool TryToSinkInstruction(Instruction *I, BasicBlock *DestBlock) {
-  assert(I->hasOneUse() && "Invariants didn't hold!");
+  assert(I->getSingleUndroppableUse() && "Invariants didn't hold!");
   BasicBlock *SrcBlock = I->getParent();
 
   // Cannot move control-flow-involving, volatile loads, vaarg, etc.
@@ -3387,6 +3383,15 @@ static bool TryToSinkInstruction(Instruction *I, BasicBlock *DestBlock) {
       if (Scan->mayWriteToMemory())
         return false;
   }
+
+  I->dropDroppableUses([DestBlock](const Use *U) {
+    if (auto *I = dyn_cast<Instruction>(U->getUser()))
+      return I->getParent() != DestBlock;
+    return true;
+  });
+  /// FIXME: We could remove droppable uses that are not dominated by
+  /// the new position.
+
   BasicBlock::iterator InsertPos = DestBlock->getFirstInsertionPt();
   I->moveBefore(&*InsertPos);
   ++NumSunkInst;
@@ -3490,44 +3495,46 @@ bool InstCombiner::run() {
     }
 
     // See if we can trivially sink this instruction to a successor basic block.
-    if (EnableCodeSinking && I->hasOneUse()) {
-      BasicBlock *BB = I->getParent();
-      Instruction *UserInst = cast<Instruction>(*I->user_begin());
-      BasicBlock *UserParent;
+    if (EnableCodeSinking)
+      if (Use *SingleUse = I->getSingleUndroppableUse()) {
+        BasicBlock *BB = I->getParent();
+        Instruction *UserInst = cast<Instruction>(SingleUse->getUser());
+        BasicBlock *UserParent;
 
-      // Get the block the use occurs in.
-      if (PHINode *PN = dyn_cast<PHINode>(UserInst))
-        UserParent = PN->getIncomingBlock(*I->use_begin());
-      else
-        UserParent = UserInst->getParent();
+        // Get the block the use occurs in.
+        if (PHINode *PN = dyn_cast<PHINode>(UserInst))
+          UserParent = PN->getIncomingBlock(*SingleUse);
+        else
+          UserParent = UserInst->getParent();
 
-      if (UserParent != BB) {
-        bool UserIsSuccessor = false;
-        // See if the user is one of our successors.
-        for (succ_iterator SI = succ_begin(BB), E = succ_end(BB); SI != E; ++SI)
-          if (*SI == UserParent) {
-            UserIsSuccessor = true;
-            break;
-          }
+        if (UserParent != BB) {
+          bool UserIsSuccessor = false;
+          // See if the user is one of our successors.
+          for (succ_iterator SI = succ_begin(BB), E = succ_end(BB); SI != E;
+               ++SI)
+            if (*SI == UserParent) {
+              UserIsSuccessor = true;
+              break;
+            }
 
-        // If the user is one of our immediate successors, and if that successor
-        // only has us as a predecessors (we'd have to split the critical edge
-        // otherwise), we can keep going.
-        if (UserIsSuccessor && UserParent->getUniquePredecessor()) {
-          // Okay, the CFG is simple enough, try to sink this instruction.
-          if (TryToSinkInstruction(I, UserParent)) {
-            LLVM_DEBUG(dbgs() << "IC: Sink: " << *I << '\n');
-            MadeIRChange = true;
-            // We'll add uses of the sunk instruction below, but since sinking
-            // can expose opportunities for it's *operands* add them to the
-            // worklist
-            for (Use &U : I->operands())
-              if (Instruction *OpI = dyn_cast<Instruction>(U.get()))
-                Worklist.push(OpI);
+          // If the user is one of our immediate successors, and if that
+          // successor only has us as a predecessors (we'd have to split the
+          // critical edge otherwise), we can keep going.
+          if (UserIsSuccessor && UserParent->getUniquePredecessor()) {
+            // Okay, the CFG is simple enough, try to sink this instruction.
+            if (TryToSinkInstruction(I, UserParent)) {
+              LLVM_DEBUG(dbgs() << "IC: Sink: " << *I << '\n');
+              MadeIRChange = true;
+              // We'll add uses of the sunk instruction below, but since sinking
+              // can expose opportunities for it's *operands* add them to the
+              // worklist
+              for (Use &U : I->operands())
+                if (Instruction *OpI = dyn_cast<Instruction>(U.get()))
+                  Worklist.push(OpI);
+            }
           }
         }
       }
-    }
 
     // Now that we have an instruction, try combining it to simplify it.
     Builder.SetInsertPoint(I);
@@ -3591,27 +3598,27 @@ bool InstCombiner::run() {
   return MadeIRChange;
 }
 
-/// Walk the function in depth-first order, adding all reachable code to the
-/// worklist.
+/// Populate the IC worklist from a function, by walking it in depth-first
+/// order and adding all reachable code to the worklist.
 ///
 /// This has a couple of tricks to make the code faster and more powerful.  In
 /// particular, we constant fold and DCE instructions as we go, to avoid adding
 /// them to the worklist (this significantly speeds up instcombine on code where
 /// many instructions are dead or constant).  Additionally, if we find a branch
 /// whose condition is a known constant, we only visit the reachable successors.
-static bool AddReachableCodeToWorklist(BasicBlock *BB, const DataLayout &DL,
-                                       SmallPtrSetImpl<BasicBlock *> &Visited,
-                                       InstCombineWorklist &ICWorklist,
-                                       const TargetLibraryInfo *TLI) {
+static bool prepareICWorklistFromFunction(Function &F, const DataLayout &DL,
+                                          const TargetLibraryInfo *TLI,
+                                          InstCombineWorklist &ICWorklist) {
   bool MadeIRChange = false;
+  SmallPtrSet<BasicBlock *, 32> Visited;
   SmallVector<BasicBlock*, 256> Worklist;
-  Worklist.push_back(BB);
+  Worklist.push_back(&F.front());
 
   SmallVector<Instruction*, 128> InstrsForInstCombineWorklist;
   DenseMap<Constant *, Constant *> FoldedConstants;
 
   do {
-    BB = Worklist.pop_back_val();
+    BasicBlock *BB = Worklist.pop_back_val();
 
     // We have now visited this block!  If we've already been here, ignore it.
     if (!Visited.insert(BB).second)
@@ -3680,6 +3687,18 @@ static bool AddReachableCodeToWorklist(BasicBlock *BB, const DataLayout &DL,
       Worklist.push_back(SuccBB);
   } while (!Worklist.empty());
 
+  // Remove instructions inside unreachable blocks. This prevents the
+  // instcombine code from having to deal with some bad special cases, and
+  // reduces use counts of instructions.
+  for (BasicBlock &BB : F) {
+    if (Visited.count(&BB))
+      continue;
+
+    unsigned NumDeadInstInBB = removeAllNonTerminatorAndEHPadInstructions(&BB);
+    MadeIRChange |= NumDeadInstInBB > 0;
+    NumDeadInst += NumDeadInstInBB;
+  }
+
   // Once we've found all of the instructions to add to instcombine's worklist,
   // add them in reverse order.  This way instcombine will visit from the top
   // of the function down.  This jives well with the way that it adds all uses
@@ -3699,38 +3718,6 @@ static bool AddReachableCodeToWorklist(BasicBlock *BB, const DataLayout &DL,
     }
 
     ICWorklist.push(Inst);
-  }
-
-  return MadeIRChange;
-}
-
-/// Populate the IC worklist from a function, and prune any dead basic
-/// blocks discovered in the process.
-///
-/// This also does basic constant propagation and other forward fixing to make
-/// the combiner itself run much faster.
-static bool prepareICWorklistFromFunction(Function &F, const DataLayout &DL,
-                                          TargetLibraryInfo *TLI,
-                                          InstCombineWorklist &ICWorklist) {
-  bool MadeIRChange = false;
-
-  // Do a depth-first traversal of the function, populate the worklist with
-  // the reachable instructions.  Ignore blocks that are not reachable.  Keep
-  // track of which blocks we visit.
-  SmallPtrSet<BasicBlock *, 32> Visited;
-  MadeIRChange |=
-      AddReachableCodeToWorklist(&F.front(), DL, Visited, ICWorklist, TLI);
-
-  // Do a quick scan over the function.  If we find any blocks that are
-  // unreachable, remove any instructions inside of them.  This prevents
-  // the instcombine code from having to deal with some bad special cases.
-  for (BasicBlock &BB : F) {
-    if (Visited.count(&BB))
-      continue;
-
-    unsigned NumDeadInstInBB = removeAllNonTerminatorAndEHPadInstructions(&BB);
-    MadeIRChange |= NumDeadInstInBB > 0;
-    NumDeadInst += NumDeadInstInBB;
   }
 
   return MadeIRChange;

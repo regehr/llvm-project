@@ -43,12 +43,12 @@ class LibcxxTestFormat(object):
     @staticmethod
     def _make_custom_parsers(test):
         return [
-            IntegratedTestKeywordParser('FLAKY_TEST.', ParserKind.TAG,
-                                        initial_value=False),
             IntegratedTestKeywordParser('MODULES_DEFINES:', ParserKind.LIST,
                                         initial_value=[]),
             IntegratedTestKeywordParser('FILE_DEPENDENCIES:', ParserKind.LIST,
-                                        initial_value=test.file_dependencies)
+                                        initial_value=test.file_dependencies),
+            IntegratedTestKeywordParser('ADDITIONAL_COMPILE_FLAGS:', ParserKind.LIST,
+                                        initial_value=[])
         ]
 
     @staticmethod
@@ -91,8 +91,6 @@ class LibcxxTestFormat(object):
         is_pass_test = name.endswith('.pass.cpp') or name.endswith('.pass.mm')
         is_fail_test = name.endswith('.fail.cpp') or name.endswith('.fail.mm')
         is_objcxx_test = name.endswith('.mm')
-        is_objcxx_arc_test = name.endswith('.arc.pass.mm') or \
-                             name.endswith('.arc.fail.mm')
         assert is_sh_test or name_ext == '.cpp' or name_ext == '.mm', \
             'non-cpp file must be sh test'
 
@@ -125,7 +123,7 @@ class LibcxxTestFormat(object):
         tmpDir, tmpBase = lit.TestRunner.getTempPaths(test)
         substitutions = lit.TestRunner.getDefaultSubstitutions(test, tmpDir,
                                                                tmpBase)
-        substitutions.append(('%file_dependencies', ' '.join(data_files)))
+        substitutions.append(('%{file_dependencies}', ' '.join(data_files)))
         script = lit.TestRunner.applySubstitutions(script, substitutions)
 
         test_cxx = copy.deepcopy(self.cxx)
@@ -147,12 +145,14 @@ class LibcxxTestFormat(object):
                 if b'#define _LIBCPP_ASSERT' in contents:
                     test_cxx.useModules(False)
 
+        # Handle ADDITIONAL_COMPILE_FLAGS keywords by adding those compilation
+        # flags, but first perform substitutions in those flags.
+        extra_compile_flags = self._get_parser('ADDITIONAL_COMPILE_FLAGS:', parsers).getValue()
+        extra_compile_flags = lit.TestRunner.applySubstitutions(extra_compile_flags, substitutions)
+        test_cxx.compile_flags.extend(extra_compile_flags)
+
         if is_objcxx_test:
             test_cxx.source_lang = 'objective-c++'
-            if is_objcxx_arc_test:
-                test_cxx.compile_flags += ['-fobjc-arc']
-            else:
-                test_cxx.compile_flags += ['-fno-objc-arc']
             test_cxx.link_flags += ['-framework', 'Foundation']
 
         # Dispatch the test based on its suffix.
@@ -200,8 +200,8 @@ class LibcxxTestFormat(object):
             env = None
             if self.exec_env:
                 env = self.exec_env
-            is_flaky = self._get_parser('FLAKY_TEST.', parsers).getValue()
-            max_retry = 3 if is_flaky else 1
+
+            max_retry = test.allowed_retries + 1
             for retry_count in range(max_retry):
                 cmd, out, err, rc = self.executor.run(exec_path, [exec_path],
                                                       local_cwd, data_files,
@@ -240,21 +240,6 @@ class LibcxxTestFormat(object):
             test_cxx.flags += ['-fsyntax-only']
         if use_verify:
             test_cxx.useVerify()
-            test_cxx.useWarnings()
-            if '-Wuser-defined-warnings' in test_cxx.warning_flags:
-                test_cxx.warning_flags += ['-Wno-error=user-defined-warnings']
-        else:
-            # We still need to enable certain warnings on .fail.cpp test when
-            # -verify isn't enabled. Such as -Werror=unused-result. However,
-            # we don't want it enabled too liberally, which might incorrectly
-            # allow unrelated failure tests to 'pass'.
-            #
-            # Therefore, we check if the test was expected to fail because of
-            # nodiscard before enabling it
-            test_str_list = [b'ignoring return value', b'nodiscard',
-                             b'NODISCARD']
-            if any(test_str in contents for test_str in test_str_list):
-                test_cxx.flags += ['-Werror=unused-result']
         cmd, out, err, rc = test_cxx.compile(source_path, out=os.devnull)
         check_rc = lambda rc: rc == 0 if use_verify else rc != 0
         report = libcxx.util.makeReport(cmd, out, err, rc)
