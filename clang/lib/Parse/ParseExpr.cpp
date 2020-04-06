@@ -1455,7 +1455,7 @@ ExprResult Parser::ParseCastExpression(CastParseKind ParseKind,
     break;
   case tok::annot_typename:
     if (isStartOfObjCClassMessageMissingOpenBracket()) {
-      ParsedType Type = getTypeAnnotation(Tok);
+      TypeResult Type = getTypeAnnotation(Tok);
 
       // Fake up a Declarator to use with ActOnTypeName.
       DeclSpec DS(AttrFactory);
@@ -3001,7 +3001,7 @@ Parser::ParseParenExpression(ParenParseOption &ExprType, bool stopIfCastExpr,
     // Match the ')'.
     T.consumeClose();
     RParenLoc = T.getCloseLocation();
-    Result = Actions.CorrectDelayedTyposInExpr(ParseExpression());
+    Result = Actions.CorrectDelayedTyposInExpr(ParseAssignmentExpression());
     if (ErrorFound) {
       Result = ExprError();
     } else if (!Result.isInvalid()) {

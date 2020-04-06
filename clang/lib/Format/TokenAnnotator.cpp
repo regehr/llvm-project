@@ -1060,15 +1060,20 @@ private:
   }
 
   void parseCSharpGenericTypeConstraint() {
+    int OpenAngleBracketsCount = 0;
     while (CurrentToken) {
       if (CurrentToken->is(tok::less)) {
         // parseAngle is too greedy and will consume the whole line.
         CurrentToken->Type = TT_TemplateOpener;
+        ++OpenAngleBracketsCount;
         next();
       } else if (CurrentToken->is(tok::greater)) {
         CurrentToken->Type = TT_TemplateCloser;
+        --OpenAngleBracketsCount;
         next();
-      } else if (CurrentToken->is(tok::comma)) {
+      } else if (CurrentToken->is(tok::comma) && OpenAngleBracketsCount == 0) {
+        // We allow line breaks after GenericTypeConstraintComma's
+        // so do not flag commas in Generics as GenericTypeConstraintComma's.
         CurrentToken->Type = TT_CSharpGenericTypeConstraintComma;
         next();
       } else if (CurrentToken->is(Keywords.kw_where)) {
@@ -1517,9 +1522,9 @@ private:
     if (Style.Language == FormatStyle::LK_JavaScript) {
       if (Current.is(tok::exclaim)) {
         if (Current.Previous &&
-            (Current.Previous->isOneOf(tok::identifier, tok::kw_namespace,
-                                       tok::r_paren, tok::r_square,
-                                       tok::r_brace) ||
+            (Keywords.IsJavaScriptIdentifier(*Current.Previous) ||
+             Current.Previous->isOneOf(tok::kw_namespace, tok::r_paren,
+                                       tok::r_square, tok::r_brace) ||
              Current.Previous->Tok.isLiteral())) {
           Current.Type = TT_JsNonNullAssertion;
           return;
@@ -3065,10 +3070,8 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
         (Right.is(TT_TemplateString) && Right.TokenText.startswith("}")))
       return false;
     // In tagged template literals ("html`bar baz`"), there is no space between
-    // the tag identifier and the template string. getIdentifierInfo makes sure
-    // that the identifier is not a pseudo keyword like `yield`, either.
-    if (Left.is(tok::identifier) && Keywords.IsJavaScriptIdentifier(Left) &&
-        Right.is(TT_TemplateString))
+    // the tag identifier and the template string.
+    if (Keywords.IsJavaScriptIdentifier(Left) && Right.is(TT_TemplateString))
       return false;
     if (Right.is(tok::star) &&
         Left.isOneOf(Keywords.kw_function, Keywords.kw_yield))

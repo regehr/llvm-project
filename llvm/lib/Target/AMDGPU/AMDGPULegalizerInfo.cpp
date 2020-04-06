@@ -1464,12 +1464,10 @@ Register AMDGPULegalizerInfo::getSegmentAperture(
   // TODO: can we be smarter about machine pointer info?
   MachinePointerInfo PtrInfo(AMDGPUAS::CONSTANT_ADDRESS);
   MachineMemOperand *MMO = MF.getMachineMemOperand(
-    PtrInfo,
-    MachineMemOperand::MOLoad |
-    MachineMemOperand::MODereferenceable |
-    MachineMemOperand::MOInvariant,
-    4,
-    MinAlign(64, StructOffset));
+      PtrInfo,
+      MachineMemOperand::MOLoad | MachineMemOperand::MODereferenceable |
+          MachineMemOperand::MOInvariant,
+      4, commonAlignment(Align(64), StructOffset));
 
   Register LoadAddr;
 
@@ -2028,10 +2026,10 @@ bool AMDGPULegalizerInfo::legalizeGlobalValue(
   Register GOTAddr = MRI.createGenericVirtualRegister(PtrTy);
 
   MachineMemOperand *GOTMMO = MF.getMachineMemOperand(
-    MachinePointerInfo::getGOT(MF),
-    MachineMemOperand::MOLoad | MachineMemOperand::MODereferenceable |
-    MachineMemOperand::MOInvariant,
-    8 /*Size*/, 8 /*Align*/);
+      MachinePointerInfo::getGOT(MF),
+      MachineMemOperand::MOLoad | MachineMemOperand::MODereferenceable |
+          MachineMemOperand::MOInvariant,
+      8 /*Size*/, Align(8));
 
   buildPCRelGlobalAddress(GOTAddr, PtrTy, B, GV, 0, SIInstrInfo::MO_GOTPCREL32);
 
@@ -2077,7 +2075,7 @@ bool AMDGPULegalizerInfo::legalizeFMad(
   MachineIRBuilder HelperBuilder(MI);
   GISelObserverWrapper DummyObserver;
   LegalizerHelper Helper(MF, DummyObserver, HelperBuilder);
-  HelperBuilder.setMBB(*MI.getParent());
+  HelperBuilder.setInstr(MI);
   return Helper.lowerFMad(MI) == LegalizerHelper::Legalized;
 }
 
@@ -3619,34 +3617,6 @@ static void convertImageAddrToPacked(MachineIRBuilder &B, MachineInstr &MI,
   }
 }
 
-/// Return number of address arguments, and the number of gradients
-static std::pair<int, int>
-getImageNumVAddr(const AMDGPU::ImageDimIntrinsicInfo *ImageDimIntr,
-                 const AMDGPU::MIMGBaseOpcodeInfo *BaseOpcode) {
-  const AMDGPU::MIMGDimInfo *DimInfo
-    = AMDGPU::getMIMGDimInfo(ImageDimIntr->Dim);
-
-  int NumGradients = BaseOpcode->Gradients ? DimInfo->NumGradients : 0;
-  int NumCoords = BaseOpcode->Coordinates ? DimInfo->NumCoords : 0;
-  int NumLCM = BaseOpcode->LodOrClampOrMip ? 1 : 0;
-  int NumVAddr = BaseOpcode->NumExtraArgs + NumGradients + NumCoords + NumLCM;
-  return {NumVAddr, NumGradients};
-}
-
-static int getDMaskIdx(const AMDGPU::MIMGBaseOpcodeInfo *BaseOpcode,
-                       int NumDefs) {
-  assert(!BaseOpcode->Atomic);
-  return NumDefs + 1 + (BaseOpcode->Store ? 1 : 0);
-}
-
-/// Return first address operand index in an image intrinsic.
-static int getImageVAddrIdxBegin(const AMDGPU::MIMGBaseOpcodeInfo *BaseOpcode,
-                                 int NumDefs) {
-  if (BaseOpcode->Atomic)
-    return NumDefs + 1 + (BaseOpcode->AtomicX2 ? 2 : 1);
-  return getDMaskIdx(BaseOpcode, NumDefs) + 1;
-}
-
 /// Rewrite image intrinsics to use register layouts expected by the subtarget.
 ///
 /// Depending on the subtarget, load/store with 16-bit element data need to be
@@ -3726,6 +3696,24 @@ bool AMDGPULegalizerInfo::legalizeImageIntrinsic(
     MI.getOperand(DMaskIdx).setImm(DMask);
   }
 
+  if (BaseOpcode->Atomic) {
+    Register VData0 = MI.getOperand(2).getReg();
+    LLT Ty = MRI->getType(VData0);
+
+    // TODO: Allow atomic swap and bit ops for v2s16/v4s16
+    if (Ty.isVector())
+      return false;
+
+    if (BaseOpcode->AtomicX2) {
+      Register VData1 = MI.getOperand(3).getReg();
+      // The two values are packed in one register.
+      LLT PackedTy = LLT::vector(2, Ty);
+      auto Concat = B.buildBuildVector(PackedTy, {VData0, VData1});
+      MI.getOperand(2).setReg(Concat.getReg(0));
+      MI.getOperand(3).setReg(AMDGPU::NoRegister);
+    }
+  }
+
   int CorrectedNumVAddrs = NumVAddrs;
 
   // Optimize _L to _LZ when _L is zero
@@ -3734,27 +3722,32 @@ bool AMDGPULegalizerInfo::legalizeImageIntrinsic(
     const ConstantFP *ConstantLod;
     const int LodIdx = AddrIdx + NumVAddrs - 1;
 
-    // FIXME: This isn't the cleanest way to handle this, but it's the easiest
-    // option the current infrastructure gives. We really should be changing the
-    // base intrinsic opcode, but the current searchable tables only gives us
-    // the final MI opcode. Eliminate the register here, and track with an
-    // immediate 0 so the final selection will know to do the opcode change.
     if (mi_match(MI.getOperand(LodIdx).getReg(), *MRI, m_GFCst(ConstantLod))) {
       if (ConstantLod->isZero() || ConstantLod->isNegative()) {
-        MI.getOperand(LodIdx).ChangeToImmediate(0);
+        // Set new opcode to _lz variant of _l, and change the intrinsic ID.
+        ImageDimIntr = AMDGPU::getImageDimInstrinsicByBaseOpcode(
+          LZMappingInfo->LZ, ImageDimIntr->Dim);
+
+        // The starting indexes should remain in the same place.
+        --NumVAddrs;
         --CorrectedNumVAddrs;
+
+        MI.getOperand(MI.getNumExplicitDefs()).setIntrinsicID(
+          static_cast<Intrinsic::ID>(ImageDimIntr->Intr));
+        MI.RemoveOperand(LodIdx);
       }
     }
   }
 
   // Optimize _mip away, when 'lod' is zero
-  if (const AMDGPU::MIMGMIPMappingInfo *MIPMappingInfo =
-        AMDGPU::getMIMGMIPMappingInfo(ImageDimIntr->BaseOpcode)) {
+  if (AMDGPU::getMIMGMIPMappingInfo(ImageDimIntr->BaseOpcode)) {
     int64_t ConstantLod;
     const int LodIdx = AddrIdx + NumVAddrs - 1;
 
     if (mi_match(MI.getOperand(LodIdx).getReg(), *MRI, m_ICst(ConstantLod))) {
       if (ConstantLod == 0) {
+        // TODO: Change intrinsic opcode and remove operand instead or replacing
+        // it with 0, as the _L to _LZ handling is done above.
         MI.getOperand(LodIdx).ChangeToImmediate(0);
         --CorrectedNumVAddrs;
       }
@@ -3772,8 +3765,7 @@ bool AMDGPULegalizerInfo::legalizeImageIntrinsic(
   //
   // SIShrinkInstructions will convert NSA encodings to non-NSA after register
   // allocation when possible.
-  const bool UseNSA = CorrectedNumVAddrs >= 3 &&
-                      ST.hasFeature(AMDGPU::FeatureNSAEncoding);
+  const bool UseNSA = CorrectedNumVAddrs >= 3 && ST.hasNSAEncoding();
 
   // Rewrite the addressing register layout before doing anything else.
   if (IsA16) {
@@ -3813,6 +3805,7 @@ bool AMDGPULegalizerInfo::legalizeImageIntrinsic(
   } else if (!UseNSA && NumVAddrs > 1) {
     convertImageAddrToPacked(B, MI, AddrIdx, NumVAddrs);
   }
+
 
   if (BaseOpcode->Store) { // No TFE for stores?
     // TODO: Handle dmask trim
@@ -4013,11 +4006,12 @@ bool AMDGPULegalizerInfo::legalizeSBufferLoad(
   // FIXME: When intrinsic definition is fixed, this should have an MMO already.
   // TODO: Should this use datalayout alignment?
   const unsigned MemSize = (Size + 7) / 8;
-  const unsigned MemAlign = 4;
+  const Align MemAlign(4);
   MachineMemOperand *MMO = MF.getMachineMemOperand(
-    MachinePointerInfo(),
-    MachineMemOperand::MOLoad | MachineMemOperand::MODereferenceable |
-    MachineMemOperand::MOInvariant, MemSize, MemAlign);
+      MachinePointerInfo(),
+      MachineMemOperand::MOLoad | MachineMemOperand::MODereferenceable |
+          MachineMemOperand::MOInvariant,
+      MemSize, MemAlign);
   MI.addMemOperand(MF, MMO);
 
   // There are no 96-bit result scalar loads, but widening to 128-bit should

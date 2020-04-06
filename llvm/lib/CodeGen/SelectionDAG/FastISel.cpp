@@ -1226,17 +1226,17 @@ bool FastISel::lowerCallTo(CallLoweringInfo &CLI) {
 
       // For ByVal, alignment should come from FE. BE will guess if this info
       // is not there, but there are cases it cannot get right.
-      unsigned FrameAlign = Arg.Alignment;
+      MaybeAlign FrameAlign = Arg.Alignment;
       if (!FrameAlign)
-        FrameAlign = TLI.getByValTypeAlignment(ElementTy, DL);
+        FrameAlign = Align(TLI.getByValTypeAlignment(ElementTy, DL));
       Flags.setByValSize(FrameSize);
-      Flags.setByValAlign(Align(FrameAlign));
+      Flags.setByValAlign(*FrameAlign);
     }
     if (Arg.IsNest)
       Flags.setNest();
     if (NeedsRegBlock)
       Flags.setInConsecutiveRegs();
-    Flags.setOrigAlign(Align(DL.getABITypeAlignment(Arg.Ty)));
+    Flags.setOrigAlign(DL.getABITypeAlign(Arg.Ty));
 
     CLI.OutVals.push_back(Arg.Val);
     CLI.OutFlags.push_back(Flags);
@@ -2433,18 +2433,18 @@ MachineMemOperand *
 FastISel::createMachineMemOperandFor(const Instruction *I) const {
   const Value *Ptr;
   Type *ValTy;
-  unsigned Alignment;
+  MaybeAlign Alignment;
   MachineMemOperand::Flags Flags;
   bool IsVolatile;
 
   if (const auto *LI = dyn_cast<LoadInst>(I)) {
-    Alignment = LI->getAlignment();
+    Alignment = LI->getAlign();
     IsVolatile = LI->isVolatile();
     Flags = MachineMemOperand::MOLoad;
     Ptr = LI->getPointerOperand();
     ValTy = LI->getType();
   } else if (const auto *SI = dyn_cast<StoreInst>(I)) {
-    Alignment = SI->getAlignment();
+    Alignment = SI->getAlign();
     IsVolatile = SI->isVolatile();
     Flags = MachineMemOperand::MOStore;
     Ptr = SI->getPointerOperand();
@@ -2460,8 +2460,8 @@ FastISel::createMachineMemOperandFor(const Instruction *I) const {
   AAMDNodes AAInfo;
   I->getAAMetadata(AAInfo);
 
-  if (Alignment == 0) // Ensure that codegen never sees alignment 0.
-    Alignment = DL.getABITypeAlignment(ValTy);
+  if (!Alignment) // Ensure that codegen never sees alignment 0.
+    Alignment = DL.getABITypeAlign(ValTy);
 
   unsigned Size = DL.getTypeStoreSize(ValTy);
 
@@ -2475,7 +2475,7 @@ FastISel::createMachineMemOperandFor(const Instruction *I) const {
     Flags |= MachineMemOperand::MOInvariant;
 
   return FuncInfo.MF->getMachineMemOperand(MachinePointerInfo(Ptr), Flags, Size,
-                                           Alignment, AAInfo, Ranges);
+                                           *Alignment, AAInfo, Ranges);
 }
 
 CmpInst::Predicate FastISel::optimizeCmpPredicate(const CmpInst *CI) const {
