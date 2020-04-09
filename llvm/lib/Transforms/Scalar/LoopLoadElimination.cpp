@@ -432,12 +432,12 @@ public:
     Value *Ptr = Cand.Load->getPointerOperand();
     auto *PtrSCEV = cast<SCEVAddRecExpr>(PSE.getSCEV(Ptr));
     auto *PH = L->getLoopPreheader();
+    assert(PH && "Preheader should exist!");
     Value *InitialPtr = SEE.expandCodeFor(PtrSCEV->getStart(), Ptr->getType(),
                                           PH->getTerminator());
     Value *Initial = new LoadInst(
         Cand.Load->getType(), InitialPtr, "load_initial",
-        /* isVolatile */ false, MaybeAlign(Cand.Load->getAlignment()),
-        PH->getTerminator());
+        /* isVolatile */ false, Cand.Load->getAlign(), PH->getTerminator());
 
     PHINode *PHI = PHINode::Create(Initial->getType(), 2, "store_forwarded",
                                    &L->getHeader()->front());
