@@ -3816,6 +3816,11 @@ InstCombinePass::InstCombinePass(unsigned MaxIterations)
 
 PreservedAnalyses InstCombinePass::run(Function &F,
                                        FunctionAnalysisManager &AM) {
+  if (DisablePeepholes) {
+    PreservedAnalyses PA;
+    return PA;
+  }
+
   auto &AC = AM.getResult<AssumptionAnalysis>(F);
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
   auto &TLI = AM.getResult<TargetLibraryAnalysis>(F);
