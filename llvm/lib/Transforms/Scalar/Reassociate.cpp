@@ -85,6 +85,8 @@ static void PrintOps(Instruction *I, const SmallVectorImpl<ValueEntry> &Ops) {
 }
 #endif
 
+extern bool DisablePeepholes;
+
 /// Utility class representing a non-constant Xor-operand. We classify
 /// non-constant Xor-Operands into two categories:
 ///  C1) The operand is in the form "X & C", where C is a constant and C != ~0
@@ -2386,6 +2388,9 @@ ReassociatePass::BuildPairMap(ReversePostOrderTraversal<Function *> &RPOT) {
 }
 
 PreservedAnalyses ReassociatePass::run(Function &F, FunctionAnalysisManager &) {
+  if (DisablePeepholes)
+    return PreservedAnalyses::all();
+
   // Get the functions basic blocks in Reverse Post Order. This order is used by
   // BuildRankMap to pre calculate ranks correctly. It also excludes dead basic
   // blocks (it has been seen that the analysis in this pass could hang when
@@ -2477,6 +2482,9 @@ namespace {
     }
 
     bool runOnFunction(Function &F) override {
+      if (DisablePeepholes)
+        return false;
+
       if (skipFunction(F))
         return false;
 

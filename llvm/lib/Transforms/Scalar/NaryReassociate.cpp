@@ -114,6 +114,8 @@ using namespace PatternMatch;
 
 #define DEBUG_TYPE "nary-reassociate"
 
+extern bool DisablePeepholes;
+
 namespace {
 
 class NaryReassociateLegacyPass : public FunctionPass {
@@ -165,6 +167,9 @@ FunctionPass *llvm::createNaryReassociatePass() {
 }
 
 bool NaryReassociateLegacyPass::runOnFunction(Function &F) {
+  if (DisablePeepholes)
+    return false;
+
   if (skipFunction(F))
     return false;
 
@@ -179,6 +184,9 @@ bool NaryReassociateLegacyPass::runOnFunction(Function &F) {
 
 PreservedAnalyses NaryReassociatePass::run(Function &F,
                                            FunctionAnalysisManager &AM) {
+  if (DisablePeepholes)
+    return PreservedAnalyses::all();
+
   auto *AC = &AM.getResult<AssumptionAnalysis>(F);
   auto *DT = &AM.getResult<DominatorTreeAnalysis>(F);
   auto *SE = &AM.getResult<ScalarEvolutionAnalysis>(F);
