@@ -18,7 +18,6 @@
 #include "llvm/Transforms/Scalar/DCE.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/InitializePasses.h"
@@ -154,29 +153,6 @@ static bool DCEInstruction(Instruction *I,
   return false;
 }
 
-static bool eliminateDeadCode(Function &F, TargetLibraryInfo *TLI) {
-  bool MadeChange = false;
-  SmallSetVector<Instruction *, 16> WorkList;
-  // Iterate over the original function, only adding insts to the worklist
-  // if they actually need to be revisited. This avoids having to pre-init
-  // the worklist with the entire function's worth of instructions.
-  for (inst_iterator FI = inst_begin(F), FE = inst_end(F); FI != FE;) {
-    Instruction *I = &*FI;
-    ++FI;
-
-    // We're visiting this instruction now, so make sure it's not in the
-    // worklist from an earlier visit.
-    if (!WorkList.count(I))
-      MadeChange |= DCEInstruction(I, WorkList, TLI);
-  }
-
-  while (!WorkList.empty()) {
-    Instruction *I = WorkList.pop_back_val();
-    MadeChange |= DCEInstruction(I, WorkList, TLI);
-  }
-  return MadeChange;
-}
-
 PreservedAnalyses DCEPass::run(Function &F, FunctionAnalysisManager &AM) {
   if (!eliminateDeadCode(F, AM.getCachedResult<TargetLibraryAnalysis>(F)))
     return PreservedAnalyses::all();
@@ -215,3 +191,27 @@ INITIALIZE_PASS(DCELegacyPass, "dce", "Dead Code Elimination", false, false)
 FunctionPass *llvm::createDeadCodeEliminationPass() {
   return new DCELegacyPass();
 }
+
+bool eliminateDeadCode(Function &F, TargetLibraryInfo *TLI) {
+  bool MadeChange = false;
+  SmallSetVector<Instruction *, 16> WorkList;
+  // Iterate over the original function, only adding insts to the worklist
+  // if they actually need to be revisited. This avoids having to pre-init
+  // the worklist with the entire function's worth of instructions.
+  for (inst_iterator FI = inst_begin(F), FE = inst_end(F); FI != FE;) {
+    Instruction *I = &*FI;
+    ++FI;
+
+    // We're visiting this instruction now, so make sure it's not in the
+    // worklist from an earlier visit.
+    if (!WorkList.count(I))
+      MadeChange |= DCEInstruction(I, WorkList, TLI);
+  }
+
+  while (!WorkList.empty()) {
+    Instruction *I = WorkList.pop_back_val();
+    MadeChange |= DCEInstruction(I, WorkList, TLI);
+  }
+  return MadeChange;
+}
+

@@ -13,8 +13,11 @@
 #ifndef LLVM_TRANSFORMS_SCALAR_DCE_H
 #define LLVM_TRANSFORMS_SCALAR_DCE_H
 
+#include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/PassManager.h"
+
+bool eliminateDeadCode(llvm::Function &F, llvm::TargetLibraryInfo *TLI);
 
 namespace llvm {
 
