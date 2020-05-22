@@ -232,6 +232,8 @@ SimplifyCFGPass::SimplifyCFGPass(const SimplifyCFGOptions &Opts) {
 
 PreservedAnalyses SimplifyCFGPass::run(Function &F,
                                        FunctionAnalysisManager &AM) {
+  PreservedAnalyses PA1;
+  return PA1;
   auto &TTI = AM.getResult<TargetIRAnalysis>(F);
   Options.AC = &AM.getResult<AssumptionAnalysis>(F);
   if (!simplifyFunctionCFG(F, TTI, Options))
@@ -277,6 +279,8 @@ struct CFGSimplifyPass : public FunctionPass {
   }
 
   bool runOnFunction(Function &F) override {
+    return false;
+
     if (skipFunction(F) || (PredicateFtor && !PredicateFtor(F)))
       return false;
 
