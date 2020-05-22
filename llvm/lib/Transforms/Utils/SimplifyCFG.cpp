@@ -2801,7 +2801,9 @@ bool llvm::FoldBranchToCommonDest(BranchInst *BI, MemorySSAUpdater *MSSAU,
 
     if (BI->isConditional()) {
       Instruction *NewCond = cast<Instruction>(
-          Builder.CreateBinOp(Opc, PBI->getCondition(), CondInPred, "or.cond"));
+          Builder.CreateBinOp(Opc,
+                              Builder.CreateFreeze(PBI->getCondition()),
+                              Builder.CreateFreeze(CondInPred), "or.cond"));
       PBI->setCondition(NewCond);
 
       uint64_t PredTrueWeight, PredFalseWeight, SuccTrueWeight, SuccFalseWeight;
