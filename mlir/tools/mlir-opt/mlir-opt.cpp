@@ -46,9 +46,11 @@ void registerTestLoopPermutationPass();
 void registerTestCallGraphPass();
 void registerTestConstantFold();
 void registerTestConvertGPUKernelToCubinPass();
+void registerTestConvertGPUKernelToHsacoPass();
 void registerTestDominancePass();
 void registerTestFunc();
 void registerTestGpuMemoryPromotionPass();
+void registerTestLinalgHoisting();
 void registerTestLinalgTransforms();
 void registerTestLivenessPass();
 void registerTestLoopFusion();
@@ -60,8 +62,8 @@ void registerTestMemRefStrideCalculation();
 void registerTestOpaqueLoc();
 void registerTestParallelismDetection();
 void registerTestGpuParallelLoopMappingPass();
+void registerTestSCFUtilsPass();
 void registerTestVectorConversions();
-void registerTestVectorToSCFPass();
 void registerVectorizerTestPass();
 } // namespace mlir
 
@@ -113,10 +115,14 @@ void registerTestPasses() {
 #if MLIR_CUDA_CONVERSIONS_ENABLED
   registerTestConvertGPUKernelToCubinPass();
 #endif
+#if MLIR_ROCM_CONVERSIONS_ENABLED
+  registerTestConvertGPUKernelToHsacoPass();
+#endif
   registerTestBufferPlacementPreparationPass();
   registerTestDominancePass();
   registerTestFunc();
   registerTestGpuMemoryPromotionPass();
+  registerTestLinalgHoisting();
   registerTestLinalgTransforms();
   registerTestLivenessPass();
   registerTestLoopFusion();
@@ -128,8 +134,8 @@ void registerTestPasses() {
   registerTestOpaqueLoc();
   registerTestParallelismDetection();
   registerTestGpuParallelLoopMappingPass();
+  registerTestSCFUtilsPass();
   registerTestVectorConversions();
-  registerTestVectorToSCFPass();
   registerVectorizerTestPass();
 }
 #endif

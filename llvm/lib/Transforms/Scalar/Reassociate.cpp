@@ -978,7 +978,8 @@ static BinaryOperator *BreakUpSubtract(Instruction *Sub,
 /// this into a multiply by a constant to assist with further reassociation.
 static BinaryOperator *ConvertShiftToMul(Instruction *Shl) {
   Constant *MulCst = ConstantInt::get(Shl->getType(), 1);
-  MulCst = ConstantExpr::getShl(MulCst, cast<Constant>(Shl->getOperand(1)));
+  auto *SA = cast<ConstantInt>(Shl->getOperand(1));
+  MulCst = ConstantExpr::getShl(MulCst, SA);
 
   BinaryOperator *Mul =
     BinaryOperator::CreateMul(Shl->getOperand(0), MulCst, "", Shl);
@@ -991,10 +992,12 @@ static BinaryOperator *ConvertShiftToMul(Instruction *Shl) {
 
   // We can safely preserve the nuw flag in all cases.  It's also safe to turn a
   // nuw nsw shl into a nuw nsw mul.  However, nsw in isolation requires special
-  // handling.
+  // handling.  It can be preserved as long as we're not left shifting by
+  // bitwidth - 1.
   bool NSW = cast<BinaryOperator>(Shl)->hasNoSignedWrap();
   bool NUW = cast<BinaryOperator>(Shl)->hasNoUnsignedWrap();
-  if (NSW && NUW)
+  unsigned BitWidth = Shl->getType()->getIntegerBitWidth();
+  if (NSW && (NUW || SA->getValue().ult(BitWidth - 1)))
     Mul->setHasNoSignedWrap(true);
   Mul->setHasNoUnsignedWrap(NUW);
   return Mul;

@@ -994,6 +994,9 @@ TEST_F(FormatTest, ForEachLoops) {
                "#define Q_FOREACH (x, y)\n"
                "#define BOOST_FOREACH (x, y)\n"
                "#define UNKNOWN_FOREACH (x, y)\n");
+
+  // handle microsoft non standard extension
+  verifyFormat("for each (char c in x->MyStringProperty)");
 }
 
 TEST_F(FormatTest, FormatsWhileLoop) {
@@ -1701,6 +1704,22 @@ TEST_F(FormatTest, MultiLineControlStatements) {
             "  baz();\n"
             "}",
             format("try{foo();}catch(...){baz();}", Style));
+}
+
+TEST_F(FormatTest, BeforeWhile) {
+  FormatStyle Style = getLLVMStyle();
+  Style.BreakBeforeBraces = FormatStyle::BraceBreakingStyle::BS_Custom;
+
+  verifyFormat("do {\n"
+               "  foo();\n"
+               "} while (1);",
+               Style);
+  Style.BraceWrapping.BeforeWhile = true;
+  verifyFormat("do {\n"
+               "  foo();\n"
+               "}\n"
+               "while (1);",
+               Style);
 }
 
 //===----------------------------------------------------------------------===//
@@ -2539,6 +2558,43 @@ TEST_F(FormatTest, FormatsExternC) {
                Style);
 }
 
+TEST_F(FormatTest, IndentExternBlockStyle) {
+  FormatStyle Style = getLLVMStyle();
+  Style.IndentWidth = 2;
+
+  Style.IndentExternBlock = FormatStyle::IEBS_Indent;
+  verifyFormat("extern \"C\" { /*9*/\n}", Style);
+  verifyFormat("extern \"C\" {\n"
+               "  int foo10();\n"
+               "}",
+               Style);
+
+  Style.IndentExternBlock = FormatStyle::IEBS_NoIndent;
+  verifyFormat("extern \"C\" { /*11*/\n}", Style);
+  verifyFormat("extern \"C\" {\n"
+               "int foo12();\n"
+               "}",
+               Style);
+
+  Style.IndentExternBlock = FormatStyle::IEBS_AfterExternBlock;
+  Style.BreakBeforeBraces = FormatStyle::BS_Custom;
+  Style.BraceWrapping.AfterExternBlock = true;
+  verifyFormat("extern \"C\"\n{ /*13*/\n}", Style);
+  verifyFormat("extern \"C\"\n{\n"
+               "  int foo14();\n"
+               "}",
+               Style);
+
+  Style.IndentExternBlock = FormatStyle::IEBS_AfterExternBlock;
+  Style.BreakBeforeBraces = FormatStyle::BS_Custom;
+  Style.BraceWrapping.AfterExternBlock = false;
+  verifyFormat("extern \"C\" { /*15*/\n}", Style);
+  verifyFormat("extern \"C\" {\n"
+               "int foo16();\n"
+               "}",
+               Style);
+}
+
 TEST_F(FormatTest, FormatsInlineASM) {
   verifyFormat("asm(\"xyz\" : \"=a\"(a), \"=d\"(b) : \"a\"(data));");
   verifyFormat("asm(\"nop\" ::: \"memory\");");
@@ -2606,6 +2662,18 @@ TEST_F(FormatTest, FormatTryCatch) {
 
   // Incomplete try-catch blocks.
   verifyIncompleteFormat("try {} catch (");
+}
+
+TEST_F(FormatTest, FormatTryAsAVariable) {
+  verifyFormat("int try;");
+  verifyFormat("int try, size;");
+  verifyFormat("try = foo();");
+  verifyFormat("if (try < size) {\n  return true;\n}");
+
+  verifyFormat("int catch;");
+  verifyFormat("int catch, size;");
+  verifyFormat("catch = foo();");
+  verifyFormat("if (catch < size) {\n  return true;\n}");
 }
 
 TEST_F(FormatTest, FormatSEHTryCatch) {
@@ -12010,6 +12078,58 @@ TEST_F(FormatTest, AlignConsecutiveAssignments) {
                "  x = 1;\n"
                "y = 1;\n",
                Alignment);
+
+  Alignment.ReflowComments = true;
+  Alignment.ColumnLimit = 50;
+  EXPECT_EQ("int x   = 0;\n"
+            "int yy  = 1; /// specificlennospace\n"
+            "int zzz = 2;\n",
+            format("int x   = 0;\n"
+                   "int yy  = 1; ///specificlennospace\n"
+                   "int zzz = 2;\n",
+                   Alignment));
+}
+
+TEST_F(FormatTest, AlignConsecutiveBitFields) {
+  FormatStyle Alignment = getLLVMStyle();
+  Alignment.AlignConsecutiveBitFields = true;
+  verifyFormat("int const a     : 5;\n"
+               "int oneTwoThree : 23;",
+               Alignment);
+
+  // Initializers are allowed starting with c++2a
+  verifyFormat("int const a     : 5 = 1;\n"
+               "int oneTwoThree : 23 = 0;",
+               Alignment);
+
+  Alignment.AlignConsecutiveDeclarations = true;
+  verifyFormat("int const a           : 5;\n"
+               "int       oneTwoThree : 23;",
+               Alignment);
+
+  verifyFormat("int const a           : 5;  // comment\n"
+               "int       oneTwoThree : 23; // comment",
+               Alignment);
+
+  verifyFormat("int const a           : 5 = 1;\n"
+               "int       oneTwoThree : 23 = 0;",
+               Alignment);
+
+  Alignment.AlignConsecutiveAssignments = true;
+  verifyFormat("int const a           : 5  = 1;\n"
+               "int       oneTwoThree : 23 = 0;",
+               Alignment);
+  verifyFormat("int const a           : 5  = {1};\n"
+               "int       oneTwoThree : 23 = 0;",
+               Alignment);
+
+  // Known limitations: ':' is only recognized as a bitfield colon when
+  // followed by a number.
+  /*
+  verifyFormat("int oneTwoThree : SOME_CONSTANT;\n"
+               "int a           : 5;",
+               Alignment);
+  */
 }
 
 TEST_F(FormatTest, AlignConsecutiveDeclarations) {
@@ -13426,6 +13546,7 @@ TEST_F(FormatTest, ParsesConfigurationBools) {
   Style.Language = FormatStyle::LK_Cpp;
   CHECK_PARSE_BOOL(AlignTrailingComments);
   CHECK_PARSE_BOOL(AlignConsecutiveAssignments);
+  CHECK_PARSE_BOOL(AlignConsecutiveBitFields);
   CHECK_PARSE_BOOL(AlignConsecutiveDeclarations);
   CHECK_PARSE_BOOL(AlignConsecutiveMacros);
   CHECK_PARSE_BOOL(AllowAllArgumentsOnNextLine);
@@ -13487,6 +13608,7 @@ TEST_F(FormatTest, ParsesConfigurationBools) {
   CHECK_PARSE_NESTED_BOOL(BraceWrapping, BeforeCatch);
   CHECK_PARSE_NESTED_BOOL(BraceWrapping, BeforeElse);
   CHECK_PARSE_NESTED_BOOL(BraceWrapping, BeforeLambdaBody);
+  CHECK_PARSE_NESTED_BOOL(BraceWrapping, BeforeWhile);
   CHECK_PARSE_NESTED_BOOL(BraceWrapping, IndentBraces);
   CHECK_PARSE_NESTED_BOOL(BraceWrapping, SplitEmptyFunction);
   CHECK_PARSE_NESTED_BOOL(BraceWrapping, SplitEmptyRecord);
@@ -13772,6 +13894,18 @@ TEST_F(FormatTest, ParsesConfiguration) {
   CHECK_PARSE("AllowShortIfStatementsOnASingleLine: true",
               AllowShortIfStatementsOnASingleLine,
               FormatStyle::SIS_WithoutElse);
+
+  Style.IndentExternBlock = FormatStyle::IEBS_NoIndent;
+  CHECK_PARSE("IndentExternBlock: AfterExternBlock", IndentExternBlock,
+              FormatStyle::IEBS_AfterExternBlock);
+  CHECK_PARSE("IndentExternBlock: Indent", IndentExternBlock,
+              FormatStyle::IEBS_Indent);
+  CHECK_PARSE("IndentExternBlock: NoIndent", IndentExternBlock,
+              FormatStyle::IEBS_NoIndent);
+  CHECK_PARSE("IndentExternBlock: true", IndentExternBlock,
+              FormatStyle::IEBS_Indent);
+  CHECK_PARSE("IndentExternBlock: false", IndentExternBlock,
+              FormatStyle::IEBS_NoIndent);
 
   // FIXME: This is required because parsing a configuration simply overwrites
   // the first N elements of the list instead of resetting it.
@@ -16295,6 +16429,17 @@ TEST_F(FormatTest, OperatorSpacing) {
   verifyFormat("operator&&(int(&&)(), class Foo);", Style);
 }
 
+TEST_F(FormatTest, OperatorPassedAsAFunctionPtr) {
+  FormatStyle Style = getLLVMStyle();
+  // PR46157
+  verifyFormat("foo(operator+, -42);", Style);
+  verifyFormat("foo(operator++, -42);", Style);
+  verifyFormat("foo(operator--, -42);", Style);
+  verifyFormat("foo(-42, operator--);", Style);
+  verifyFormat("foo(-42, operator, );", Style);
+  verifyFormat("foo(operator, , -42);", Style);
+}
+
 TEST_F(FormatTest, VeryLongNamespaceCommentSplit) {
   // These tests are not in NamespaceFixer because that doesn't
   // test its interaction with line wrapping
@@ -16391,8 +16536,65 @@ TEST_F(FormatTest, LikelyUnlikely) {
                "  return 42;\n"
                "}\n",
                Style);
+
+  verifyFormat("if (argc > 5) [[gnu::unused]] {\n"
+               "  return 29;\n"
+               "}",
+               Style);
 }
 
+TEST_F(FormatTest, LLVMDefaultStyle) {
+  FormatStyle Style = getLLVMStyle();
+  verifyFormat("extern \"C\" {\n"
+               "int foo();\n"
+               "}",
+               Style);
+}
+TEST_F(FormatTest, GNUDefaultStyle) {
+  FormatStyle Style = getGNUStyle();
+  verifyFormat("extern \"C\"\n"
+               "{\n"
+               "  int foo ();\n"
+               "}",
+               Style);
+}
+TEST_F(FormatTest, MozillaDefaultStyle) {
+  FormatStyle Style = getMozillaStyle();
+  verifyFormat("extern \"C\"\n"
+               "{\n"
+               "  int foo();\n"
+               "}",
+               Style);
+}
+TEST_F(FormatTest, GoogleDefaultStyle) {
+  FormatStyle Style = getGoogleStyle();
+  verifyFormat("extern \"C\" {\n"
+               "int foo();\n"
+               "}",
+               Style);
+}
+TEST_F(FormatTest, ChromiumDefaultStyle) {
+  FormatStyle Style = getChromiumStyle(FormatStyle::LanguageKind::LK_Cpp);
+  verifyFormat("extern \"C\" {\n"
+               "int foo();\n"
+               "}",
+               Style);
+}
+TEST_F(FormatTest, MicrosoftDefaultStyle) {
+  FormatStyle Style = getMicrosoftStyle(FormatStyle::LanguageKind::LK_Cpp);
+  verifyFormat("extern \"C\"\n"
+               "{\n"
+               "    int foo();\n"
+               "}",
+               Style);
+}
+TEST_F(FormatTest, WebKitDefaultStyle) {
+  FormatStyle Style = getWebKitStyle();
+  verifyFormat("extern \"C\" {\n"
+               "int foo();\n"
+               "}",
+               Style);
+}
 } // namespace
 } // namespace format
 } // namespace clang

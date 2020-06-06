@@ -14,6 +14,7 @@
 
 #include "llvm/Transforms/Vectorize/VectorCombine.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/BasicAliasAnalysis.h"
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
@@ -25,8 +26,8 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Transforms/Vectorize.h"
 #include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Transforms/Vectorize.h"
 
 extern bool DisablePeepholes;
 
@@ -213,8 +214,8 @@ static bool foldExtractExtract(Instruction &I, const TargetTransformInfo &TTI) {
 
   Value *V0, *V1;
   uint64_t C0, C1;
-  if (!match(Ext0, m_ExtractElement(m_Value(V0), m_ConstantInt(C0))) ||
-      !match(Ext1, m_ExtractElement(m_Value(V1), m_ConstantInt(C1))) ||
+  if (!match(Ext0, m_ExtractElt(m_Value(V0), m_ConstantInt(C0))) ||
+      !match(Ext1, m_ExtractElt(m_Value(V1), m_ConstantInt(C1))) ||
       V0->getType() != V1->getType())
     return false;
 
@@ -225,8 +226,8 @@ static bool foldExtractExtract(Instruction &I, const TargetTransformInfo &TTI) {
   //       probably becomes unnecessary.
   uint64_t InsertIndex = std::numeric_limits<uint64_t>::max();
   if (I.hasOneUse())
-    match(I.user_back(), m_InsertElement(m_Value(), m_Value(),
-                                         m_ConstantInt(InsertIndex)));
+    match(I.user_back(),
+          m_InsertElt(m_Value(), m_Value(), m_ConstantInt(InsertIndex)));
 
   Instruction *ConvertToShuffle;
   if (isExtractExtractCheap(Ext0, Ext1, I.getOpcode(), TTI, ConvertToShuffle,
@@ -268,8 +269,8 @@ static bool foldExtractExtract(Instruction &I, const TargetTransformInfo &TTI) {
 static bool foldBitcastShuf(Instruction &I, const TargetTransformInfo &TTI) {
   Value *V;
   ArrayRef<int> Mask;
-  if (!match(&I, m_BitCast(m_OneUse(m_ShuffleVector(m_Value(V), m_Undef(),
-                                                    m_Mask(Mask))))))
+  if (!match(&I, m_BitCast(
+                     m_OneUse(m_Shuffle(m_Value(V), m_Undef(), m_Mask(Mask))))))
     return false;
 
   // Disallow non-vector casts and length-changing shuffles.
@@ -305,8 +306,8 @@ static bool foldBitcastShuf(Instruction &I, const TargetTransformInfo &TTI) {
   // bitcast (shuf V, MaskC) --> shuf (bitcast V), MaskC'
   IRBuilder<> Builder(&I);
   Value *CastV = Builder.CreateBitCast(V, DestTy);
-  Value *Shuf = Builder.CreateShuffleVector(CastV, UndefValue::get(DestTy),
-                                            NewMask);
+  Value *Shuf =
+      Builder.CreateShuffleVector(CastV, UndefValue::get(DestTy), NewMask);
   I.replaceAllUsesWith(Shuf);
   return true;
 }
@@ -322,10 +323,10 @@ static bool scalarizeBinop(Instruction &I, const TargetTransformInfo &TTI) {
   Constant *VecC0, *VecC1;
   Value *V0, *V1;
   uint64_t Index;
-  if (!match(Ins0, m_InsertElement(m_Constant(VecC0), m_Value(V0),
-                                   m_ConstantInt(Index))) ||
-      !match(Ins1, m_InsertElement(m_Constant(VecC1), m_Value(V1),
-                                   m_SpecificInt(Index))))
+  if (!match(Ins0, m_InsertElt(m_Constant(VecC0), m_Value(V0),
+                               m_ConstantInt(Index))) ||
+      !match(Ins1, m_InsertElt(m_Constant(VecC1), m_Value(V1),
+                               m_SpecificInt(Index))))
     return false;
 
   Type *ScalarTy = V0->getType();
@@ -419,6 +420,8 @@ public:
     AU.setPreservesCFG();
     AU.addPreserved<DominatorTreeWrapperPass>();
     AU.addPreserved<GlobalsAAWrapperPass>();
+    AU.addPreserved<AAResultsWrapperPass>();
+    AU.addPreserved<BasicAAWrapperPass>();
     FunctionPass::getAnalysisUsage(AU);
   }
 
@@ -455,5 +458,7 @@ PreservedAnalyses VectorCombinePass::run(Function &F,
   PreservedAnalyses PA;
   PA.preserveSet<CFGAnalyses>();
   PA.preserve<GlobalsAA>();
+  PA.preserve<AAManager>();
+  PA.preserve<BasicAA>();
   return PA;
 }

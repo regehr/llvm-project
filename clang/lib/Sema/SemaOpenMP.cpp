@@ -1832,23 +1832,28 @@ Sema::DeviceDiagBuilder Sema::diagIfOpenMPDeviceCode(SourceLocation Loc,
                                                      unsigned DiagID) {
   assert(LangOpts.OpenMP && LangOpts.OpenMPIsDevice &&
          "Expected OpenMP device compilation.");
-  FunctionEmissionStatus FES = getEmissionStatus(getCurFunctionDecl());
+
+  FunctionDecl *FD = getCurFunctionDecl();
   DeviceDiagBuilder::Kind Kind = DeviceDiagBuilder::K_Nop;
-  switch (FES) {
-  case FunctionEmissionStatus::Emitted:
-    Kind = DeviceDiagBuilder::K_Immediate;
-    break;
-  case FunctionEmissionStatus::Unknown:
-    Kind = isOpenMPDeviceDelayedContext(*this) ? DeviceDiagBuilder::K_Deferred
-                                               : DeviceDiagBuilder::K_Immediate;
-    break;
-  case FunctionEmissionStatus::TemplateDiscarded:
-  case FunctionEmissionStatus::OMPDiscarded:
-    Kind = DeviceDiagBuilder::K_Nop;
-    break;
-  case FunctionEmissionStatus::CUDADiscarded:
-    llvm_unreachable("CUDADiscarded unexpected in OpenMP device compilation");
-    break;
+  if (FD) {
+    FunctionEmissionStatus FES = getEmissionStatus(FD);
+    switch (FES) {
+    case FunctionEmissionStatus::Emitted:
+      Kind = DeviceDiagBuilder::K_Immediate;
+      break;
+    case FunctionEmissionStatus::Unknown:
+      Kind = isOpenMPDeviceDelayedContext(*this)
+                 ? DeviceDiagBuilder::K_Deferred
+                 : DeviceDiagBuilder::K_Immediate;
+      break;
+    case FunctionEmissionStatus::TemplateDiscarded:
+    case FunctionEmissionStatus::OMPDiscarded:
+      Kind = DeviceDiagBuilder::K_Nop;
+      break;
+    case FunctionEmissionStatus::CUDADiscarded:
+      llvm_unreachable("CUDADiscarded unexpected in OpenMP device compilation");
+      break;
+    }
   }
 
   return DeviceDiagBuilder(Kind, Loc, DiagID, getCurFunctionDecl(), *this);
@@ -1875,21 +1880,6 @@ Sema::DeviceDiagBuilder Sema::diagIfOpenMPHostCode(SourceLocation Loc,
   }
 
   return DeviceDiagBuilder(Kind, Loc, DiagID, getCurFunctionDecl(), *this);
-}
-
-void Sema::checkOpenMPDeviceExpr(const Expr *E) {
-  assert(getLangOpts().OpenMP && getLangOpts().OpenMPIsDevice &&
-         "OpenMP device compilation mode is expected.");
-  QualType Ty = E->getType();
-  if ((Ty->isFloat16Type() && !Context.getTargetInfo().hasFloat16Type()) ||
-      ((Ty->isFloat128Type() ||
-        (Ty->isRealFloatingType() && Context.getTypeSize(Ty) == 128)) &&
-       !Context.getTargetInfo().hasFloat128Type()) ||
-      (Ty->isIntegerType() && Context.getTypeSize(Ty) == 128 &&
-       !Context.getTargetInfo().hasInt128Type()))
-    targetDiag(E->getExprLoc(), diag::err_omp_unsupported_type)
-        << static_cast<unsigned>(Context.getTypeSize(Ty)) << Ty
-        << Context.getTargetInfo().getTriple().str() << E->getSourceRange();
 }
 
 static OpenMPDefaultmapClauseKind
@@ -5408,6 +5398,7 @@ StmtResult Sema::ActOnOpenMPExecutableDirective(
       case OMPC_to:
       case OMPC_from:
       case OMPC_use_device_ptr:
+      case OMPC_use_device_addr:
       case OMPC_is_device_ptr:
       case OMPC_nontemporal:
       case OMPC_order:
@@ -9185,6 +9176,14 @@ StmtResult Sema::ActOnOpenMPScanDirective(ArrayRef<OMPClause *> Clauses,
          diag::err_omp_scan_single_clause_expected);
     return StmtError();
   }
+  // Check that scan directive is used in the scopeof the OpenMP loop body.
+  if (Scope *S = DSAStack->getCurScope()) {
+    Scope *ParentS = S->getParent();
+    if (!ParentS || ParentS->getParent() != ParentS->getBreakParent() ||
+        !ParentS->getBreakParent()->isOpenMPLoopScope())
+      return StmtError(Diag(StartLoc, diag::err_omp_orphaned_device_directive)
+                       << getOpenMPDirectiveName(OMPD_scan) << 5);
+  }
   // Check that only one instance of scan directives is used in the same outer
   // region.
   if (DSAStack->doesParentHasScanDirective()) {
@@ -10165,12 +10164,18 @@ StmtResult Sema::ActOnOpenMPTargetDataDirective(ArrayRef<OMPClause *> Clauses,
 
   assert(isa<CapturedStmt>(AStmt) && "Captured statement expected");
 
-  // OpenMP [2.10.1, Restrictions, p. 97]
-  // At least one map clause must appear on the directive.
-  if (!hasClauses(Clauses, OMPC_map, OMPC_use_device_ptr)) {
+  // OpenMP [2.12.2, target data Construct, Restrictions]
+  // At least one map, use_device_addr or use_device_ptr clause must appear on
+  // the directive.
+  if (!hasClauses(Clauses, OMPC_map, OMPC_use_device_ptr) &&
+      (LangOpts.OpenMP < 50 || !hasClauses(Clauses, OMPC_use_device_addr))) {
+    StringRef Expected;
+    if (LangOpts.OpenMP < 50)
+      Expected = "'map' or 'use_device_ptr'";
+    else
+      Expected = "'map', 'use_device_ptr', or 'use_device_addr'";
     Diag(StartLoc, diag::err_omp_no_clause_for_directive)
-        << "'map' or 'use_device_ptr'"
-        << getOpenMPDirectiveName(OMPD_target_data);
+        << Expected << getOpenMPDirectiveName(OMPD_target_data);
     return StmtError();
   }
 
@@ -11535,6 +11540,7 @@ OMPClause *Sema::ActOnOpenMPSingleExprClause(OpenMPClauseKind Kind, Expr *Expr,
   case OMPC_to:
   case OMPC_from:
   case OMPC_use_device_ptr:
+  case OMPC_use_device_addr:
   case OMPC_is_device_ptr:
   case OMPC_unified_address:
   case OMPC_unified_shared_memory:
@@ -12289,6 +12295,7 @@ static OpenMPDirectiveKind getOpenMPCaptureRegionForClause(
   case OMPC_to:
   case OMPC_from:
   case OMPC_use_device_ptr:
+  case OMPC_use_device_addr:
   case OMPC_is_device_ptr:
   case OMPC_unified_address:
   case OMPC_unified_shared_memory:
@@ -12731,6 +12738,7 @@ OMPClause *Sema::ActOnOpenMPSimpleClause(
   case OMPC_to:
   case OMPC_from:
   case OMPC_use_device_ptr:
+  case OMPC_use_device_addr:
   case OMPC_is_device_ptr:
   case OMPC_unified_address:
   case OMPC_unified_shared_memory:
@@ -12956,6 +12964,7 @@ OMPClause *Sema::ActOnOpenMPSingleExprWithArgClause(
   case OMPC_to:
   case OMPC_from:
   case OMPC_use_device_ptr:
+  case OMPC_use_device_addr:
   case OMPC_is_device_ptr:
   case OMPC_unified_address:
   case OMPC_unified_shared_memory:
@@ -13195,6 +13204,7 @@ OMPClause *Sema::ActOnOpenMPClause(OpenMPClauseKind Kind,
   case OMPC_to:
   case OMPC_from:
   case OMPC_use_device_ptr:
+  case OMPC_use_device_addr:
   case OMPC_is_device_ptr:
   case OMPC_atomic_default_mem_order:
   case OMPC_device_type:
@@ -13405,6 +13415,9 @@ OMPClause *Sema::ActOnOpenMPVarListClause(
     break;
   case OMPC_use_device_ptr:
     Res = ActOnOpenMPUseDevicePtrClause(VarList, Locs);
+    break;
+  case OMPC_use_device_addr:
+    Res = ActOnOpenMPUseDeviceAddrClause(VarList, Locs);
     break;
   case OMPC_is_device_ptr:
     Res = ActOnOpenMPIsDevicePtrClause(VarList, Locs);
@@ -14456,6 +14469,12 @@ struct ReductionData {
   SmallVector<Expr *, 8> RHSs;
   /// Reduction operation expression.
   SmallVector<Expr *, 8> ReductionOps;
+  /// inscan copy operation expressions.
+  SmallVector<Expr *, 8> InscanCopyOps;
+  /// inscan copy temp array expressions for prefix sums.
+  SmallVector<Expr *, 8> InscanCopyArrayTemps;
+  /// inscan copy temp array element expressions for prefix sums.
+  SmallVector<Expr *, 8> InscanCopyArrayElems;
   /// Taskgroup descriptors for the corresponding reduction items in
   /// in_reduction clauses.
   SmallVector<Expr *, 8> TaskgroupDescriptors;
@@ -14473,6 +14492,11 @@ struct ReductionData {
     LHSs.reserve(Size);
     RHSs.reserve(Size);
     ReductionOps.reserve(Size);
+    if (RedModifier == OMPC_REDUCTION_inscan) {
+      InscanCopyOps.reserve(Size);
+      InscanCopyArrayTemps.reserve(Size);
+      InscanCopyArrayElems.reserve(Size);
+    }
     TaskgroupDescriptors.reserve(Size);
     ExprCaptures.reserve(Size);
     ExprPostUpdates.reserve(Size);
@@ -14486,16 +14510,31 @@ struct ReductionData {
     RHSs.emplace_back(nullptr);
     ReductionOps.emplace_back(ReductionOp);
     TaskgroupDescriptors.emplace_back(nullptr);
+    if (RedModifier == OMPC_REDUCTION_inscan) {
+      InscanCopyOps.push_back(nullptr);
+      InscanCopyArrayTemps.push_back(nullptr);
+      InscanCopyArrayElems.push_back(nullptr);
+    }
   }
   /// Stores reduction data.
   void push(Expr *Item, Expr *Private, Expr *LHS, Expr *RHS, Expr *ReductionOp,
-            Expr *TaskgroupDescriptor) {
+            Expr *TaskgroupDescriptor, Expr *CopyOp, Expr *CopyArrayTemp,
+            Expr *CopyArrayElem) {
     Vars.emplace_back(Item);
     Privates.emplace_back(Private);
     LHSs.emplace_back(LHS);
     RHSs.emplace_back(RHS);
     ReductionOps.emplace_back(ReductionOp);
     TaskgroupDescriptors.emplace_back(TaskgroupDescriptor);
+    if (RedModifier == OMPC_REDUCTION_inscan) {
+      InscanCopyOps.push_back(CopyOp);
+      InscanCopyArrayTemps.push_back(CopyArrayTemp);
+      InscanCopyArrayElems.push_back(CopyArrayElem);
+    } else {
+      assert(CopyOp == nullptr && CopyArrayTemp == nullptr &&
+             CopyArrayElem == nullptr &&
+             "Copy operation must be used for inscan reductions only.");
+    }
   }
 };
 } // namespace
@@ -14888,11 +14927,11 @@ static bool actOnOMPReductionKindClause(
         if (isOpenMPTargetExecutionDirective(Stack->getCurrentDirective())) {
           S.Diag(ELoc, diag::err_omp_reduction_vla_unsupported) << !!OASE;
           S.Diag(ELoc, diag::note_vla_unsupported);
+          continue;
         } else {
           S.targetDiag(ELoc, diag::err_omp_reduction_vla_unsupported) << !!OASE;
           S.targetDiag(ELoc, diag::note_vla_unsupported);
         }
-        continue;
       }
       // For arrays/array sections only:
       // Create pseudo array type for private copy. The size for this array will
@@ -15097,6 +15136,40 @@ static bool actOnOMPReductionKindClause(
         continue;
     }
 
+    // Add copy operations for inscan reductions.
+    // LHS = RHS;
+    ExprResult CopyOpRes, TempArrayRes, TempArrayElem;
+    if (ClauseKind == OMPC_reduction &&
+        RD.RedModifier == OMPC_REDUCTION_inscan) {
+      ExprResult RHS = S.DefaultLvalueConversion(RHSDRE);
+      CopyOpRes = S.BuildBinOp(Stack->getCurScope(), ELoc, BO_Assign, LHSDRE,
+                               RHS.get());
+      if (!CopyOpRes.isUsable())
+        continue;
+      CopyOpRes =
+          S.ActOnFinishFullExpr(CopyOpRes.get(), /*DiscardedValue=*/true);
+      if (!CopyOpRes.isUsable())
+        continue;
+      // Build temp array for prefix sum.
+      auto *Dim = new (S.Context)
+          OpaqueValueExpr(ELoc, S.Context.getSizeType(), VK_RValue);
+      QualType ArrayTy =
+          S.Context.getVariableArrayType(PrivateTy, Dim, ArrayType::Normal,
+                                         /*IndexTypeQuals=*/0, {ELoc, ELoc});
+      VarDecl *TempArrayVD =
+          buildVarDecl(S, ELoc, ArrayTy, D->getName(),
+                       D->hasAttrs() ? &D->getAttrs() : nullptr);
+      // Add a constructor to the temp decl.
+      S.ActOnUninitializedDecl(TempArrayVD);
+      TempArrayRes = buildDeclRefExpr(S, TempArrayVD, ArrayTy, ELoc);
+      TempArrayElem =
+          S.DefaultFunctionArrayLvalueConversion(TempArrayRes.get());
+      auto *Idx = new (S.Context)
+          OpaqueValueExpr(ELoc, S.Context.getSizeType(), VK_RValue);
+      TempArrayElem = S.CreateBuiltinArraySubscriptExpr(TempArrayElem.get(),
+                                                        ELoc, Idx, ELoc);
+    }
+
     // OpenMP [2.15.4.6, Restrictions, p.2]
     // A list item that appears in an in_reduction clause of a task construct
     // must appear in a task_reduction clause of a construct associated with a
@@ -15198,7 +15271,8 @@ static bool actOnOMPReductionKindClause(
         Stack->addTaskgroupReductionData(D, ReductionIdRange, BOK);
     }
     RD.push(VarsExpr, PrivateDRE, LHSDRE, RHSDRE, ReductionOp.get(),
-            TaskgroupDescriptor);
+            TaskgroupDescriptor, CopyOpRes.get(), TempArrayRes.get(),
+            TempArrayElem.get());
   }
   return RD.Vars.empty();
 }
@@ -15241,7 +15315,8 @@ OMPClause *Sema::ActOnOpenMPReductionClause(
   return OMPReductionClause::Create(
       Context, StartLoc, LParenLoc, ModifierLoc, ColonLoc, EndLoc, Modifier,
       RD.Vars, ReductionIdScopeSpec.getWithLocInContext(Context), ReductionId,
-      RD.Privates, RD.LHSs, RD.RHSs, RD.ReductionOps,
+      RD.Privates, RD.LHSs, RD.RHSs, RD.ReductionOps, RD.InscanCopyOps,
+      RD.InscanCopyArrayTemps, RD.InscanCopyArrayElems,
       buildPreInits(Context, RD.ExprCaptures),
       buildPostUpdate(*this, RD.ExprPostUpdates));
 }
@@ -16123,7 +16198,7 @@ Sema::ActOnOpenMPDependClause(Expr *DepModifier, OpenMPDependClauseKind DepKind,
 
         auto *ASE = dyn_cast<ArraySubscriptExpr>(SimpleExpr);
         if (!RefExpr->IgnoreParenImpCasts()->isLValue() ||
-            (ASE &&
+            (ASE && !ASE->getBase()->isTypeDependent() &&
              !ASE->getBase()
                   ->getType()
                   .getNonReferenceType()
@@ -18387,6 +18462,54 @@ OMPClause *Sema::ActOnOpenMPUseDevicePtrClause(ArrayRef<Expr *> VarList,
   return OMPUseDevicePtrClause::Create(
       Context, Locs, MVLI.ProcessedVarList, PrivateCopies, Inits,
       MVLI.VarBaseDeclarations, MVLI.VarComponents);
+}
+
+OMPClause *Sema::ActOnOpenMPUseDeviceAddrClause(ArrayRef<Expr *> VarList,
+                                                const OMPVarListLocTy &Locs) {
+  MappableVarListInfo MVLI(VarList);
+
+  for (Expr *RefExpr : VarList) {
+    assert(RefExpr && "NULL expr in OpenMP use_device_addr clause.");
+    SourceLocation ELoc;
+    SourceRange ERange;
+    Expr *SimpleRefExpr = RefExpr;
+    auto Res = getPrivateItem(*this, SimpleRefExpr, ELoc, ERange,
+                              /*AllowArraySection=*/true);
+    if (Res.second) {
+      // It will be analyzed later.
+      MVLI.ProcessedVarList.push_back(RefExpr);
+    }
+    ValueDecl *D = Res.first;
+    if (!D)
+      continue;
+    auto *VD = dyn_cast<VarDecl>(D);
+
+    // If required, build a capture to implement the privatization initialized
+    // with the current list item value.
+    DeclRefExpr *Ref = nullptr;
+    if (!VD)
+      Ref = buildCapture(*this, D, SimpleRefExpr, /*WithInit=*/true);
+    MVLI.ProcessedVarList.push_back(VD ? RefExpr->IgnoreParens() : Ref);
+
+    // We need to add a data sharing attribute for this variable to make sure it
+    // is correctly captured. A variable that shows up in a use_device_addr has
+    // similar properties of a first private variable.
+    DSAStack->addDSA(D, RefExpr->IgnoreParens(), OMPC_firstprivate, Ref);
+
+    // Create a mappable component for the list item. List items in this clause
+    // only need a component.
+    MVLI.VarBaseDeclarations.push_back(D);
+    MVLI.VarComponents.emplace_back();
+    MVLI.VarComponents.back().push_back(
+        OMPClauseMappableExprCommon::MappableComponent(SimpleRefExpr, D));
+  }
+
+  if (MVLI.ProcessedVarList.empty())
+    return nullptr;
+
+  return OMPUseDeviceAddrClause::Create(Context, Locs, MVLI.ProcessedVarList,
+                                        MVLI.VarBaseDeclarations,
+                                        MVLI.VarComponents);
 }
 
 OMPClause *Sema::ActOnOpenMPIsDevicePtrClause(ArrayRef<Expr *> VarList,

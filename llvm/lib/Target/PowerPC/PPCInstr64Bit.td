@@ -145,9 +145,9 @@ let isCall = 1, PPC970_Unit = 7, Defs = [LR8] in {
       // it does use R2 then it is just a caller saved register. Therefore it is
       // safe to emit only the bl and not the nop for this instruction. The
       // linker will not try to restore R2 after the call.
-      def BL8_NOTOC : IForm_and_DForm_4_zero<18, 0, 1, 24, (outs),
-                                             (ins calltarget:$func),
-                                             "bl $func", IIC_BrB, []>;
+      def BL8_NOTOC : IForm<18, 0, 1, (outs),
+                            (ins calltarget:$func),
+                            "bl $func", IIC_BrB, []>;
     }
   }
   let Uses = [CTR8, RM] in {
@@ -924,6 +924,9 @@ def ISEL8   : AForm_4<31, 15,
 }  // hasSideEffects = 0
 }  // End FXU Operations.
 
+def : InstAlias<"li $rD, $imm", (ADDI8 g8rc:$rD, ZERO8, s16imm64:$imm)>;
+def : InstAlias<"lis $rD, $imm", (ADDIS8 g8rc:$rD, ZERO8, s17imm64:$imm)>;
+
 def : InstAlias<"mr $rA, $rB", (OR8 g8rc:$rA, g8rc:$rB, g8rc:$rB)>;
 def : InstAlias<"mr. $rA, $rB", (OR8_rec g8rc:$rA, g8rc:$rB, g8rc:$rB)>;
 
@@ -941,6 +944,21 @@ def : InstAlias<"rotlwi $rA, $rS, $n", (RLWINM8 g8rc:$rA, g8rc:$rS, u5imm:$n, 0,
 def : InstAlias<"rotlwi. $rA, $rS, $n", (RLWINM8_rec g8rc:$rA, g8rc:$rS, u5imm:$n, 0, 31)>;
 def : InstAlias<"rotlw $rA, $rS, $rB", (RLWNM8 g8rc:$rA, g8rc:$rS, g8rc:$rB, 0, 31)>;
 def : InstAlias<"rotlw. $rA, $rS, $rB", (RLWNM8_rec g8rc:$rA, g8rc:$rS, g8rc:$rB, 0, 31)>;
+def : InstAlias<"clrlwi $rA, $rS, $n", (RLWINM8 g8rc:$rA, g8rc:$rS, 0, u5imm:$n, 31)>;
+def : InstAlias<"clrlwi. $rA, $rS, $n", (RLWINM8_rec g8rc:$rA, g8rc:$rS, 0, u5imm:$n, 31)>;
+
+def : InstAlias<"isellt $rT, $rA, $rB",
+                (ISEL8 g8rc:$rT, g8rc_nox0:$rA, g8rc:$rB, CR0LT)>;
+def : InstAlias<"iselgt $rT, $rA, $rB",
+                (ISEL8 g8rc:$rT, g8rc_nox0:$rA, g8rc:$rB, CR0GT)>;
+def : InstAlias<"iseleq $rT, $rA, $rB",
+                (ISEL8 g8rc:$rT, g8rc_nox0:$rA, g8rc:$rB, CR0EQ)>;
+
+def : InstAlias<"nop", (ORI8 X0, X0, 0)>;
+def : InstAlias<"xnop", (XORI8 X0, X0, 0)>;
+
+def : InstAlias<"cntlzw $rA, $rS", (CNTLZW8 g8rc:$rA, g8rc:$rS)>;
+def : InstAlias<"cntlzw. $rA, $rS", (CNTLZW8_rec g8rc:$rA, g8rc:$rS)>;
 
 //===----------------------------------------------------------------------===//
 // Load/Store instructions.

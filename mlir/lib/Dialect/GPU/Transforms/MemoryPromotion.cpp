@@ -85,7 +85,6 @@ static void insertCopyLoops(OpBuilder &builder, Location loc,
     StdIndexedValue fromHandle(from), toHandle(to);
     toHandle(activeIvs) = fromHandle(activeIvs);
   });
-  ivs[0].getParentBlock()->dump();
 
   // Map the innermost loops to threads in reverse order.
   for (auto en :
@@ -162,8 +161,12 @@ void mlir::promoteToWorkgroupMemory(GPUFuncOp op, unsigned arg) {
   auto type = value.getType().dyn_cast<MemRefType>();
   assert(type && type.hasStaticShape() && "can only promote memrefs");
 
-  Value attribution =
-      op.addWorkgroupAttribution(type.getShape(), type.getElementType());
+  // Get the type of the buffer in the workgroup memory.
+  int workgroupMemoryAddressSpace = gpu::GPUDialect::getWorkgroupAddressSpace();
+  auto bufferType = MemRefType::get(type.getShape(), type.getElementType(), {},
+                                    workgroupMemoryAddressSpace);
+
+  Value attribution = op.addWorkgroupAttribution(bufferType);
 
   // Replace the uses first since only the original uses are currently present.
   // Then insert the copies.

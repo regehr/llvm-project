@@ -67,8 +67,7 @@ mlir::edsc::LoopNestBuilder::LoopNestBuilder(Value *iv, Value lb, Value ub,
   loops.emplace_back(makeLoopBuilder(iv, lb, ub, step, noArgs, {}));
 }
 
-Operation::result_range
-mlir::edsc::LoopNestBuilder::LoopNestBuilder::operator()(
+ValueRange mlir::edsc::LoopNestBuilder::LoopNestBuilder::operator()(
     std::function<void(void)> fun) {
   if (fun)
     fun();
@@ -76,7 +75,9 @@ mlir::edsc::LoopNestBuilder::LoopNestBuilder::operator()(
   for (auto &lit : reverse(loops))
     lit({});
 
-  return loops[0].getOp()->getResults();
+  if (!loops.empty())
+    return loops[0].getOp()->getResults();
+  return {};
 }
 
 LoopBuilder mlir::edsc::makeParallelLoopBuilder(MutableArrayRef<Value> ivs,
@@ -157,4 +158,52 @@ mlir::scf::ValueVector mlir::edsc::loopNestBuilder(
         return scf::ValueVector(iterArgInitValues.begin(),
                                 iterArgInitValues.end());
       });
+}
+
+static std::function<void(OpBuilder &, Location)>
+wrapIfBody(function_ref<scf::ValueVector()> body, TypeRange expectedTypes) {
+  (void)expectedTypes;
+  return [=](OpBuilder &builder, Location loc) {
+    ScopedContext context(builder, loc);
+    scf::ValueVector returned = body();
+    assert(ValueRange(returned).getTypes() == expectedTypes &&
+           "'if' body builder returned values of unexpected type");
+    builder.create<scf::YieldOp>(loc, returned);
+  };
+}
+
+ValueRange
+mlir::edsc::conditionBuilder(TypeRange results, Value condition,
+                             function_ref<scf::ValueVector()> thenBody,
+                             function_ref<scf::ValueVector()> elseBody) {
+  assert(ScopedContext::getContext() && "EDSC ScopedContext not set up");
+  assert(thenBody && "thenBody is mandatory");
+
+  auto ifOp = ScopedContext::getBuilderRef().create<scf::IfOp>(
+      ScopedContext::getLocation(), results, condition,
+      wrapIfBody(thenBody, results), wrapIfBody(elseBody, results));
+  return ifOp.getResults();
+}
+
+static std::function<void(OpBuilder &, Location)>
+wrapZeroResultIfBody(function_ref<void()> body) {
+  return [=](OpBuilder &builder, Location loc) {
+    ScopedContext context(builder, loc);
+    body();
+    builder.create<scf::YieldOp>(loc);
+  };
+}
+
+ValueRange mlir::edsc::conditionBuilder(Value condition,
+                                        function_ref<void()> thenBody,
+                                        function_ref<void()> elseBody) {
+  assert(ScopedContext::getContext() && "EDSC ScopedContext not set up");
+  assert(thenBody && "thenBody is mandatory");
+
+  ScopedContext::getBuilderRef().create<scf::IfOp>(
+      ScopedContext::getLocation(), condition, wrapZeroResultIfBody(thenBody),
+      elseBody ? llvm::function_ref<void(OpBuilder &, Location)>(
+                     wrapZeroResultIfBody(elseBody))
+               : llvm::function_ref<void(OpBuilder &, Location)>(nullptr));
+  return {};
 }

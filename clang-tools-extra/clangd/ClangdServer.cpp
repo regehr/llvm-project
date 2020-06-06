@@ -114,6 +114,7 @@ ClangdServer::Options ClangdServer::optsForTest() {
   Opts.StorePreamblesInMemory = true;
   Opts.AsyncThreadsCount = 4; // Consistent!
   Opts.TheiaSemanticHighlighting = true;
+  Opts.AsyncPreambleBuilds = true;
   return Opts;
 }
 
@@ -123,6 +124,7 @@ ClangdServer::Options::operator TUScheduler::Options() const {
   Opts.RetentionPolicy = RetentionPolicy;
   Opts.StorePreamblesInMemory = StorePreamblesInMemory;
   Opts.UpdateDebounce = UpdateDebounce;
+  Opts.AsyncPreambleBuilds = AsyncPreambleBuilds;
   return Opts;
 }
 
@@ -236,11 +238,16 @@ void ClangdServer::codeComplete(PathRef File, Position Pos,
         }
       }
     }
+    ParseInputs ParseInput{IP->Command, FS, IP->Contents.str()};
+    ParseInput.Index = Index;
+    ParseInput.Opts.BuildRecoveryAST = BuildRecoveryAST;
+    ParseInput.Opts.PreserveRecoveryASTType = PreserveRecoveryASTType;
+
     // FIXME(ibiryukov): even if Preamble is non-null, we may want to check
     // both the old and the new version in case only one of them matches.
     CodeCompleteResult Result = clangd::codeComplete(
-        File, IP->Command, IP->Preamble, IP->Contents, Pos, FS,
-        CodeCompleteOpts, SpecFuzzyFind ? SpecFuzzyFind.getPointer() : nullptr);
+        File, Pos, IP->Preamble, ParseInput, CodeCompleteOpts,
+        SpecFuzzyFind ? SpecFuzzyFind.getPointer() : nullptr);
     {
       clang::clangd::trace::Span Tracer("Completion results callback");
       CB(std::move(Result));
@@ -279,8 +286,11 @@ void ClangdServer::signatureHelp(PathRef File, Position Pos,
       return CB(llvm::createStringError(llvm::inconvertibleErrorCode(),
                                         "Failed to parse includes"));
 
-    CB(clangd::signatureHelp(File, IP->Command, *PreambleData, IP->Contents,
-                             Pos, FS, Index));
+    ParseInputs ParseInput{IP->Command, FS, IP->Contents.str()};
+    ParseInput.Index = Index;
+    ParseInput.Opts.BuildRecoveryAST = BuildRecoveryAST;
+    ParseInput.Opts.PreserveRecoveryASTType = PreserveRecoveryASTType;
+    CB(clangd::signatureHelp(File, Pos, *PreambleData, ParseInput));
   };
 
   // Unlike code completion, we wait for a preamble here.
