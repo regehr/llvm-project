@@ -1,4 +1,3 @@
-; XFAIL: *
 ; Needs some fixed in the pipeliner.
 ; RUN: llc -march=hexagon < %s -pipeliner-experimental-cg=true | FileCheck %s
 
