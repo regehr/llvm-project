@@ -19,7 +19,6 @@
 #include "llvm/IR/LegacyPassManagers.h"
 #include "llvm/IR/LegacyPassNameParser.h"
 #include "llvm/IR/Module.h"
-#include "llvm/IR/Verifier.h"
 #include "llvm/IR/PassTimingInfo.h"
 #include "llvm/Support/Chrono.h"
 #include "llvm/Support/CommandLine.h"
@@ -84,11 +83,6 @@ static cl::opt<bool> PrintBeforeAll("print-before-all",
 static cl::opt<bool> PrintAfterAll("print-after-all",
                                    llvm::cl::desc("Print IR after each pass"),
                                    cl::init(false), cl::Hidden);
-
-static cl::opt<bool>
-VerifyAfterAll("verify-after-all",
-	       llvm::cl::desc("Verify the IR after each pass (and crash if the IR does not verify)"),
-	       cl::init(false));
 
 static cl::opt<bool>
     PrintModuleScope("print-module-scope",
@@ -751,11 +745,6 @@ void PMTopLevelManager::schedulePass(Pass *P) {
     Pass *PP = P->createPrinterPass(
         dbgs(), ("*** IR Dump After " + P->getPassName() + " ***").str());
     PP->assignPassManager(activeStack, getTopLevelPassManagerType());
-  }
-
-  if (PI && !PI->isAnalysis() && VerifyAfterAll) {
-    createVerifierPass()->assignPassManager(activeStack,
-					    getTopLevelPassManagerType());
   }
 }
 
