@@ -45,6 +45,8 @@ using namespace llvm;
 
 #define DEBUG_TYPE "simplifycfg"
 
+extern bool DisablePeepholes;
+
 static cl::opt<unsigned> UserBonusInstThreshold(
     "bonus-inst-threshold", cl::Hidden, cl::init(1),
     cl::desc("Control the number of bonus instructions (default = 1)"));
@@ -279,7 +281,8 @@ struct CFGSimplifyPass : public FunctionPass {
   }
 
   bool runOnFunction(Function &F) override {
-    return false;
+    if (DisablePeepholes)
+      return false;
 
     if (skipFunction(F) || (PredicateFtor && !PredicateFtor(F)))
       return false;

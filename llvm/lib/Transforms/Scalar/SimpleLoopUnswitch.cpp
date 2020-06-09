@@ -2882,8 +2882,10 @@ static bool unswitchLoop(Loop &L, DominatorTree &DT, LoopInfo &LI,
 PreservedAnalyses SimpleLoopUnswitchPass::run(Loop &L, LoopAnalysisManager &AM,
                                               LoopStandardAnalysisResults &AR,
                                               LPMUpdater &U) {
-  PreservedAnalyses PA1;
-  return PA1;
+  if (DisablePeepholes) {
+    PreservedAnalyses PA1;
+    return PA1;
+  }
 
   Function &F = *L.getHeader()->getParent();
   (void)F;
@@ -2962,7 +2964,8 @@ public:
 } // end anonymous namespace
 
 bool SimpleLoopUnswitchLegacyPass::runOnLoop(Loop *L, LPPassManager &LPM) {
-  return false;
+  if (DisablePeepholes)
+    return false;
 
   if (skipLoop(L))
     return false;

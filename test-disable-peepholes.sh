@@ -5,6 +5,10 @@ export CMAKE='cmake -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -G Nin
 
 rm -rf $DIR/build-*
 
+### better exit out if this isn't set this way!
+### FIXME: better to do this using a global CPP definition or something
+grep "bool DisablePeepholes = false" $DIR/llvm/lib/Analysis/InstructionSimplify.cpp
+
 echo "step 1"
 
 (
