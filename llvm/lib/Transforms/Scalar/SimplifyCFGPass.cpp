@@ -234,8 +234,11 @@ SimplifyCFGPass::SimplifyCFGPass(const SimplifyCFGOptions &Opts) {
 
 PreservedAnalyses SimplifyCFGPass::run(Function &F,
                                        FunctionAnalysisManager &AM) {
-  PreservedAnalyses PA1;
-  return PA1;
+  if (DisablePeepholes) {
+    PreservedAnalyses PA1;
+    return PA1;
+  }
+
   auto &TTI = AM.getResult<TargetIRAnalysis>(F);
   Options.AC = &AM.getResult<AssumptionAnalysis>(F);
   if (!simplifyFunctionCFG(F, TTI, Options))

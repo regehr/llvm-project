@@ -57,6 +57,8 @@
 #include <numeric>
 #include <utility>
 
+extern bool DisablePeepholes;
+
 #define DEBUG_TYPE "simple-loop-unswitch"
 
 using namespace llvm;
