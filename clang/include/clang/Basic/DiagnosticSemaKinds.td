@@ -3301,6 +3301,12 @@ def err_attribute_output_parameter : Error<
 
 def ext_cannot_use_trivial_abi : ExtWarn<
   "'trivial_abi' cannot be applied to %0">, InGroup<IgnoredAttributes>;
+def note_cannot_use_trivial_abi_reason : Note<
+  "'trivial_abi' is disallowed on %0 because %select{"
+  "its copy constructors and move constructors are all deleted|"
+  "it is polymorphic|"
+  "it has a base of a non-trivial class type|it has a virtual base|"
+  "it has a __weak field|it has a field of a non-trivial class type}1">;
 
 // Availability attribute
 def warn_availability_unknown_platform : Warning<
@@ -8589,11 +8595,14 @@ def err_conv_function_with_complex_decl : Error<
 def err_conv_function_redeclared : Error<
   "conversion function cannot be redeclared">;
 def warn_conv_to_self_not_used : Warning<
-  "conversion function converting %0 to itself will never be used">;
+  "conversion function converting %0 to itself will never be used">,
+  InGroup<ClassConversion>;
 def warn_conv_to_base_not_used : Warning<
-  "conversion function converting %0 to its base class %1 will never be used">;
+  "conversion function converting %0 to its base class %1 will never be used">,
+  InGroup<ClassConversion>;
 def warn_conv_to_void_not_used : Warning<
-  "conversion function converting %0 to %1 will never be used">;
+  "conversion function converting %0 to %1 will never be used">,
+  InGroup<ClassConversion>;
 
 def warn_not_compound_assign : Warning<
   "use of unary operator that may be intended as compound assignment (%0=)">;

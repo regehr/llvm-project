@@ -364,9 +364,10 @@ namespace {
         if (User->getNumOperands() != 2)
           continue;
 
-        // If this can match to INC/DEC, don't count it as a use.
-        if (User->getOpcode() == ISD::ADD &&
-            (isOneConstant(SDValue(N, 0)) || isAllOnesConstant(SDValue(N, 0))))
+        // If this is a sign-extended 8-bit integer immediate used in an ALU
+        // instruction, there is probably an opcode encoding to save space.
+        auto *C = dyn_cast<ConstantSDNode>(N);
+        if (C && isInt<8>(C->getSExtValue()))
           continue;
 
         // Immediates that are used for offsets as part of stack
@@ -2478,15 +2479,6 @@ bool X86DAGToDAGISel::selectAddr(SDNode *Parent, SDValue N, SDValue &Base,
 }
 
 bool X86DAGToDAGISel::selectMOV64Imm32(SDValue N, SDValue &Imm) {
-  if (const ConstantSDNode *CN = dyn_cast<ConstantSDNode>(N)) {
-    uint64_t ImmVal = CN->getZExtValue();
-    if (!isUInt<32>(ImmVal))
-      return false;
-
-    Imm = CurDAG->getTargetConstant(ImmVal, SDLoc(N), MVT::i64);
-    return true;
-  }
-
   // In static codegen with small code model, we can get the address of a label
   // into a register with 'movl'
   if (N->getOpcode() != X86ISD::Wrapper)
