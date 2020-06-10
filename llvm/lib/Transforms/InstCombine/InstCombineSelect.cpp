@@ -2491,6 +2491,7 @@ Instruction *InstCombiner::visitSelectInst(SelectInst &SI) {
     return &SI;
   }
 
+  if (!DisableWrongOptimizations) {
   if (SelType->isIntOrIntVectorTy(1) &&
       TrueVal->getType() == CondVal->getType()) {
     if (match(TrueVal, m_One())) {
@@ -2555,6 +2556,7 @@ Instruction *InstCombiner::visitSelectInst(SelectInst &SI) {
       return new SExtInst(NotCond, SelType);
     }
   }
+  } // fi !DisableWrongOptimizations
 
   // See if we are selecting two values based on a comparison of the two values.
   if (FCmpInst *FCI = dyn_cast<FCmpInst>(CondVal)) {
