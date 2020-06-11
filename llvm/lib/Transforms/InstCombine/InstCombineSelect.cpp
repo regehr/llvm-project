@@ -41,6 +41,8 @@
 #include <cassert>
 #include <utility>
 
+extern bool DisableWrongOptimizations;
+
 using namespace llvm;
 using namespace PatternMatch;
 
