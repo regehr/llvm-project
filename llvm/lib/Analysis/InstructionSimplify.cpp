@@ -43,7 +43,7 @@
 using namespace llvm;
 using namespace llvm::PatternMatch;
 
-bool DisablePeepholes = false;
+bool DisablePeepholes = DISABLE_PEEPHOLES_DEFAULT_VALUE;
 bool DisableWrongOptimizations = false;
 
 // "true" for 2nd template argument means use external storage

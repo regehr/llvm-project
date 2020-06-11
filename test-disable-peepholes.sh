@@ -1,30 +1,24 @@
 set -e
 
 export DIR=$HOME/llvm-project
-export CMAKE='cmake -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON ../llvm -DLLVM_ENABLE_PROJECTS=clang;openmp'
+export CMAKE='cmake -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON ../llvm -DLLVM_ENABLE_PROJECTS="llvm;clang;compiler-rt"'
 
 rm -rf $DIR/build-*
 
-### better exit out if this isn't set this way!
-### FIXME: better to do this using a global CPP definition or something
-grep "bool DisablePeepholes = false" $DIR/llvm/lib/Analysis/InstructionSimplify.cpp
-
-echo "step 1"
-
 (
+echo "step 1"
 set -e
 mkdir $DIR/build-peeps
 cd $DIR/build-peeps
-$CMAKE -DCMAKE_INSTALL_PREFIX=$DIR/install-peeps > cmake.out 2>&1
+$CMAKE -DCMAKE_INSTALL_PREFIX=$DIR/install-peeps -DCMAKE_CXX_FLAGS='-DDISABLE_PEEPHOLES_DEFAULT_VALUE=false' > cmake.out 2>&1
 ninja > build.out 2>&1
 # only fails if LLVM is broken
 ninja check > check.out 2>&1
 ninja install
 )
 
-echo "step 2"
-
 (
+echo "step 2"
 set -e
 export PATH=$DIR/install-peeps/bin:$PATH
 mkdir $DIR/build-peeps2
@@ -36,13 +30,12 @@ ninja check > check.out 2>&1
 ninja install
 )
 
-echo "step 3"
-
 # dodgy part, yikes!
 cd $DIR
 perl -pi.bak -e "s/bool DisablePeepholes = false;/bool DisablePeepholes = true;/" llvm/lib/Analysis/InstructionSimplify.cpp
 
 (
+echo "step 3"
 set -e
 mkdir $DIR/build-no-peeps
 cd $DIR/build-no-peeps
@@ -52,13 +45,12 @@ ninja > build.out 2>&1
 ninja install
 )
 
-echo "step 4"
-
 # the other dodgy part, yikes!
 cd $DIR
 perl -pi.bak -e "s/bool DisablePeepholes = true;/bool DisablePeepholes = false;/" llvm/lib/Analysis/InstructionSimplify.cpp
 
 (
+echo "step 4"
 set -e
 export PATH=$DIR/install-no-peeps/bin:$PATH
 mkdir $DIR/build-no-peeps2
