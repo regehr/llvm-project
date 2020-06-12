@@ -8,8 +8,8 @@ rm -rf $DIR/build-*
 (
 echo "step 0"
 set -e
-mkdir $DIR/build-standard
-cd $DIR/build-peeps
+mkdir $DIR/build-default
+cd $DIR/build-default
 $CMAKE -DCMAKE_INSTALL_PREFIX=$DIR/install-peeps -DCMAKE_CXX_FLAGS='-DDISABLE_WRONG_OPTIMIZATIONS_DEFAULT_VALUE=false -DDISABLE_PEEPHOLES_DEFAULT_VALUE=false' > cmake.out 2>&1
 ninja > build.out 2>&1
 # only fails if LLVM is broken
