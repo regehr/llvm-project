@@ -34444,6 +34444,25 @@ static SDValue combineX86ShuffleChain(ArrayRef<SDValue> Inputs, SDValue Root,
     }
   }
 
+  // Attempt to combine to INSERTPS, but only if the inserted element has come
+  // from a scalar.
+  // TODO: Handle other insertions here as well?
+  if (!UnaryShuffle && AllowFloatDomain && RootSizeInBits == 128 &&
+      MaskEltSizeInBits == 32 && Subtarget.hasSSE41() &&
+      !isTargetShuffleEquivalent(Mask, {4, 1, 2, 3})) {
+    SDValue SrcV1 = V1, SrcV2 = V2;
+    if (matchShuffleAsInsertPS(SrcV1, SrcV2, PermuteImm, Zeroable, Mask, DAG) &&
+        SrcV2.getOpcode() == ISD::SCALAR_TO_VECTOR) {
+      if (Depth == 0 && Root.getOpcode() == X86ISD::INSERTPS)
+        return SDValue(); // Nothing to do!
+      Res = DAG.getNode(X86ISD::INSERTPS, DL, MVT::v4f32,
+                        DAG.getBitcast(MVT::v4f32, SrcV1),
+                        DAG.getBitcast(MVT::v4f32, SrcV2),
+                        DAG.getTargetConstant(PermuteImm, DL, MVT::i8));
+      return DAG.getBitcast(RootVT, Res);
+    }
+  }
+
   SDValue NewV1 = V1; // Save operands in case early exit happens.
   SDValue NewV2 = V2;
   if (matchBinaryShuffle(MaskVT, Mask, AllowFloatDomain, AllowIntDomain, NewV1,
@@ -37889,6 +37908,74 @@ static SDValue createMMXBuildVector(BuildVectorSDNode *BV, SelectionDAG &DAG,
   return Ops[0];
 }
 
+// Recursive function that attempts to find if a bool vector node was originally
+// a vector/float/double that got truncated/extended/bitcast to/from a scalar
+// integer. If so, replace the scalar ops with bool vector equivalents back down
+// the chain.
+static SDValue combineBitcastToBoolVector(EVT VT, SDValue V, SDLoc DL,
+                                          SelectionDAG &DAG,
+                                          const X86Subtarget &Subtarget) {
+  const TargetLowering &TLI = DAG.getTargetLoweringInfo();
+  unsigned Opc = V.getOpcode();
+  switch (Opc) {
+  case ISD::BITCAST: {
+    // Bitcast from a vector/float/double, we can cheaply bitcast to VT.
+    SDValue Src = V.getOperand(0);
+    EVT SrcVT = Src.getValueType();
+    if (SrcVT.isVector() || SrcVT.isFloatingPoint())
+      return DAG.getBitcast(VT, Src);
+    break;
+  }
+  case ISD::TRUNCATE: {
+    // If we find a suitable source, a truncated scalar becomes a subvector.
+    SDValue Src = V.getOperand(0);
+    EVT NewSrcVT =
+        EVT::getVectorVT(*DAG.getContext(), MVT::i1, Src.getValueSizeInBits());
+    if (TLI.isTypeLegal(NewSrcVT))
+      if (SDValue N0 =
+              combineBitcastToBoolVector(NewSrcVT, Src, DL, DAG, Subtarget))
+        return DAG.getNode(ISD::EXTRACT_SUBVECTOR, DL, VT, N0,
+                           DAG.getIntPtrConstant(0, DL));
+    break;
+  }
+  case ISD::ANY_EXTEND:
+  case ISD::ZERO_EXTEND: {
+    // If we find a suitable source, an extended scalar becomes a subvector.
+    SDValue Src = V.getOperand(0);
+    EVT NewSrcVT = EVT::getVectorVT(*DAG.getContext(), MVT::i1,
+                                    Src.getScalarValueSizeInBits());
+    if (TLI.isTypeLegal(NewSrcVT))
+      if (SDValue N0 =
+              combineBitcastToBoolVector(NewSrcVT, Src, DL, DAG, Subtarget))
+        return DAG.getNode(ISD::INSERT_SUBVECTOR, DL, VT,
+                           Opc == ISD::ANY_EXTEND ? DAG.getUNDEF(VT)
+                                                  : DAG.getConstant(0, DL, VT),
+                           N0, DAG.getIntPtrConstant(0, DL));
+    break;
+  }
+  case ISD::OR: {
+    // If we find suitable sources, we can just move an OR to the vector domain.
+    SDValue Src0 = V.getOperand(0);
+    SDValue Src1 = V.getOperand(1);
+    if (SDValue N0 = combineBitcastToBoolVector(VT, Src0, DL, DAG, Subtarget))
+      if (SDValue N1 = combineBitcastToBoolVector(VT, Src1, DL, DAG, Subtarget))
+        return DAG.getNode(Opc, DL, VT, N0, N1);
+    break;
+  }
+  case ISD::SHL: {
+    // If we find a suitable source, a SHL becomes a KSHIFTL.
+    SDValue Src0 = V.getOperand(0);
+    if (auto *Amt = dyn_cast<ConstantSDNode>(V.getOperand(1)))
+      if (SDValue N0 = combineBitcastToBoolVector(VT, Src0, DL, DAG, Subtarget))
+        return DAG.getNode(
+            X86ISD::KSHIFTL, DL, VT, N0,
+            DAG.getTargetConstant(Amt->getZExtValue(), DL, MVT::i8));
+    break;
+  }
+  }
+  return SDValue();
+}
+
 static SDValue combineBitcast(SDNode *N, SelectionDAG &DAG,
                               TargetLowering::DAGCombinerInfo &DCI,
                               const X86Subtarget &Subtarget) {
@@ -37947,6 +38034,16 @@ static SDValue combineBitcast(SDNode *N, SelectionDAG &DAG,
       N0 = DAG.getNode(ISD::CONCAT_VECTORS, dl, MVT::v8i1, Ops);
       N0 = DAG.getBitcast(MVT::i8, N0);
       return DAG.getNode(ISD::TRUNCATE, dl, VT, N0);
+    }
+  } else {
+    // If we're bitcasting from iX to vXi1, see if the integer originally
+    // began as a vXi1 and whether we can remove the bitcast entirely.
+    if (VT.isVector() && VT.getScalarType() == MVT::i1 &&
+        SrcVT.isScalarInteger() &&
+        DAG.getTargetLoweringInfo().isTypeLegal(VT)) {
+      if (SDValue V =
+              combineBitcastToBoolVector(VT, N0, SDLoc(N), DAG, Subtarget))
+        return V;
     }
   }
 
@@ -42546,6 +42643,34 @@ static SDValue combineOr(SDNode *N, SelectionDAG &DAG,
 
   if (SDValue R = combineLogicBlendIntoPBLENDV(N, DAG, Subtarget))
     return R;
+
+  // Combine OR(X,KSHIFTL(Y,Elts/2)) -> CONCAT_VECTORS(X,Y) == KUNPCK(X,Y).
+  // Combine OR(KSHIFTL(X,Elts/2),Y) -> CONCAT_VECTORS(Y,X) == KUNPCK(Y,X).
+  // iff the upper elements of the non-shifted arg are zero.
+  // KUNPCK require 16+ bool vector elements.
+  if (N0.getOpcode() == X86ISD::KSHIFTL || N1.getOpcode() == X86ISD::KSHIFTL) {
+    unsigned NumElts = VT.getVectorNumElements();
+    unsigned HalfElts = NumElts / 2;
+    APInt UpperElts = APInt::getHighBitsSet(NumElts, HalfElts);
+    if (NumElts >= 16 && N1.getOpcode() == X86ISD::KSHIFTL &&
+        N1.getConstantOperandAPInt(1) == HalfElts &&
+        DAG.MaskedValueIsZero(N0, APInt(1, 1), UpperElts)) {
+      SDLoc dl(N);
+      return DAG.getNode(
+          ISD::CONCAT_VECTORS, dl, VT,
+          extractSubVector(N0, 0, DAG, dl, HalfElts),
+          extractSubVector(N1.getOperand(0), 0, DAG, dl, HalfElts));
+    }
+    if (NumElts >= 16 && N0.getOpcode() == X86ISD::KSHIFTL &&
+        N0.getConstantOperandAPInt(1) == HalfElts &&
+        DAG.MaskedValueIsZero(N1, APInt(1, 1), UpperElts)) {
+      SDLoc dl(N);
+      return DAG.getNode(
+          ISD::CONCAT_VECTORS, dl, VT,
+          extractSubVector(N1, 0, DAG, dl, HalfElts),
+          extractSubVector(N0.getOperand(0), 0, DAG, dl, HalfElts));
+    }
+  }
 
   // Attempt to recursively combine an OR of shuffles.
   if (VT.isVector() && (VT.getScalarSizeInBits() % 8) == 0) {

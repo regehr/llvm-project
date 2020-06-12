@@ -12,6 +12,7 @@
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/ModuleSummaryAnalysis.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/IR/ConstantRange.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -326,13 +327,24 @@ bool StackSafetyLocalAnalysis::analyzeAllUses(Value *Ptr,
 
       case Instruction::Call:
       case Instruction::Invoke: {
-        const auto &CB = cast<CallBase>(*I);
-
         if (I->isLifetimeStartOrEnd())
           break;
 
         if (const MemIntrinsic *MI = dyn_cast<MemIntrinsic>(I)) {
           US.updateRange(getMemIntrinsicAccessRange(MI, UI, Ptr));
+          break;
+        }
+
+        const auto &CB = cast<CallBase>(*I);
+        if (!CB.isArgOperand(&UI)) {
+          US.updateRange(UnknownRange);
+          return false;
+        }
+
+        unsigned ArgNo = CB.getArgOperandNo(&UI);
+        if (CB.isByValArgument(ArgNo)) {
+          US.updateRange(getAccessRange(
+              UI, Ptr, DL.getTypeStoreSize(CB.getParamByValType(ArgNo))));
           break;
         }
 
@@ -347,19 +359,7 @@ bool StackSafetyLocalAnalysis::analyzeAllUses(Value *Ptr,
         }
 
         assert(isa<Function>(Callee) || isa<GlobalAlias>(Callee));
-
-        int Found = 0;
-        for (size_t ArgNo = 0; ArgNo < CB.getNumArgOperands(); ++ArgNo) {
-          if (CB.getArgOperand(ArgNo) == V) {
-            ++Found;
-            US.Calls.emplace_back(Callee, ArgNo, offsetFrom(UI, Ptr));
-          }
-        }
-        if (!Found) {
-          US.updateRange(UnknownRange);
-          return false;
-        }
-
+        US.Calls.emplace_back(Callee, ArgNo, offsetFrom(UI, Ptr));
         break;
       }
 
@@ -388,7 +388,9 @@ FunctionInfo<GlobalValue> StackSafetyLocalAnalysis::run() {
   }
 
   for (Argument &A : make_range(F.arg_begin(), F.arg_end())) {
-    if (A.getType()->isPointerTy()) {
+    // Non pointers and bypass arguments are not going to be used in any global
+    // processing.
+    if (A.getType()->isPointerTy() && !A.hasByValAttr()) {
       auto &UI = Info.Params.emplace(A.getArgNo(), PointerSize).first->second;
       analyzeAllUses(&A, UI);
     }
@@ -571,7 +573,8 @@ template <typename CalleeTy> void resolveAllCalls(UseInfo<CalleeTy> &Use) {
 }
 
 GVToSSI createGlobalStackSafetyInfo(
-    std::map<const GlobalValue *, FunctionInfo<GlobalValue>> Functions) {
+    std::map<const GlobalValue *, FunctionInfo<GlobalValue>> Functions,
+    const ModuleSummaryIndex *Index) {
   GVToSSI SSI;
   if (Functions.empty())
     return SSI;
@@ -647,8 +650,8 @@ const StackSafetyGlobalInfo::InfoTy &StackSafetyGlobalInfo::getInfo() const {
         Functions.emplace(&F, std::move(FI));
       }
     }
-    Info.reset(
-        new InfoTy{createGlobalStackSafetyInfo(std::move(Functions)), {}});
+    Info.reset(new InfoTy{
+        createGlobalStackSafetyInfo(std::move(Functions), Index), {}});
     for (auto &FnKV : Info->Info) {
       for (auto &KV : FnKV.second.Allocas) {
         ++NumAllocaTotal;
@@ -695,8 +698,9 @@ StackSafetyInfo::getParamAccesses() const {
 StackSafetyGlobalInfo::StackSafetyGlobalInfo() = default;
 
 StackSafetyGlobalInfo::StackSafetyGlobalInfo(
-    Module *M, std::function<const StackSafetyInfo &(Function &F)> GetSSI)
-    : M(M), GetSSI(GetSSI) {
+    Module *M, std::function<const StackSafetyInfo &(Function &F)> GetSSI,
+    const ModuleSummaryIndex *Index)
+    : M(M), GetSSI(GetSSI), Index(Index) {
   if (StackSafetyRun)
     getInfo();
 }
@@ -770,11 +774,14 @@ AnalysisKey StackSafetyGlobalAnalysis::Key;
 
 StackSafetyGlobalInfo
 StackSafetyGlobalAnalysis::run(Module &M, ModuleAnalysisManager &AM) {
+  // FIXME: Lookup Module Summary.
   FunctionAnalysisManager &FAM =
       AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
-  return {&M, [&FAM](Function &F) -> const StackSafetyInfo & {
+  return {&M,
+          [&FAM](Function &F) -> const StackSafetyInfo & {
             return FAM.getResult<StackSafetyAnalysis>(F);
-          }};
+          },
+          nullptr};
 }
 
 PreservedAnalyses StackSafetyGlobalPrinterPass::run(Module &M,
@@ -806,13 +813,22 @@ void StackSafetyGlobalInfoWrapperPass::getAnalysisUsage(
 }
 
 bool StackSafetyGlobalInfoWrapperPass::runOnModule(Module &M) {
-  SSGI = {&M, [this](Function &F) -> const StackSafetyInfo & {
+  const ModuleSummaryIndex *ImportSummary = nullptr;
+  if (auto *IndexWrapperPass =
+          getAnalysisIfAvailable<ImmutableModuleSummaryIndexWrapperPass>())
+    ImportSummary = IndexWrapperPass->getIndex();
+
+  SSGI = {&M,
+          [this](Function &F) -> const StackSafetyInfo & {
             return getAnalysis<StackSafetyInfoWrapperPass>(F).getResult();
-          }};
+          },
+          ImportSummary};
   return false;
 }
 
 bool llvm::needsParamAccessSummary(const Module &M) {
+  if (StackSafetyRun)
+    return true;
   for (auto &F : M.functions())
     if (F.hasFnAttribute(Attribute::SanitizeMemTag))
       return true;
@@ -831,5 +847,6 @@ static const char GlobalPassName[] = "Stack Safety Analysis";
 INITIALIZE_PASS_BEGIN(StackSafetyGlobalInfoWrapperPass, DEBUG_TYPE,
                       GlobalPassName, false, true)
 INITIALIZE_PASS_DEPENDENCY(StackSafetyInfoWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(ImmutableModuleSummaryIndexWrapperPass)
 INITIALIZE_PASS_END(StackSafetyGlobalInfoWrapperPass, DEBUG_TYPE,
                     GlobalPassName, false, true)
