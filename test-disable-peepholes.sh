@@ -6,11 +6,23 @@ export CMAKE='cmake -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -G Nin
 rm -rf $DIR/build-*
 
 (
+echo "step 0"
+set -e
+mkdir $DIR/build-standard
+cd $DIR/build-peeps
+$CMAKE -DCMAKE_INSTALL_PREFIX=$DIR/install-peeps -DCMAKE_CXX_FLAGS='-DDISABLE_WRONG_OPTIMIZATIONS_DEFAULT_VALUE=false -DDISABLE_PEEPHOLES_DEFAULT_VALUE=false' > cmake.out 2>&1
+ninja > build.out 2>&1
+# only fails if LLVM is broken
+ninja check > check.out 2>&1
+ninja install
+)
+
+(
 echo "step 1"
 set -e
 mkdir $DIR/build-peeps
 cd $DIR/build-peeps
-$CMAKE -DCMAKE_INSTALL_PREFIX=$DIR/install-peeps -DCMAKE_CXX_FLAGS='-DDISABLE_PEEPHOLES_DEFAULT_VALUE=false' > cmake.out 2>&1
+$CMAKE -DCMAKE_INSTALL_PREFIX=$DIR/install-peeps -DCMAKE_CXX_FLAGS='-DDISABLE_WRONG_OPTIMIZATIONS_DEFAULT_VALUE=true -DDISABLE_PEEPHOLES_DEFAULT_VALUE=false' > cmake.out 2>&1
 ninja > build.out 2>&1
 # only fails if LLVM is broken
 ninja check > check.out 2>&1

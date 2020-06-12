@@ -44,7 +44,7 @@ using namespace llvm;
 using namespace llvm::PatternMatch;
 
 bool DisablePeepholes = DISABLE_PEEPHOLES_DEFAULT_VALUE;
-bool DisableWrongOptimizations = false;
+bool DisableWrongOptimizations = DISABLE_WRONG_OPTIMIZATIONS_DEFAULT_VALUE;
 
 // "true" for 2nd template argument means use external storage
 static cl::opt<bool, true>
