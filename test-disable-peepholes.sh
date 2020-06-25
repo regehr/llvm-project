@@ -30,7 +30,7 @@ mkdir $DIR/build-default
 cd $DIR/build-default
 $CMAKE -DCMAKE_INSTALL_PREFIX=$DIR/install-default -DCMAKE_CXX_FLAGS='-DDISABLE_WRONG_OPTIMIZATIONS_DEFAULT_VALUE=false -DDISABLE_PEEPHOLES_DEFAULT_VALUE=false' > cmake.out 2>&1
 ninja > build.out 2>&1
-ninja check > check.out 2>&1
+ninja check > check.out 2>&1 || true
 ninja install
 )
 
@@ -42,7 +42,7 @@ mkdir $DIR/build-default2
 cd $DIR/build-default2
 $CMAKE -DCMAKE_INSTALL_PREFIX=$DIR/install-default2 -DCMAKE_CXX_FLAGS='-DDISABLE_WRONG_OPTIMIZATIONS_DEFAULT_VALUE=false -DDISABLE_PEEPHOLES_DEFAULT_VALUE=false' > cmake.out 2>&1
 ninja > build.out 2>&1
-ninja check > check.out 2>&1
+ninja check > check.out 2>&1 || true
 ninja install
 )
 
@@ -54,6 +54,7 @@ mkdir $DIR/build-no-ub
 cd $DIR/build-no-ub
 $CMAKE -DCMAKE_INSTALL_PREFIX=$DIR/install-no-ub -DCMAKE_CXX_FLAGS='-DDISABLE_WRONG_OPTIMIZATIONS_DEFAULT_VALUE=true -DDISABLE_PEEPHOLES_DEFAULT_VALUE=false' > cmake.out 2>&1
 ninja > build.out 2>&1
+ninja check > check.out 2>&1 || true
 ninja install
 )
 
@@ -65,7 +66,7 @@ mkdir $DIR/build-no-ub2
 cd $DIR/build-no-ub2
 $CMAKE -DCMAKE_INSTALL_PREFIX=$DIR/install-no-ub2 -DCMAKE_CXX_FLAGS='-DDISABLE_WRONG_OPTIMIZATIONS_DEFAULT_VALUE=false -DDISABLE_PEEPHOLES_DEFAULT_VALUE=false' > cmake.out 2>&1
 ninja > build.out 2>&1
-ninja check > check.out 2>&1
+ninja check > check.out 2>&1 || true
 ninja install
 )
 
@@ -78,6 +79,7 @@ mkdir $DIR/build-no-ub-no-peeps
 cd $DIR/build-no-ub-no-peeps
 $CMAKE -DCMAKE_INSTALL_PREFIX=$DIR/install-no-ub-no-peeps -DCMAKE_CXX_FLAGS='-DDISABLE_WRONG_OPTIMIZATIONS_DEFAULT_VALUE=true -DDISABLE_PEEPHOLES_DEFAULT_VALUE=true' > cmake.out 2>&1
 ninja > build.out 2>&1
+ninja check > check.out 2>&1 || true
 ninja install
 )
 
@@ -89,7 +91,7 @@ mkdir $DIR/build-no-ub-no-peeps2
 cd $DIR/build-no-ub-no-peeps2
 $CMAKE -DCMAKE_INSTALL_PREFIX=$DIR/install-no-ub-no-peeps2 -DCMAKE_CXX_FLAGS='-DDISABLE_WRONG_OPTIMIZATIONS_DEFAULT_VALUE=false -DDISABLE_PEEPHOLES_DEFAULT_VALUE=false' > cmake.out 2>&1
 ninja > build.out 2>&1
-ninja check > check.out 2>&1
+ninja check > check.out 2>&1 || true
 ninja install
 )
 
