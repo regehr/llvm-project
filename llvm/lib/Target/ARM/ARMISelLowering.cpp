@@ -1693,6 +1693,7 @@ const char *ARMTargetLowering::getTargetNodeName(unsigned Opcode) const {
   case ARMISD::VQMOVNs:       return "ARMISD::VQMOVNs";
   case ARMISD::VQMOVNu:       return "ARMISD::VQMOVNu";
   case ARMISD::VCVTN:         return "ARMISD::VCVTN";
+  case ARMISD::VCVTL:         return "ARMISD::VCVTL";
   case ARMISD::VMULLs:        return "ARMISD::VMULLs";
   case ARMISD::VMULLu:        return "ARMISD::VMULLu";
   case ARMISD::VADDVs:        return "ARMISD::VADDVs";
@@ -7244,7 +7245,7 @@ static bool isVMOVNMask(ArrayRef<int> M, EVT VT, bool Top) {
   return true;
 }
 
-// Reconstruct an MVE VCVT from a BuildVector of scalar fptrunc, all extract
+// Reconstruct an MVE VCVT from a BuildVector of scalar fptrunc, all extracted
 // from a pair of inputs. For example:
 // BUILDVECTOR(FP_ROUND(EXTRACT_ELT(X, 0),
 //             FP_ROUND(EXTRACT_ELT(Y, 0),
@@ -7296,6 +7297,50 @@ static SDValue LowerBuildVectorOfFPTrunc(SDValue BV, SelectionDAG &DAG,
                            DAG.getConstant(0, dl, MVT::i32));
   return DAG.getNode(ARMISD::VCVTN, dl, VT, N1, Op1,
                      DAG.getConstant(1, dl, MVT::i32));
+}
+
+// Reconstruct an MVE VCVT from a BuildVector of scalar fpext, all extracted
+// from a single input on alternating lanes. For example:
+// BUILDVECTOR(FP_ROUND(EXTRACT_ELT(X, 0),
+//             FP_ROUND(EXTRACT_ELT(X, 2),
+//             FP_ROUND(EXTRACT_ELT(X, 4), ...)
+static SDValue LowerBuildVectorOfFPExt(SDValue BV, SelectionDAG &DAG,
+                                       const ARMSubtarget *ST) {
+  assert(BV.getOpcode() == ISD::BUILD_VECTOR && "Unknown opcode!");
+  if (!ST->hasMVEFloatOps())
+    return SDValue();
+
+  SDLoc dl(BV);
+  EVT VT = BV.getValueType();
+  if (VT != MVT::v4f32)
+    return SDValue();
+
+  // We are looking for a buildvector of fptext elements, where all the
+  // elements are alternating lanes from a single source. For example <0,2,4,6>
+  // or <1,3,5,7>. Check the first two items are valid enough and extract some
+  // info from them (they are checked properly in the loop below).
+  if (BV.getOperand(0).getOpcode() != ISD::FP_EXTEND ||
+      BV.getOperand(0).getOperand(0).getOpcode() != ISD::EXTRACT_VECTOR_ELT)
+    return SDValue();
+  SDValue Op0 = BV.getOperand(0).getOperand(0).getOperand(0);
+  int Offset = BV.getOperand(0).getOperand(0).getConstantOperandVal(1);
+  if (Op0.getValueType() != MVT::v8f16 || (Offset != 0 && Offset != 1))
+    return SDValue();
+
+  // Check all the values in the BuildVector line up with our expectations.
+  for (unsigned i = 1; i < 4; i++) {
+    auto Check = [](SDValue Trunc, SDValue Op, unsigned Idx) {
+      return Trunc.getOpcode() == ISD::FP_EXTEND &&
+             Trunc.getOperand(0).getOpcode() == ISD::EXTRACT_VECTOR_ELT &&
+             Trunc.getOperand(0).getOperand(0) == Op &&
+             Trunc.getOperand(0).getConstantOperandVal(1) == Idx;
+    };
+    if (!Check(BV.getOperand(i), Op0, 2 * i + Offset))
+      return SDValue();
+  }
+
+  return DAG.getNode(ARMISD::VCVTL, dl, VT, Op0,
+                     DAG.getConstant(Offset, dl, MVT::i32));
 }
 
 // If N is an integer constant that can be moved into a register in one
@@ -7560,8 +7605,11 @@ SDValue ARMTargetLowering::LowerBUILD_VECTOR(SDValue Op, SelectionDAG &DAG,
     if (SDValue shuffle = ReconstructShuffle(Op, DAG))
       return shuffle;
 
-  // Attempt to turn a buildvector of scalar fptrunc's back into VCVT's
+  // Attempt to turn a buildvector of scalar fptrunc's or fpext's back into
+  // VCVT's
   if (SDValue VCVT = LowerBuildVectorOfFPTrunc(Op, DAG, Subtarget))
+    return VCVT;
+  if (SDValue VCVT = LowerBuildVectorOfFPExt(Op, DAG, Subtarget))
     return VCVT;
 
   if (ST->hasNEON() && VT.is128BitVector() && VT != MVT::v2f64 && VT != MVT::v4f32) {
@@ -14268,7 +14316,7 @@ static SDValue PerformSplittingToNarrowingStores(StoreSDNode *St,
   if (!St->isSimple() || St->isTruncatingStore() || !St->isUnindexed())
     return SDValue();
   SDValue Trunc = St->getValue();
-  if (Trunc->getOpcode() != ISD::TRUNCATE)
+  if (Trunc->getOpcode() != ISD::TRUNCATE && Trunc->getOpcode() != ISD::FP_ROUND)
     return SDValue();
   EVT FromVT = Trunc->getOperand(0).getValueType();
   EVT ToVT = Trunc.getValueType();
@@ -14283,7 +14331,10 @@ static SDValue PerformSplittingToNarrowingStores(StoreSDNode *St,
     NumElements = 4;
   if (FromEltVT == MVT::i16 && ToEltVT == MVT::i8)
     NumElements = 8;
-  if (NumElements == 0 || FromVT.getVectorNumElements() == NumElements ||
+  if (FromEltVT == MVT::f32 && ToEltVT == MVT::f16)
+    NumElements = 4;
+  if (NumElements == 0 ||
+      (FromEltVT != MVT::f32 && FromVT.getVectorNumElements() == NumElements) ||
       FromVT.getVectorNumElements() % NumElements != 0)
     return SDValue();
 
@@ -14293,7 +14344,7 @@ static SDValue PerformSplittingToNarrowingStores(StoreSDNode *St,
   //  rev: N 0 N+1 1 N+2 2 ...
   auto isVMOVNOriginalMask = [&](ArrayRef<int> M, bool rev) {
     unsigned NumElts = ToVT.getVectorNumElements();
-    if (NumElts != M.size() || (ToVT != MVT::v8i16 && ToVT != MVT::v16i8))
+    if (NumElts != M.size())
       return false;
 
     unsigned Off0 = rev ? NumElts : 0;
@@ -14314,6 +14365,7 @@ static SDValue PerformSplittingToNarrowingStores(StoreSDNode *St,
         isVMOVNOriginalMask(Shuffle->getMask(), true))
       return SDValue();
 
+  LLVMContext &C = *DAG.getContext();
   SDLoc DL(St);
   // Details about the old store
   SDValue Ch = St->getChain();
@@ -14322,8 +14374,11 @@ static SDValue PerformSplittingToNarrowingStores(StoreSDNode *St,
   MachineMemOperand::Flags MMOFlags = St->getMemOperand()->getFlags();
   AAMDNodes AAInfo = St->getAAInfo();
 
-  EVT NewFromVT = EVT::getVectorVT(*DAG.getContext(), FromEltVT, NumElements);
-  EVT NewToVT = EVT::getVectorVT(*DAG.getContext(), ToEltVT, NumElements);
+  // We split the store into slices of NumElements. fp16 trunc stores are vcvt
+  // and then stored as truncating integer stores.
+  EVT NewFromVT = EVT::getVectorVT(C, FromEltVT, NumElements);
+  EVT NewToVT = EVT::getVectorVT(
+      C, EVT::getIntegerVT(C, ToEltVT.getSizeInBits()), NumElements);
 
   SmallVector<SDValue, 4> Stores;
   for (unsigned i = 0; i < FromVT.getVectorNumElements() / NumElements; i++) {
@@ -14333,6 +14388,14 @@ static SDValue PerformSplittingToNarrowingStores(StoreSDNode *St,
     SDValue Extract =
         DAG.getNode(ISD::EXTRACT_SUBVECTOR, DL, NewFromVT, Trunc.getOperand(0),
                     DAG.getConstant(i * NumElements, DL, MVT::i32));
+
+    if (ToEltVT == MVT::f16) {
+      SDValue FPTrunc =
+          DAG.getNode(ARMISD::VCVTN, DL, MVT::v8f16, DAG.getUNDEF(MVT::v8f16),
+                      Extract, DAG.getConstant(0, DL, MVT::i32));
+      Extract = DAG.getNode(ARMISD::VECTOR_REG_CAST, DL, MVT::v4i32, FPTrunc);
+    }
+
     SDValue Store = DAG.getTruncStore(
         Ch, DL, Extract, NewPtr, St->getPointerInfo().getWithOffset(NewOffset),
         NewToVT, Alignment.value(), MMOFlags, AAInfo);
