@@ -38,6 +38,7 @@
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/IR/ValueHandle.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/KnownBits.h"
 #include <algorithm>
 using namespace llvm;
@@ -51,6 +52,11 @@ static cl::opt<bool, true>
 DisablePeepholesOption("disable-all-peepholes",
                        cl::desc("Don't perform peephole optimizations"),
                        cl::location(DisablePeepholes));
+
+static cl::opt<bool, true>
+DisableWrongOptsOption("disable-wrongs-opts",
+                       cl::desc("Disable optimizations that may increase the amount of undefined behavior"),
+                       cl::location(DisableWrongOptimizations));
 
 #define DEBUG_TYPE "instsimplify"
 

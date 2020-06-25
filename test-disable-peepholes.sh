@@ -24,8 +24,7 @@ mkdir $DIR/build-peeps
 cd $DIR/build-peeps
 $CMAKE -DCMAKE_INSTALL_PREFIX=$DIR/install-peeps -DCMAKE_CXX_FLAGS='-DDISABLE_WRONG_OPTIMIZATIONS_DEFAULT_VALUE=true -DDISABLE_PEEPHOLES_DEFAULT_VALUE=false' > cmake.out 2>&1
 ninja > build.out 2>&1
-# only fails if LLVM is broken
-ninja check > check.out 2>&1
+# ninja check > check.out 2>&1
 ninja install
 )
 
@@ -41,10 +40,6 @@ ninja > build.out 2>&1
 ninja check > check.out 2>&1
 ninja install
 )
-
-# dodgy part, yikes!
-cd $DIR
-perl -pi.bak -e "s/bool DisablePeepholes = false;/bool DisablePeepholes = true;/" llvm/lib/Analysis/InstructionSimplify.cpp
 
 (
 echo "step 3"
