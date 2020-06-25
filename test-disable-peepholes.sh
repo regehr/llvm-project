@@ -92,5 +92,8 @@ ninja check > check.out 2>&1
 ninja install
 )
 
+# fixme
 size $DIR/build-peeps2/bin/clang
 size $DIR/build-no-peeps2/bin/clang
+
+find build* -name 'check.out'| xargs grep Failed
