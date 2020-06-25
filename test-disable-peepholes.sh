@@ -27,7 +27,7 @@ set -e
 export PATH=$CLANGBIN:$PATH
 mkdir $DIR/build-default
 cd $DIR/build-default
-$CMAKE -DCMAKE_INSTALL_PREFIX=$DIR/install-default -DCMAKE_EXECUTABLE_SUFFIX='-default' -DCMAKE_CXX_FLAGS='-DDISABLE_WRONG_OPTIMIZATIONS_DEFAULT_VALUE=false -DDISABLE_PEEPHOLES_DEFAULT_VALUE=false' > cmake.out 2>&1
+$CMAKE -DCMAKE_INSTALL_PREFIX=$DIR/install-default -DCMAKE_CXX_FLAGS='-DDISABLE_WRONG_OPTIMIZATIONS_DEFAULT_VALUE=false -DDISABLE_PEEPHOLES_DEFAULT_VALUE=false' > cmake.out 2>&1
 ninja > build.out 2>&1
 ninja check > check.out 2>&1
 ninja install
@@ -39,31 +39,54 @@ set -e
 export PATH=$DIR/install-default/bin:$PATH
 mkdir $DIR/build-default2
 cd $DIR/build-default2
-$CMAKE -DCMAKE_INSTALL_PREFIX=$DIR/install-peeps -DCMAKE_CXX_FLAGS='-DDISABLE_WRONG_OPTIMIZATIONS_DEFAULT_VALUE=false -DDISABLE_PEEPHOLES_DEFAULT_VALUE=false' > cmake.out 2>&1
+$CMAKE -DCMAKE_INSTALL_PREFIX=$DIR/install-default2 -DCMAKE_CXX_FLAGS='-DDISABLE_WRONG_OPTIMIZATIONS_DEFAULT_VALUE=false -DDISABLE_PEEPHOLES_DEFAULT_VALUE=false' > cmake.out 2>&1
 ninja > build.out 2>&1
 ninja check > check.out 2>&1
 ninja install
 )
 
-exit 0;
-
-# this LLVM only disables unsound optimizations, it fails tests that look for those optimizations
+# this LLVM avoids optimizations that introduce UB, it will fail tests that look for those optimizations
 (
 set -e
-mkdir $DIR/build-disable-unsound
-cd $DIR/build-disable-unsound
-$CMAKE -DCMAKE_INSTALL_PREFIX=$DIR/install-disable-unsound -DCMAKE_CXX_FLAGS='-DDISABLE_WRONG_OPTIMIZATIONS_DEFAULT_VALUE=true -DDISABLE_PEEPHOLES_DEFAULT_VALUE=false' > cmake.out 2>&1
+export PATH=$CLANGBIN:$PATH
+mkdir $DIR/build-no-ub
+cd $DIR/build-no-ub
+$CMAKE -DCMAKE_INSTALL_PREFIX=$DIR/install-no-ub -DCMAKE_CXX_FLAGS='-DDISABLE_WRONG_OPTIMIZATIONS_DEFAULT_VALUE=true -DDISABLE_PEEPHOLES_DEFAULT_VALUE=false' > cmake.out 2>&1
+ninja > build.out 2>&1
+ninja install
+)
+
+# this makes sure the no-UB LLVM we just built can build a working LLVM
+(
+set -e
+export PATH=$DIR/install-no-ub/bin:$PATH
+mkdir $DIR/build-no-ub2
+cd $DIR/build-no-ub2
+$CMAKE -DCMAKE_INSTALL_PREFIX=$DIR/install-no-ub2 -DCMAKE_CXX_FLAGS='-DDISABLE_WRONG_OPTIMIZATIONS_DEFAULT_VALUE=false -DDISABLE_PEEPHOLES_DEFAULT_VALUE=false' > cmake.out 2>&1
 ninja > build.out 2>&1
 ninja check > check.out 2>&1
 ninja install
 )
 
-# this makes sure the LLVM without unsound optimizations can build a working LLVM
+# this LLVM avoids optimizations that do peephole-like things and that
+# introduce UB, it will fail tests that look for those optimizations
 (
 set -e
-mkdir $DIR/build-disable-unsound2
-cd $DIR/build-disable-unsound2
-$CMAKE -DCMAKE_INSTALL_PREFIX=$DIR/install-disable-unsound -DCMAKE_CXX_FLAGS='-DDISABLE_WRONG_OPTIMIZATIONS_DEFAULT_VALUE=false -DDISABLE_PEEPHOLES_DEFAULT_VALUE=false' > cmake.out 2>&1
+export PATH=$CLANGBIN:$PATH
+mkdir $DIR/build-no-ub-no-peeps
+cd $DIR/build-no-ub-no-peeps
+$CMAKE -DCMAKE_INSTALL_PREFIX=$DIR/install-no-ub-no-peeps -DCMAKE_CXX_FLAGS='-DDISABLE_WRONG_OPTIMIZATIONS_DEFAULT_VALUE=true -DDISABLE_PEEPHOLES_DEFAULT_VALUE=true' > cmake.out 2>&1
+ninja > build.out 2>&1
+ninja install
+)
+
+# this makes sure the no-UB, no-peephole LLVM we just built can build a working LLVM
+(
+set -e
+export PATH=$DIR/install-no-ub-no-peeps/bin:$PATH
+mkdir $DIR/build-no-ub-no-peeps2
+cd $DIR/build-no-ub-no-peeps2
+$CMAKE -DCMAKE_INSTALL_PREFIX=$DIR/install-no-ub-no-peeps2 -DCMAKE_CXX_FLAGS='-DDISABLE_WRONG_OPTIMIZATIONS_DEFAULT_VALUE=false -DDISABLE_PEEPHOLES_DEFAULT_VALUE=false' > cmake.out 2>&1
 ninja > build.out 2>&1
 ninja check > check.out 2>&1
 ninja install
