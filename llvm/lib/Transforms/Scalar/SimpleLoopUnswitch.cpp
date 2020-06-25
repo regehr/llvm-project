@@ -57,7 +57,7 @@
 #include <numeric>
 #include <utility>
 
-extern bool DisablePeepholes;
+extern bool DisableWrongOptimizations;
 
 #define DEBUG_TYPE "simple-loop-unswitch"
 
@@ -2884,7 +2884,7 @@ static bool unswitchLoop(Loop &L, DominatorTree &DT, LoopInfo &LI,
 PreservedAnalyses SimpleLoopUnswitchPass::run(Loop &L, LoopAnalysisManager &AM,
                                               LoopStandardAnalysisResults &AR,
                                               LPMUpdater &U) {
-  if (DisablePeepholes) {
+  if (DisableWrongOptimizations) {
     PreservedAnalyses PA1;
     return PA1;
   }
@@ -2966,7 +2966,7 @@ public:
 } // end anonymous namespace
 
 bool SimpleLoopUnswitchLegacyPass::runOnLoop(Loop *L, LPPassManager &LPM) {
-  if (DisablePeepholes)
+  if (DisableWrongOptimizations)
     return false;
 
   if (skipLoop(L))
