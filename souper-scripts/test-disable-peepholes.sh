@@ -95,8 +95,6 @@ ninja check > check.out 2>&1 || true
 ninja install
 )
 
-# fixme
-size $DIR/build-peeps2/bin/clang
-size $DIR/build-no-peeps2/bin/clang
+size $DIR/install-default2/bin/clang-11 $DIR/install-no-ub2/bin/clang-11 $DIR/install-no-ub-no-peeps2/bin/clang-11
 
-find build* -name 'check.out'| xargs grep Failed
+grep 'Failed Tests' build-default2/check.out build-no-ub2/check.out build-no-ub-no-peeps2/check.out
