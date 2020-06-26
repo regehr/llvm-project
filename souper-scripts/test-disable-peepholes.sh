@@ -1,9 +1,9 @@
 set -e
 
-export CLANGBIN=$HOME/clang+llvm-10.0.0-x86_64-linux-gnu-ubuntu-18.04/bin
+CLANGBIN=$HOME/clang+llvm-10.0.0-x86_64-linux-gnu-ubuntu-18.04/bin
 
-export DIR=$HOME/llvm-project
-export CMAKE='cmake -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON ../llvm -DLLVM_ENABLE_PROJECTS="llvm;clang;compiler-rt"'
+DIR=$HOME/llvm-project
+CMAKE='cmake -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON ../llvm -DLLVM_ENABLE_PROJECTS="llvm;clang;compiler-rt"'
 
 rm -rf $DIR/build-*
 rm -rf $DIR/install-*

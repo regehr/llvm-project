@@ -1,8 +1,11 @@
 set -e
 
-export SPEC=$HOME/cpu2017
-export DIR=$HOME/llvm-project
-export ARGS="--rebuild --input test 600.perlbench_s 602.gcc_s 605.mcf_s 620.omnetpp_s 623.xalancbmk_s 625.x264_s 631.deepsjeng_s 641.leela_s 657.xz_s"
+#INPUT=test
+INPUT=ref
+
+SPEC=$HOME/cpu2017
+DIR=$HOME/llvm-project
+ARGS="--rebuild --input $INPUT 600.perlbench_s 602.gcc_s 605.mcf_s 620.omnetpp_s 623.xalancbmk_s 625.x264_s 631.deepsjeng_s 641.leela_s 657.xz_s"
 
 cd $SPEC
 . ./shrc
