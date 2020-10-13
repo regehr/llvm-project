@@ -21,7 +21,6 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/Support/Path.h"
-#include "llvm/Transforms/Utils/ModuleUtils.h"
 
 using namespace clang;
 using namespace CodeGen;
@@ -246,7 +245,10 @@ llvm::Function *CodeGenFunction::createAtExitStub(const VarDecl &VD,
   CodeGenFunction CGF(CGM);
 
   CGF.StartFunction(GlobalDecl(&VD, DynamicInitKind::AtExit),
-                    CGM.getContext().VoidTy, fn, FI, FunctionArgList());
+                    CGM.getContext().VoidTy, fn, FI, FunctionArgList(),
+                    VD.getLocation(), VD.getInit()->getExprLoc());
+  // Emit an artificial location for this function.
+  auto AL = ApplyDebugLocation::CreateArtificial(CGF);
 
   llvm::CallInst *call = CGF.Builder.CreateCall(dtor, addr);
 
@@ -364,12 +366,9 @@ void CodeGenFunction::EmitCXXGuardedInitBranch(llvm::Value *NeedsInit,
 
 llvm::Function *CodeGenModule::CreateGlobalInitOrCleanUpFunction(
     llvm::FunctionType *FTy, const Twine &Name, const CGFunctionInfo &FI,
-    SourceLocation Loc, bool TLS, bool IsExternalLinkage) {
+    SourceLocation Loc, bool TLS) {
   llvm::Function *Fn = llvm::Function::Create(
-      FTy,
-      IsExternalLinkage ? llvm::GlobalValue::ExternalLinkage
-                        : llvm::GlobalValue::InternalLinkage,
-      Name, &getModule());
+      FTy, llvm::GlobalValue::InternalLinkage, Name, &getModule());
 
   if (!getLangOpts().AppleKext && !TLS) {
     // Set the section if needed.
@@ -377,8 +376,7 @@ llvm::Function *CodeGenModule::CreateGlobalInitOrCleanUpFunction(
       Fn->setSection(Section);
   }
 
-  if (Fn->hasInternalLinkage())
-    SetInternalFunctionAttributes(GlobalDecl(), Fn, FI);
+  SetInternalFunctionAttributes(GlobalDecl(), Fn, FI);
 
   Fn->setCallingConv(getRuntimeCC());
 
@@ -424,22 +422,6 @@ llvm::Function *CodeGenModule::CreateGlobalInitOrCleanUpFunction(
   if (getLangOpts().Sanitize.has(SanitizerKind::ShadowCallStack) &&
       !isInSanitizerBlacklist(SanitizerKind::ShadowCallStack, Fn, Loc))
     Fn->addFnAttr(llvm::Attribute::ShadowCallStack);
-
-  auto RASignKind = getLangOpts().getSignReturnAddressScope();
-  if (RASignKind != LangOptions::SignReturnAddressScopeKind::None) {
-    Fn->addFnAttr("sign-return-address",
-                  RASignKind == LangOptions::SignReturnAddressScopeKind::All
-                      ? "all"
-                      : "non-leaf");
-    auto RASignKey = getLangOpts().getSignReturnAddressKey();
-    Fn->addFnAttr("sign-return-address-key",
-                  RASignKey == LangOptions::SignReturnAddressKeyKind::AKey
-                      ? "a_key"
-                      : "b_key");
-  }
-
-  if (getLangOpts().BranchTargetEnforcement)
-    Fn->addFnAttr("branch-target-enforcement");
 
   return Fn;
 }
@@ -588,22 +570,10 @@ CodeGenModule::EmitCXXGlobalInitFunc() {
   if (CXXGlobalInits.empty() && PrioritizedCXXGlobalInits.empty())
     return;
 
-  const bool UseSinitAndSterm = getCXXABI().useSinitAndSterm();
-  if (UseSinitAndSterm) {
-    GlobalUniqueModuleId = getUniqueModuleId(&getModule());
-
-    // FIXME: We need to figure out what to hash on or encode into the unique ID
-    // we need.
-    if (GlobalUniqueModuleId.compare("") == 0)
-      llvm::report_fatal_error(
-          "cannot produce a unique identifier for this module"
-          " based on strong external symbols");
-    GlobalUniqueModuleId = GlobalUniqueModuleId.substr(1);
-  }
-
   llvm::FunctionType *FTy = llvm::FunctionType::get(VoidTy, false);
   const CGFunctionInfo &FI = getTypes().arrangeNullaryFunction();
 
+  const bool UseSinitAndSterm = getCXXABI().useSinitAndSterm();
   // Create our global prioritized initialization function.
   if (!PrioritizedCXXGlobalInits.empty()) {
     assert(!UseSinitAndSterm && "Prioritized sinit and sterm functions are not"
@@ -643,24 +613,12 @@ CodeGenModule::EmitCXXGlobalInitFunc() {
   if (UseSinitAndSterm && CXXGlobalInits.empty())
     return;
 
-  // Create our global initialization function.
-  SmallString<128> FuncName;
-  bool IsExternalLinkage = false;
-  if (UseSinitAndSterm) {
-    llvm::Twine("__sinit80000000_clang_", GlobalUniqueModuleId)
-        .toVector(FuncName);
-    IsExternalLinkage = true;
-  } else {
-    // Include the filename in the symbol name. Including "sub_" matches gcc
-    // and makes sure these symbols appear lexicographically behind the symbols
-    // with priority emitted above.
-    llvm::Twine("_GLOBAL__sub_I_", getTransformedFileName(getModule()))
-        .toVector(FuncName);
-  }
-
+  // Include the filename in the symbol name. Including "sub_" matches gcc
+  // and makes sure these symbols appear lexicographically behind the symbols
+  // with priority emitted above.
   llvm::Function *Fn = CreateGlobalInitOrCleanUpFunction(
-      FTy, FuncName, FI, SourceLocation(), false /* TLS */,
-      IsExternalLinkage);
+      FTy, llvm::Twine("_GLOBAL__sub_I_", getTransformedFileName(getModule())),
+      FI);
 
   CodeGenFunction(*this).GenerateCXXGlobalInitFunc(Fn, CXXGlobalInits);
   AddGlobalCtor(Fn);
@@ -694,25 +652,8 @@ void CodeGenModule::EmitCXXGlobalCleanUpFunc() {
   const CGFunctionInfo &FI = getTypes().arrangeNullaryFunction();
 
   // Create our global cleanup function.
-  llvm::Function *Fn = nullptr;
-  if (getCXXABI().useSinitAndSterm()) {
-    if (GlobalUniqueModuleId.empty()) {
-      GlobalUniqueModuleId = getUniqueModuleId(&getModule());
-      // FIXME: We need to figure out what to hash on or encode into the unique
-      // ID we need.
-      if (GlobalUniqueModuleId.compare("") == 0)
-        llvm::report_fatal_error(
-            "cannot produce a unique identifier for this module"
-            " based on strong external symbols");
-      GlobalUniqueModuleId = GlobalUniqueModuleId.substr(1);
-    }
-
-    Fn = CreateGlobalInitOrCleanUpFunction(
-        FTy, llvm::Twine("__sterm80000000_clang_", GlobalUniqueModuleId), FI,
-        SourceLocation(), false /* TLS */, true /* IsExternalLinkage */);
-  } else {
-    Fn = CreateGlobalInitOrCleanUpFunction(FTy, "_GLOBAL__D_a", FI);
-  }
+  llvm::Function *Fn =
+      CreateGlobalInitOrCleanUpFunction(FTy, "_GLOBAL__D_a", FI);
 
   CodeGenFunction(*this).GenerateCXXGlobalCleanUpFunc(
       Fn, CXXGlobalDtorsOrStermFinalizers);
@@ -733,8 +674,9 @@ void CodeGenFunction::GenerateCXXGlobalVarDeclInitFunc(llvm::Function *Fn,
 
   StartFunction(GlobalDecl(D, DynamicInitKind::Initializer),
                 getContext().VoidTy, Fn, getTypes().arrangeNullaryFunction(),
-                FunctionArgList(), D->getLocation(),
-                D->getInit()->getExprLoc());
+                FunctionArgList());
+  // Emit an artificial location for this function.
+  auto AL = ApplyDebugLocation::CreateArtificial(*this);
 
   // Use guarded initialization if the global variable is weak. This
   // occurs for, e.g., instantiated static data members and
@@ -868,7 +810,10 @@ llvm::Function *CodeGenFunction::generateDestroyHelper(
 
   CurEHLocation = VD->getBeginLoc();
 
-  StartFunction(VD, getContext().VoidTy, fn, FI, args);
+  StartFunction(GlobalDecl(VD, DynamicInitKind::GlobalArrayDestructor),
+                getContext().VoidTy, fn, FI, args);
+  // Emit an artificial location for this function.
+  auto AL = ApplyDebugLocation::CreateArtificial(*this);
 
   emitDestroy(addr, type, destroyer, useEHCleanupForArray);
 

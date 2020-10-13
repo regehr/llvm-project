@@ -8,9 +8,13 @@
 // RUN:   --hip-device-lib-path=%S/Inputs/hip_multiple_inputs/lib1 \
 // RUN:   --hip-device-lib-path=%S/Inputs/hip_multiple_inputs/lib2 \
 // RUN:   -fuse-ld=lld -fgpu-rdc -nogpuinc \
+// RUN:   -fhip-dump-offload-linker-script \
 // RUN:   %S/Inputs/hip_multiple_inputs/a.cu \
 // RUN:   %S/Inputs/hip_multiple_inputs/b.hip \
 // RUN: 2>&1 | FileCheck %s
+
+// check code object alignment in dumped llvm-mc input
+// CHECK: .p2align 12
 
 // emit objects for host side path
 // CHECK: [[CLANG:".*clang.*"]] "-cc1" "-triple" "x86_64-unknown-linux-gnu"
@@ -53,7 +57,8 @@
 // CHECK-NOT: "*.llvm-link"
 // CHECK-NOT: ".*opt"
 // CHECK-NOT: ".*llc"
-// CHECK: {{".*lld.*"}} {{.*}} "-mllvm" "-amdgpu-internalize-symbols"
+// CHECK: {{".*lld.*"}} {{.*}} "-plugin-opt=-amdgpu-internalize-symbols"
+// CHECK-SAME: "-plugin-opt=mcpu=gfx803"
 // CHECK-SAME: "-o" "[[IMG_DEV1:.*.out]]" [[A_BC1]] [[B_BC1]]
 
 // generate image for device side path on gfx900
@@ -80,16 +85,17 @@
 // CHECK-NOT: "*.llvm-link"
 // CHECK-NOT: ".*opt"
 // CHECK-NOT: ".*llc"
-// CHECK: {{".*lld.*"}} {{.*}} "-mllvm" "-amdgpu-internalize-symbols"
+// CHECK: {{".*lld.*"}} {{.*}} "-plugin-opt=-amdgpu-internalize-symbols"
+// CHECK-SAME: "-plugin-opt=mcpu=gfx900"
 // CHECK-SAME: "-o" "[[IMG_DEV2:.*.out]]" [[A_BC2]] [[B_BC2]]
 
 // combine images generated into hip fat binary object
 // CHECK: [[BUNDLER:".*clang-offload-bundler"]] "-type=o"
+// CHECK-SAME: "-bundle-align=4096"
 // CHECK-SAME: "-targets={{.*}},hip-amdgcn-amd-amdhsa-gfx803,hip-amdgcn-amd-amdhsa-gfx900"
 // CHECK-SAME: "-inputs={{.*}},[[IMG_DEV1]],[[IMG_DEV2]]" "-outputs=[[BUNDLE:.*hipfb]]"
 
-// CHECK: [[MC:".*llvm-mc"]] "-triple" "amdgcn-amd-amdhsa"
-// CHECK-SAME: "-o" [[OBJBUNDLE:".*o"]] "{{.*}}.mcin" "--filetype=obj"
+// CHECK: [[MC:".*llvm-mc"]] "-o" [[OBJBUNDLE:".*o"]] "{{.*}}.mcin" "--filetype=obj"
 
 // output the executable
 // CHECK: [[LD:".*ld.*"]] {{.*}}"-o" "a.out" {{.*}} [[A_OBJ_HOST]] [[B_OBJ_HOST]] [[OBJBUNDLE]]

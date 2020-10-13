@@ -139,15 +139,12 @@ struct StructuredIndexed {
 
   StructuredIndexed(Value v, ArrayRef<AffineExpr> indexings)
       : value(v), exprs(indexings.begin(), indexings.end()) {
-    assert((v.getType().isa<MemRefType>() ||
-            v.getType().isa<RankedTensorType>() ||
-            v.getType().isa<VectorType>()) &&
+    assert((v.getType().isa<MemRefType, RankedTensorType, VectorType>()) &&
            "MemRef, RankedTensor or Vector expected");
   }
   StructuredIndexed(Type t, ArrayRef<AffineExpr> indexings)
       : type(t), exprs(indexings.begin(), indexings.end()) {
-    assert((t.isa<MemRefType>() || t.isa<RankedTensorType>() ||
-            t.isa<VectorType>()) &&
+    assert((t.isa<MemRefType, RankedTensorType, VectorType>()) &&
            "MemRef, RankedTensor or Vector expected");
   }
 
@@ -193,7 +190,7 @@ public:
   TemplatedIndexedValue operator()(Value index, Args... indices) {
     return TemplatedIndexedValue(value, index).append(indices...);
   }
-  TemplatedIndexedValue operator()(ArrayRef<Value> indices) {
+  TemplatedIndexedValue operator()(ValueRange indices) {
     return TemplatedIndexedValue(value, indices);
   }
 
@@ -288,25 +285,41 @@ public:
   /// Comparison operator overloadings.
   Value eq(Value e);
   Value ne(Value e);
-  Value operator<(Value e);
-  Value operator<=(Value e);
-  Value operator>(Value e);
-  Value operator>=(Value e);
-  Value operator<(TemplatedIndexedValue e) {
-    return *this < static_cast<Value>(e);
+  Value slt(Value e);
+  Value sle(Value e);
+  Value sgt(Value e);
+  Value sge(Value e);
+  Value ult(Value e);
+  Value ule(Value e);
+  Value ugt(Value e);
+  Value uge(Value e);
+  Value slt(TemplatedIndexedValue e) {
+    return slt(*this, static_cast<Value>(e));
   }
-  Value operator<=(TemplatedIndexedValue e) {
-    return *this <= static_cast<Value>(e);
+  Value sle(TemplatedIndexedValue e) {
+    return sle(*this, static_cast<Value>(e));
   }
-  Value operator>(TemplatedIndexedValue e) {
-    return *this > static_cast<Value>(e);
+  Value sgt(TemplatedIndexedValue e) {
+    return sgt(*this, static_cast<Value>(e));
   }
-  Value operator>=(TemplatedIndexedValue e) {
-    return *this >= static_cast<Value>(e);
+  Value sge(TemplatedIndexedValue e) {
+    return sge(*this, static_cast<Value>(e));
+  }
+  Value ult(TemplatedIndexedValue e) {
+    return ult(*this, static_cast<Value>(e));
+  }
+  Value ule(TemplatedIndexedValue e) {
+    return ule(*this, static_cast<Value>(e));
+  }
+  Value ugt(TemplatedIndexedValue e) {
+    return ugt(*this, static_cast<Value>(e));
+  }
+  Value uge(TemplatedIndexedValue e) {
+    return uge(*this, static_cast<Value>(e));
   }
 
 private:
-  TemplatedIndexedValue(Value value, ArrayRef<Value> indices)
+  TemplatedIndexedValue(Value value, ValueRange indices)
       : value(value), indices(indices.begin(), indices.end()) {}
 
   TemplatedIndexedValue &append() { return *this; }

@@ -1,6 +1,7 @@
 ; RUN: llc -mtriple=aarch64-linux-gnu -mattr=+sve < %s 2>%t | FileCheck %s
 ; RUN: FileCheck --check-prefix=WARN --allow-empty %s <%t
 
+; If this check fails please read test/CodeGen/AArch64/README for instructions on how to resolve it.
 ; WARN-NOT: warning
 
 ;
@@ -57,7 +58,7 @@ define <vscale x 2 x i64> @sel_i64(<vscale x 2 x i1> %pg, <vscale x 2 x i64> %a,
   ret <vscale x 2 x i64> %out
 }
 
-define <vscale x 8 x bfloat> @sel_bf16(<vscale x 8 x i1> %pg, <vscale x 8 x bfloat> %a, <vscale x 8 x bfloat> %b) {
+define <vscale x 8 x bfloat> @sel_bf16(<vscale x 8 x i1> %pg, <vscale x 8 x bfloat> %a, <vscale x 8 x bfloat> %b) #0 {
 ; CHECK-LABEL: sel_bf16:
 ; CHECK: sel z0.h, p0, z0.h, z1.h
 ; CHECK-NEXT: ret
@@ -106,3 +107,6 @@ declare <vscale x 8 x bfloat> @llvm.aarch64.sve.sel.nxv8bf16(<vscale x 8 x i1>, 
 declare <vscale x 8 x half> @llvm.aarch64.sve.sel.nxv8f16(<vscale x 8 x i1>, <vscale x 8 x half>, <vscale x 8 x half>)
 declare <vscale x 4 x float> @llvm.aarch64.sve.sel.nxv4f32(<vscale x 4 x i1>, <vscale x 4 x float>, <vscale x 4 x float>)
 declare <vscale x 2 x double> @llvm.aarch64.sve.sel.nxv2f64(<vscale x 2 x i1>, <vscale x 2 x double>, <vscale x 2 x double>)
+
+; +bf16 is required for the bfloat version.
+attributes #0 = { "target-features"="+sve,+bf16" }

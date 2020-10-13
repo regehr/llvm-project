@@ -28,6 +28,9 @@ def RawFrmImm8    : Format<7>;
 def RawFrmImm16   : Format<8>;
 def AddCCFrm      : Format<9>;
 def PrefixByte    : Format<10>;
+def MRMr0          : Format<21>;
+def MRMSrcMemFSIB  : Format<22>;
+def MRMDestMemFSIB : Format<23>;
 def MRMDestMem     : Format<24>;
 def MRMSrcMem      : Format<25>;
 def MRMSrcMem4VOp3 : Format<26>;
@@ -213,6 +216,7 @@ class T8XS : T8 { Prefix OpPrefix = XS; }
 class TAPS : TA { Prefix OpPrefix = PS; }
 class TAPD : TA { Prefix OpPrefix = PD; }
 class TAXD : TA { Prefix OpPrefix = XD; }
+class TAXS : TA { Prefix OpPrefix = XS; }
 class VEX    { Encoding OpEnc = EncVEX; }
 class VEX_W    { bit HasVEX_W = 1; }
 class VEX_WIG  { bit IgnoresVEX_W = 1; }

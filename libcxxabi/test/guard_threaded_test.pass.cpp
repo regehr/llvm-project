@@ -36,7 +36,7 @@ constexpr int TestSamples = 50;
 
 
 void BusyWait() {
-    std::this_thread::yield();
+  std::this_thread::yield();
 }
 
 void YieldAfterBarrier() {
@@ -375,9 +375,11 @@ void test_futex_syscall() {
   waker.join();
 }
 
-int main() {
+int main(int, char**) {
   // Test each multi-threaded implementation with real threads.
   test_all_impls();
   // Test the basic sanity of the futex syscall wrappers.
   test_futex_syscall();
+
+  return 0;
 }

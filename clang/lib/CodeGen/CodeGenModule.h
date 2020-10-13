@@ -324,7 +324,6 @@ private:
   std::unique_ptr<CGObjCRuntime> ObjCRuntime;
   std::unique_ptr<CGOpenCLRuntime> OpenCLRuntime;
   std::unique_ptr<CGOpenMPRuntime> OpenMPRuntime;
-  std::unique_ptr<llvm::OpenMPIRBuilder> OMPBuilder;
   std::unique_ptr<CGCUDARuntime> CUDARuntime;
   std::unique_ptr<CGDebugInfo> DebugInfo;
   std::unique_ptr<ObjCEntrypoints> ObjCData;
@@ -396,10 +395,6 @@ private:
   /// Store the list of global destructors and their respective priorities to be
   /// emitted when the translation unit is complete.
   CtorList GlobalDtors;
-
-  /// A unique trailing identifier as a part of sinit/sterm function when
-  /// UseSinitAndSterm of CXXABI is set as true.
-  std::string GlobalUniqueModuleId;
 
   /// An ordered map of canonical GlobalDecls to their mangled names.
   llvm::MapVector<GlobalDecl, StringRef> MangledDeclNames;
@@ -596,9 +591,6 @@ public:
     assert(OpenMPRuntime != nullptr);
     return *OpenMPRuntime;
   }
-
-  /// Return a pointer to the configured OpenMPIRBuilder, if any.
-  llvm::OpenMPIRBuilder *getOpenMPIRBuilder() { return OMPBuilder.get(); }
 
   /// Return a reference to the configured CUDA runtime.
   CGCUDARuntime &getCUDARuntime() {
@@ -823,8 +815,7 @@ public:
 
   llvm::Function *CreateGlobalInitOrCleanUpFunction(
       llvm::FunctionType *ty, const Twine &name, const CGFunctionInfo &FI,
-      SourceLocation Loc = SourceLocation(), bool TLS = false,
-      bool IsExternalLinkage = false);
+      SourceLocation Loc = SourceLocation(), bool TLS = false);
 
   /// Return the AST address space of the underlying global variable for D, as
   /// determined by its declaration. Normally this is the same as the address
@@ -1063,6 +1054,12 @@ public:
                                                  DtorFn.getCallee(), nullptr);
   }
 
+  /// Add an sterm finalizer to its own llvm.global_dtors entry.
+  void AddCXXStermFinalizerToGlobalDtor(llvm::Function *StermFinalizer,
+                                        int Priority) {
+    AddGlobalDtor(StermFinalizer, Priority);
+  }
+
   /// Create or return a runtime function declaration with the specified type
   /// and name. If \p AssumeConvergent is true, the call will have the
   /// convergent attribute added.
@@ -1070,16 +1067,6 @@ public:
   CreateRuntimeFunction(llvm::FunctionType *Ty, StringRef Name,
                         llvm::AttributeList ExtraAttrs = llvm::AttributeList(),
                         bool Local = false, bool AssumeConvergent = false);
-
-  /// Create or return a runtime function declaration with the specified type
-  /// and name. This will automatically add the convergent attribute to the
-  /// function declaration.
-  llvm::FunctionCallee CreateConvergentRuntimeFunction(
-      llvm::FunctionType *Ty, StringRef Name,
-      llvm::AttributeList ExtraAttrs = llvm::AttributeList(),
-      bool Local = false) {
-    return CreateRuntimeFunction(Ty, Name, ExtraAttrs, Local, true);
-  }
 
   /// Create a new runtime global variable with the specified type and name.
   llvm::Constant *CreateRuntimeVariable(llvm::Type *Ty,

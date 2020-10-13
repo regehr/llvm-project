@@ -26,8 +26,7 @@
 using namespace mlir;
 using namespace mlir::omp;
 
-OpenMPDialect::OpenMPDialect(MLIRContext *context)
-    : Dialect(getDialectNamespace(), context) {
+void OpenMPDialect::initialize() {
   addOperations<
 #define GET_OP_LIST
 #include "mlir/Dialect/OpenMP/OpenMPOps.cpp.inc"
@@ -70,7 +69,7 @@ static void printParallelOp(OpAsmPrinter &p, ParallelOp op) {
   p << "omp.parallel";
 
   if (auto ifCond = op.if_expr_var())
-    p << " if(" << ifCond << ")";
+    p << " if(" << ifCond << " : " << ifCond.getType() << ")";
 
   if (auto threads = op.num_threads_var())
     p << " num_threads(" << threads << " : " << threads.getType() << ")";
@@ -125,16 +124,16 @@ static ParseResult allowedOnce(OpAsmParser &parser, llvm::StringRef clause,
 /// Note that each clause can only appear once in the clase-list.
 static ParseResult parseParallelOp(OpAsmParser &parser,
                                    OperationState &result) {
-  OpAsmParser::OperandType ifCond;
+  std::pair<OpAsmParser::OperandType, Type> ifCond;
   std::pair<OpAsmParser::OperandType, Type> numThreads;
-  llvm::SmallVector<OpAsmParser::OperandType, 4> privates;
-  llvm::SmallVector<Type, 4> privateTypes;
-  llvm::SmallVector<OpAsmParser::OperandType, 4> firstprivates;
-  llvm::SmallVector<Type, 4> firstprivateTypes;
-  llvm::SmallVector<OpAsmParser::OperandType, 4> shareds;
-  llvm::SmallVector<Type, 4> sharedTypes;
-  llvm::SmallVector<OpAsmParser::OperandType, 4> copyins;
-  llvm::SmallVector<Type, 4> copyinTypes;
+  SmallVector<OpAsmParser::OperandType, 4> privates;
+  SmallVector<Type, 4> privateTypes;
+  SmallVector<OpAsmParser::OperandType, 4> firstprivates;
+  SmallVector<Type, 4> firstprivateTypes;
+  SmallVector<OpAsmParser::OperandType, 4> shareds;
+  SmallVector<Type, 4> sharedTypes;
+  SmallVector<OpAsmParser::OperandType, 4> copyins;
+  SmallVector<Type, 4> copyinTypes;
   std::array<int, 6> segments{0, 0, 0, 0, 0, 0};
   llvm::StringRef keyword;
   bool defaultVal = false;
@@ -153,8 +152,8 @@ static ParseResult parseParallelOp(OpAsmParser &parser,
       // Fail if there was already another if condition
       if (segments[ifClausePos])
         return allowedOnce(parser, "if", opName);
-      if (parser.parseLParen() || parser.parseOperand(ifCond) ||
-          parser.parseRParen())
+      if (parser.parseLParen() || parser.parseOperand(ifCond.first) ||
+          parser.parseColonType(ifCond.second) || parser.parseRParen())
         return failure();
       segments[ifClausePos] = 1;
     } else if (keyword == "num_threads") {
@@ -210,7 +209,7 @@ static ParseResult parseParallelOp(OpAsmParser &parser,
       auto attr = parser.getBuilder().getStringAttr(attrval);
       result.addAttribute("default_val", attr);
     } else if (keyword == "proc_bind") {
-      // fail if there was already another default clause
+      // fail if there was already another proc_bind clause
       if (procBind)
         return allowedOnce(parser, "proc_bind", opName);
       procBind = true;
@@ -228,54 +227,50 @@ static ParseResult parseParallelOp(OpAsmParser &parser,
   }
 
   // Add if parameter
-  if (segments[ifClausePos]) {
-    parser.resolveOperand(ifCond, parser.getBuilder().getI1Type(),
-                          result.operands);
-  }
+  if (segments[ifClausePos] &&
+      parser.resolveOperand(ifCond.first, ifCond.second, result.operands))
+    return failure();
 
   // Add num_threads parameter
-  if (segments[numThreadsClausePos]) {
-    parser.resolveOperand(numThreads.first, numThreads.second, result.operands);
-  }
+  if (segments[numThreadsClausePos] &&
+      parser.resolveOperand(numThreads.first, numThreads.second,
+                            result.operands))
+    return failure();
 
   // Add private parameters
-  if (segments[privateClausePos]) {
-    parser.resolveOperands(privates, privateTypes, privates[0].location,
-                           result.operands);
-  }
+  if (segments[privateClausePos] &&
+      parser.resolveOperands(privates, privateTypes, privates[0].location,
+                             result.operands))
+    return failure();
 
   // Add firstprivate parameters
-  if (segments[firstprivateClausePos]) {
-    parser.resolveOperands(firstprivates, firstprivateTypes,
-                           firstprivates[0].location, result.operands);
-  }
+  if (segments[firstprivateClausePos] &&
+      parser.resolveOperands(firstprivates, firstprivateTypes,
+                             firstprivates[0].location, result.operands))
+    return failure();
 
   // Add shared parameters
-  if (segments[sharedClausePos]) {
-    parser.resolveOperands(shareds, sharedTypes, shareds[0].location,
-                           result.operands);
-  }
+  if (segments[sharedClausePos] &&
+      parser.resolveOperands(shareds, sharedTypes, shareds[0].location,
+                             result.operands))
+    return failure();
 
   // Add copyin parameters
-  if (segments[copyinClausePos]) {
-    parser.resolveOperands(copyins, copyinTypes, copyins[0].location,
-                           result.operands);
-  }
+  if (segments[copyinClausePos] &&
+      parser.resolveOperands(copyins, copyinTypes, copyins[0].location,
+                             result.operands))
+    return failure();
 
   result.addAttribute("operand_segment_sizes",
                       parser.getBuilder().getI32VectorAttr(segments));
 
   Region *body = result.addRegion();
-  llvm::SmallVector<OpAsmParser::OperandType, 4> regionArgs;
-  llvm::SmallVector<Type, 4> regionArgTypes;
+  SmallVector<OpAsmParser::OperandType, 4> regionArgs;
+  SmallVector<Type, 4> regionArgTypes;
   if (parser.parseRegion(*body, regionArgs, regionArgTypes))
     return failure();
   return success();
 }
 
-namespace mlir {
-namespace omp {
 #define GET_OP_CLASSES
 #include "mlir/Dialect/OpenMP/OpenMPOps.cpp.inc"
-} // namespace omp
-} // namespace mlir

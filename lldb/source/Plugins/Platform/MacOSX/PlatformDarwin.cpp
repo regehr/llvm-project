@@ -237,6 +237,30 @@ lldb_private::Status PlatformDarwin::GetSharedModuleWithLocalCache(
 
   Status err;
 
+  if (IsHost()) {
+    // When debugging on the host, we are most likely using the same shared
+    // cache as our inferior. The dylibs from the shared cache might not
+    // exist on the filesystem, so let's use the images in our own memory
+    // to create the modules.
+
+    // Check if the requested image is in our shared cache.
+    SharedCacheImageInfo image_info =
+        HostInfo::GetSharedCacheImageInfo(module_spec.GetFileSpec().GetPath());
+
+    // If we found it and it has the correct UUID, let's proceed with
+    // creating a module from the memory contents.
+    if (image_info.uuid &&
+        (!module_spec.GetUUID() || module_spec.GetUUID() == image_info.uuid)) {
+      ModuleSpec shared_cache_spec(module_spec.GetFileSpec(), image_info.uuid,
+                                   image_info.data_sp);
+      err = ModuleList::GetSharedModule(shared_cache_spec, module_sp,
+                                        module_search_paths_ptr,
+                                        old_module_sp_ptr, did_create_ptr);
+      if (module_sp)
+        return err;
+    }
+  }
+
   err = ModuleList::GetSharedModule(module_spec, module_sp,
                                     module_search_paths_ptr, old_module_sp_ptr,
                                     did_create_ptr);
@@ -546,10 +570,21 @@ bool PlatformDarwin::ARMGetSupportedArchitectureAtIndex(uint32_t idx,
 #define OSNAME "watchos"
 #elif defined(TARGET_OS_BRIDGE) && TARGET_OS_BRIDGE == 1
 #define OSNAME "bridgeos"
-#elif defined(TARGET_OS_OSX) && TARGET_OS_OSX == 1
-#define OSNAME "macosx"
 #else
 #define OSNAME "ios"
+#endif
+
+#if TARGET_OS_OSX
+  if (IsHost()) {
+    if (idx == 0) {
+      arch.SetTriple("arm64e-apple-macosx");
+      return true;
+    } else if (idx == 1) {
+      arch.SetTriple("arm64-apple-macosx");
+      return true;
+    }
+    return false;
+  }
 #endif
 
   const ArchSpec::Core system_core = system_arch.GetCore();
@@ -1191,6 +1226,33 @@ PlatformDarwin::GetResumeCountForLaunchInfo(ProcessLaunchInfo &launch_info) {
     return 1;
 }
 
+lldb::ProcessSP
+PlatformDarwin::DebugProcess(ProcessLaunchInfo &launch_info, Debugger &debugger,
+                             Target *target, // Can be NULL, if NULL create
+                                             // a new target, else use existing
+                                             // one
+                             Status &error) {
+  ProcessSP process_sp;
+
+  if (IsHost()) {
+    // We are going to hand this process off to debugserver which will be in
+    // charge of setting the exit status.  However, we still need to reap it
+    // from lldb. So, make sure we use a exit callback which does not set exit
+    // status.
+    const bool monitor_signals = false;
+    launch_info.SetMonitorProcessCallback(
+        &ProcessLaunchInfo::NoOpMonitorCallback, monitor_signals);
+    process_sp = Platform::DebugProcess(launch_info, debugger, target, error);
+  } else {
+    if (m_remote_platform_sp)
+      process_sp = m_remote_platform_sp->DebugProcess(launch_info, debugger,
+                                                      target, error);
+    else
+      error.SetErrorString("the platform is not currently connected");
+  }
+  return process_sp;
+}
+
 void PlatformDarwin::CalculateTrapHandlerSymbolNames() {
   m_trap_handlers.push_back(ConstString("_sigtramp"));
 }
@@ -1262,6 +1324,12 @@ FileSpec PlatformDarwin::GetSDKDirectoryForModules(XcodeSDK::Type sdk_type) {
     break;
   case XcodeSDK::Type::iPhoneOS:
     sdks_spec.AppendPathComponent("iPhoneOS.platform");
+    break;
+  case XcodeSDK::Type::WatchSimulator:
+    sdks_spec.AppendPathComponent("WatchSimulator.platform");
+    break;
+  case XcodeSDK::Type::AppleTVSimulator:
+    sdks_spec.AppendPathComponent("AppleTVSimulator.platform");
     break;
   default:
     llvm_unreachable("unsupported sdk");
@@ -1503,6 +1571,14 @@ void PlatformDarwin::AddClangModuleCompilationOptionsForSDKType(
       break;
     case XcodeSDK::Type::MacOSX:
       minimum_version_option.PutCString("-mmacosx-version-min=");
+      minimum_version_option.PutCString(version.getAsString());
+      break;
+    case XcodeSDK::Type::WatchSimulator:
+      minimum_version_option.PutCString("-mwatchos-simulator-version-min=");
+      minimum_version_option.PutCString(version.getAsString());
+      break;
+    case XcodeSDK::Type::AppleTVSimulator:
+      minimum_version_option.PutCString("-mtvos-version-min=");
       minimum_version_option.PutCString(version.getAsString());
       break;
     default:

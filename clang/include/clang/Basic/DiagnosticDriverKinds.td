@@ -56,12 +56,12 @@ def err_drv_no_cuda_libdevice : Error<
   "cannot find libdevice for %0. Provide path to different CUDA installation "
   "via --cuda-path, or pass -nocudalib to build without linking with libdevice.">;
 
-def err_drv_no_rocm_installation : Error<
-  "cannot find ROCm installation.  Provide its path via --rocm-path, or pass "
-  "-nogpulib and -nogpuinc to build without ROCm device library and HIP includes.">;
 def err_drv_no_rocm_device_lib : Error<
-  "cannot find device library for %0. Provide path to different ROCm installation "
-  "via --rocm-path, or pass -nogpulib to build without linking default libraries.">;
+  "cannot find ROCm device library%select{| for %1}0. Provide its path via --rocm-path or "
+  "--rocm-device-lib-path, or pass -nogpulib to build without ROCm device library.">;
+def err_drv_no_hip_runtime : Error<
+  "cannot find HIP runtime. Provide its path via --rocm-path, or pass "
+  "-nogpuinc to build without HIP runtime.">;
 
 def err_drv_cuda_version_unsupported : Error<
   "GPU arch %0 is supported by CUDA versions between %1 and %2 (inclusive), "
@@ -73,6 +73,11 @@ def warn_drv_unknown_cuda_version: Warning<
   InGroup<CudaUnknownVersion>;
 def err_drv_cuda_host_arch : Error<"unsupported architecture '%0' for host compilation.">;
 def err_drv_mix_cuda_hip : Error<"Mixed Cuda and HIP compilation is not supported.">;
+def err_drv_bad_target_id : Error<"Invalid target ID: %0 (A target ID is a processor name "
+  "followed by an optional list of predefined features post-fixed by a plus or minus sign deliminated "
+  "by colon, e.g. 'gfx908:sram-ecc+:xnack-')">;
+def err_drv_bad_offload_arch_combo : Error<"Invalid offload arch combinations: %0 and %1 (For a specific "
+  "processor, a feature should either exist in all offload archs, or not exist in any offload archs)">;
 def err_drv_invalid_thread_model_for_target : Error<
   "invalid thread model '%0' in '%1' for this target">;
 def err_drv_invalid_linker_name : Error<
@@ -248,6 +253,7 @@ def err_drv_optimization_remark_format : Error<
   "unknown remark serializer format: '%0'">;
 def err_drv_no_neon_modifier : Error<"[no]neon is not accepted as modifier, please use [no]simd instead">;
 def err_drv_invalid_omp_target : Error<"OpenMP target is invalid: '%0'">;
+def err_drv_incompatible_omp_arch : Error<"OpenMP target architecture '%0' pointer size is incompatible with host '%1'">;
 def err_drv_omp_host_ir_file_not_found : Error<
   "The provided host compiler IR file '%0' is required to generate code for OpenMP target regions but cannot be found.">;
 def err_drv_omp_host_target_not_supported : Error<
@@ -458,6 +464,10 @@ def warn_drv_msvc_not_found : Warning<
   "try running Clang from a developer command prompt">,
   InGroup<DiagGroup<"msvc-not-found">>;
 
+def warn_drv_fuse_ld_path : Warning<
+  "'-fuse-ld=' taking a path is deprecated. Use '--ld-path=' instead">,
+  InGroup<FUseLdPath>, DefaultIgnore;
+
 def warn_drv_fine_grained_bitfield_accesses_ignored : Warning<
   "option '-ffine-grained-bitfield-accesses' cannot be enabled together with a sanitizer; flag ignored">,
   InGroup<OptionIgnored>;
@@ -509,4 +519,9 @@ def warn_drv_libstdcxx_not_found : Warning<
   InGroup<DiagGroup<"stdlibcxx-not-found">>;
 
 def err_drv_cannot_mix_options : Error<"cannot specify '%1' along with '%0'">;
+
+def err_drv_invalid_object_mode : Error<"OBJECT_MODE setting %0 is not recognized and is not a valid setting.">;
+
+def err_drv_invalid_sve_vector_bits : Error<
+  "'-msve-vector-bits' is not supported without SVE enabled">;
 }

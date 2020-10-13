@@ -427,7 +427,7 @@ static bool willNotOverflow(ScalarEvolution *SE, Instruction::BinaryOps BinOp,
              : &ScalarEvolution::getZeroExtendExpr;
 
   // Check ext(LHS op RHS) == ext(LHS) op ext(RHS)
-  auto *NarrowTy = cast<IntegerType>(LHS->getType());
+  auto *NarrowTy = cast<IntegerType>(SE->getEffectiveSCEVType(LHS->getType()));
   auto *WideTy =
     IntegerType::get(NarrowTy->getContext(), NarrowTy->getBitWidth() * 2);
 
@@ -477,6 +477,7 @@ bool SimplifyIndvar::eliminateOverflowIntrinsic(WithOverflowInst *WO) {
   if (WO->use_empty())
     WO->eraseFromParent();
 
+  Changed = true;
   return true;
 }
 

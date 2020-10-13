@@ -94,6 +94,8 @@ Optional<bool> getExplicitDataSections();
 bool getFunctionSections();
 Optional<bool> getExplicitFunctionSections();
 
+bool getIgnoreXCOFFVisibility();
+
 std::string getBBSections();
 
 unsigned getTLSSize();
@@ -114,7 +116,11 @@ bool getEnableAddrsig();
 
 bool getEmitCallSiteInfo();
 
+bool getEnableMachineFunctionSplitter();
+
 bool getEnableDebugEntryValues();
+
+bool getValueTrackingVariableLocations();
 
 bool getForceDwarfFrameSection();
 

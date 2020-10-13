@@ -35,6 +35,7 @@
 #include "llvm/IR/LLVMRemarkStreamer.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IRReader/IRReader.h"
+#include "llvm/LTO/LTOBackend.h"
 #include "llvm/Linker/Linker.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -245,8 +246,13 @@ namespace clang {
     bool LinkInModules() {
       for (auto &LM : LinkModules) {
         if (LM.PropagateAttrs)
-          for (Function &F : *LM.Module)
+          for (Function &F : *LM.Module) {
+            // Skip intrinsics. Keep consistent with how intrinsics are created
+            // in LLVM IR.
+            if (F.isIntrinsic())
+              continue;
             Gen->CGM().addDefaultFunctionDefinitionAttributes(F);
+          }
 
         CurLinkModule = LM.Module.get();
 
@@ -990,11 +996,9 @@ CodeGenAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
 
   CoverageSourceInfo *CoverageInfo = nullptr;
   // Add the preprocessor callback only when the coverage mapping is generated.
-  if (CI.getCodeGenOpts().CoverageMapping) {
-    CoverageInfo = new CoverageSourceInfo;
-    CI.getPreprocessor().addPPCallbacks(
-                                    std::unique_ptr<PPCallbacks>(CoverageInfo));
-  }
+  if (CI.getCodeGenOpts().CoverageMapping)
+    CoverageInfo = CodeGen::CoverageMappingModuleGen::setUpCoverageCallbacks(
+        CI.getPreprocessor());
 
   std::unique_ptr<BackendConsumer> Result(new BackendConsumer(
       BA, CI.getDiagnostics(), CI.getHeaderSearchOpts(),
@@ -1063,7 +1067,7 @@ CodeGenAction::loadModule(MemoryBufferRef MBRef) {
     Expected<std::vector<BitcodeModule>> BMsOrErr = getBitcodeModuleList(MBRef);
     if (!BMsOrErr)
       return DiagErrors(BMsOrErr.takeError());
-    BitcodeModule *Bm = FindThinLTOModule(*BMsOrErr);
+    BitcodeModule *Bm = llvm::lto::findThinLTOModule(*BMsOrErr);
     // We have nothing to do if the file contains no ThinLTO module. This is
     // possible if ThinLTO compilation was not able to split module. Content of
     // the file was already processed by indexing and will be passed to the

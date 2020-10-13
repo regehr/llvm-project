@@ -301,7 +301,7 @@ public:
                                       StringRef CustomResourceDir = "");
 
   Driver(StringRef ClangExecutable, StringRef TargetTriple,
-         DiagnosticsEngine &Diags,
+         DiagnosticsEngine &Diags, std::string Title = "clang LLVM compiler",
          IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS = nullptr);
 
   /// @name Accessors
@@ -621,7 +621,8 @@ public:
   static bool GetReleaseVersion(StringRef Str,
                                 MutableArrayRef<unsigned> Digits);
   /// Compute the default -fmodule-cache-path.
-  static void getDefaultModuleCachePath(SmallVectorImpl<char> &Result);
+  /// \return True if the system provides a default cache directory.
+  static bool getDefaultModuleCachePath(SmallVectorImpl<char> &Result);
 };
 
 /// \return True if the last defined optimization level is -Ofast.

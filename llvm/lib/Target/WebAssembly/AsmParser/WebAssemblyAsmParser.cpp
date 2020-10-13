@@ -35,10 +35,12 @@ using namespace llvm;
 
 #define DEBUG_TYPE "wasm-asm-parser"
 
+static const char *getSubtargetFeatureName(uint64_t Val);
+
 namespace {
 
 /// WebAssemblyOperand - Instances of this class represent the operands in a
-/// parsed WASM machine instruction.
+/// parsed Wasm machine instruction.
 struct WebAssemblyOperand : public MCParsedAsmOperand {
   enum KindTy { Token, Integer, Float, Symbol, BrList } Kind;
 
@@ -322,6 +324,8 @@ public:
       return wasm::ValType::V128;
     if (Type == "exnref")
       return wasm::ValType::EXNREF;
+    if (Type == "funcref")
+      return wasm::ValType::FUNCREF;
     if (Type == "externref")
       return wasm::ValType::EXTERNREF;
     return Optional<wasm::ValType>();
@@ -687,13 +691,49 @@ public:
       auto Type = parseType(TypeName);
       if (!Type)
         return error("Unknown type in .globaltype directive: ", TypeTok);
+      // Optional mutable modifier. Default to mutable for historical reasons.
+      // Ideally we would have gone with immutable as the default and used `mut`
+      // as the modifier to match the `.wat` format.
+      bool Mutable = true;
+      if (isNext(AsmToken::Comma)) {
+        TypeTok = Lexer.getTok();
+        auto Id = expectIdent();
+        if (Id == "immutable")
+          Mutable = false;
+        else
+          // Should we also allow `mutable` and `mut` here for clarity?
+          return error("Unknown type in .globaltype modifier: ", TypeTok);
+      }
       // Now set this symbol with the correct type.
       auto WasmSym = cast<MCSymbolWasm>(Ctx.getOrCreateSymbol(SymName));
       WasmSym->setType(wasm::WASM_SYMBOL_TYPE_GLOBAL);
       WasmSym->setGlobalType(
-          wasm::WasmGlobalType{uint8_t(Type.getValue()), true});
+          wasm::WasmGlobalType{uint8_t(Type.getValue()), Mutable});
       // And emit the directive again.
       TOut.emitGlobalType(WasmSym);
+      return expect(AsmToken::EndOfStatement, "EOL");
+    }
+
+    if (DirectiveID.getString() == ".tabletype") {
+      auto SymName = expectIdent();
+      if (SymName.empty())
+        return true;
+      if (expect(AsmToken::Comma, ","))
+        return true;
+      auto TypeTok = Lexer.getTok();
+      auto TypeName = expectIdent();
+      if (TypeName.empty())
+        return true;
+      auto Type = parseType(TypeName);
+      if (!Type)
+        return error("Unknown type in .tabletype directive: ", TypeTok);
+
+      // Now that we have the name and table type, we can actually create the
+      // symbol
+      auto WasmSym = cast<MCSymbolWasm>(Ctx.getOrCreateSymbol(SymName));
+      WasmSym->setType(wasm::WASM_SYMBOL_TYPE_TABLE);
+      WasmSym->setTableType(Type.getValue());
+      TOut.emitTableType(WasmSym);
       return expect(AsmToken::EndOfStatement, "EOL");
     }
 
@@ -836,8 +876,9 @@ public:
                                bool MatchingInlineAsm) override {
     MCInst Inst;
     Inst.setLoc(IDLoc);
-    unsigned MatchResult =
-        MatchInstructionImpl(Operands, Inst, ErrorInfo, MatchingInlineAsm);
+    FeatureBitset MissingFeatures;
+    unsigned MatchResult = MatchInstructionImpl(
+        Operands, Inst, ErrorInfo, MissingFeatures, MatchingInlineAsm);
     switch (MatchResult) {
     case Match_Success: {
       ensureLocals(Out);
@@ -866,9 +907,16 @@ public:
       }
       return false;
     }
-    case Match_MissingFeature:
-      return Parser.Error(
-          IDLoc, "instruction requires a WASM feature not currently enabled");
+    case Match_MissingFeature: {
+      assert(MissingFeatures.count() > 0 && "Expected missing features");
+      SmallString<128> Message;
+      raw_svector_ostream OS(Message);
+      OS << "instruction requires:";
+      for (unsigned i = 0, e = MissingFeatures.size(); i != e; ++i)
+        if (MissingFeatures.test(i))
+          OS << ' ' << getSubtargetFeatureName(i);
+      return Parser.Error(IDLoc, Message);
+    }
     case Match_MnemonicFail:
       return Parser.Error(IDLoc, "invalid instruction");
     case Match_NearMisses:
@@ -932,5 +980,6 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeWebAssemblyAsmParser() {
 }
 
 #define GET_REGISTER_MATCHER
+#define GET_SUBTARGET_FEATURE_NAME
 #define GET_MATCHER_IMPLEMENTATION
 #include "WebAssemblyGenAsmMatcher.inc"

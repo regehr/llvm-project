@@ -47,14 +47,39 @@ void mlir::edsc::affineLoopBuilder(ValueRange lbs, ValueRange ubs, int64_t step,
   // updating the scoped context.
   builder.create<AffineForOp>(
       loc, lbs, builder.getMultiDimIdentityMap(lbs.size()), ubs,
-      builder.getMultiDimIdentityMap(ubs.size()), step,
-      [&](OpBuilder &nestedBuilder, Location nestedLoc, Value iv) {
+      builder.getMultiDimIdentityMap(ubs.size()), step, llvm::None,
+      [&](OpBuilder &nestedBuilder, Location nestedLoc, Value iv,
+          ValueRange itrArgs) {
         if (bodyBuilderFn) {
           ScopedContext nestedContext(nestedBuilder, nestedLoc);
           OpBuilder::InsertionGuard guard(nestedBuilder);
           bodyBuilderFn(iv);
         }
-        nestedBuilder.create<AffineTerminatorOp>(nestedLoc);
+        nestedBuilder.create<AffineYieldOp>(nestedLoc);
+      });
+}
+
+void mlir::edsc::affineLoopBuilder(
+    ValueRange lbs, ValueRange ubs, int64_t step, ValueRange iterArgs,
+    function_ref<void(Value, ValueRange)> bodyBuilderFn) {
+  // Fetch the builder and location.
+  assert(ScopedContext::getContext() && "EDSC ScopedContext not set up");
+  OpBuilder &builder = ScopedContext::getBuilderRef();
+  Location loc = ScopedContext::getLocation();
+
+  // Create the actual loop and call the body builder, if provided, after
+  // updating the scoped context.
+  builder.create<AffineForOp>(
+      loc, lbs, builder.getMultiDimIdentityMap(lbs.size()), ubs,
+      builder.getMultiDimIdentityMap(ubs.size()), step, iterArgs,
+      [&](OpBuilder &nestedBuilder, Location nestedLoc, Value iv,
+          ValueRange itrArgs) {
+        if (bodyBuilderFn) {
+          ScopedContext nestedContext(nestedBuilder, nestedLoc);
+          OpBuilder::InsertionGuard guard(nestedBuilder);
+          bodyBuilderFn(iv, itrArgs);
+        } else if (itrArgs.empty())
+          nestedBuilder.create<AffineYieldOp>(nestedLoc);
       });
 }
 
@@ -117,7 +142,7 @@ static Value createBinaryHandle(
     return ValueBuilder<IOp>(lhs, rhs);
   } else if (thisType.isa<FloatType>()) {
     return ValueBuilder<FOp>(lhs, rhs);
-  } else if (thisType.isa<VectorType>() || thisType.isa<TensorType>()) {
+  } else if (thisType.isa<VectorType, TensorType>()) {
     auto aggregateType = thisType.cast<ShapedType>();
     if (aggregateType.getElementType().isSignlessInteger())
       return ValueBuilder<IOp>(lhs, rhs);
@@ -221,29 +246,51 @@ Value mlir::edsc::op::ne(Value lhs, Value rhs) {
              ? createFComparisonExpr(CmpFPredicate::ONE, lhs, rhs)
              : createIComparisonExpr(CmpIPredicate::ne, lhs, rhs);
 }
-Value mlir::edsc::op::operator<(Value lhs, Value rhs) {
+Value mlir::edsc::op::slt(Value lhs, Value rhs) {
   auto type = lhs.getType();
   return type.isa<FloatType>()
              ? createFComparisonExpr(CmpFPredicate::OLT, lhs, rhs)
-             :
-             // TODO(ntv,zinenko): signed by default, how about unsigned?
-             createIComparisonExpr(CmpIPredicate::slt, lhs, rhs);
+             : createIComparisonExpr(CmpIPredicate::slt, lhs, rhs);
 }
-Value mlir::edsc::op::operator<=(Value lhs, Value rhs) {
+Value mlir::edsc::op::sle(Value lhs, Value rhs) {
   auto type = lhs.getType();
   return type.isa<FloatType>()
              ? createFComparisonExpr(CmpFPredicate::OLE, lhs, rhs)
              : createIComparisonExpr(CmpIPredicate::sle, lhs, rhs);
 }
-Value mlir::edsc::op::operator>(Value lhs, Value rhs) {
+Value mlir::edsc::op::sgt(Value lhs, Value rhs) {
   auto type = lhs.getType();
   return type.isa<FloatType>()
              ? createFComparisonExpr(CmpFPredicate::OGT, lhs, rhs)
              : createIComparisonExpr(CmpIPredicate::sgt, lhs, rhs);
 }
-Value mlir::edsc::op::operator>=(Value lhs, Value rhs) {
+Value mlir::edsc::op::sge(Value lhs, Value rhs) {
   auto type = lhs.getType();
   return type.isa<FloatType>()
              ? createFComparisonExpr(CmpFPredicate::OGE, lhs, rhs)
              : createIComparisonExpr(CmpIPredicate::sge, lhs, rhs);
+}
+Value mlir::edsc::op::ult(Value lhs, Value rhs) {
+  auto type = lhs.getType();
+  return type.isa<FloatType>()
+             ? createFComparisonExpr(CmpFPredicate::OLT, lhs, rhs)
+             : createIComparisonExpr(CmpIPredicate::ult, lhs, rhs);
+}
+Value mlir::edsc::op::ule(Value lhs, Value rhs) {
+  auto type = lhs.getType();
+  return type.isa<FloatType>()
+             ? createFComparisonExpr(CmpFPredicate::OLE, lhs, rhs)
+             : createIComparisonExpr(CmpIPredicate::ule, lhs, rhs);
+}
+Value mlir::edsc::op::ugt(Value lhs, Value rhs) {
+  auto type = lhs.getType();
+  return type.isa<FloatType>()
+             ? createFComparisonExpr(CmpFPredicate::OGT, lhs, rhs)
+             : createIComparisonExpr(CmpIPredicate::ugt, lhs, rhs);
+}
+Value mlir::edsc::op::uge(Value lhs, Value rhs) {
+  auto type = lhs.getType();
+  return type.isa<FloatType>()
+             ? createFComparisonExpr(CmpFPredicate::OGE, lhs, rhs)
+             : createIComparisonExpr(CmpIPredicate::uge, lhs, rhs);
 }

@@ -9,23 +9,23 @@ define arm_aapcs_vfpcc i32 @mul_v2i32(<2 x i32> %x) {
 ; CHECK-NEXT:    muls r0, r1, r0
 ; CHECK-NEXT:    bx lr
 entry:
-  %z = call i32 @llvm.experimental.vector.reduce.mul.v2i32(<2 x i32> %x)
+  %z = call i32 @llvm.vector.reduce.mul.v2i32(<2 x i32> %x)
   ret i32 %z
 }
 
 define arm_aapcs_vfpcc i32 @mul_v4i32(<4 x i32> %x) {
 ; CHECK-LABEL: mul_v4i32:
 ; CHECK:       @ %bb.0: @ %entry
-; CHECK-NEXT:    vmov r0, s1
-; CHECK-NEXT:    vmov r1, s0
-; CHECK-NEXT:    muls r0, r1, r0
+; CHECK-NEXT:    vmov r0, s3
 ; CHECK-NEXT:    vmov r1, s2
+; CHECK-NEXT:    vmov r2, s0
 ; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov r1, s3
+; CHECK-NEXT:    vmov r1, s1
+; CHECK-NEXT:    muls r1, r2, r1
 ; CHECK-NEXT:    muls r0, r1, r0
 ; CHECK-NEXT:    bx lr
 entry:
-  %z = call i32 @llvm.experimental.vector.reduce.mul.v4i32(<4 x i32> %x)
+  %z = call i32 @llvm.vector.reduce.mul.v4i32(<4 x i32> %x)
   ret i32 %z
 }
 
@@ -33,56 +33,50 @@ define arm_aapcs_vfpcc i32 @mul_v8i32(<8 x i32> %x) {
 ; CHECK-LABEL: mul_v8i32:
 ; CHECK:       @ %bb.0: @ %entry
 ; CHECK-NEXT:    vmul.i32 q0, q0, q1
-; CHECK-NEXT:    vmov r0, s1
-; CHECK-NEXT:    vmov r1, s0
-; CHECK-NEXT:    muls r0, r1, r0
+; CHECK-NEXT:    vmov r0, s3
 ; CHECK-NEXT:    vmov r1, s2
+; CHECK-NEXT:    vmov r2, s0
 ; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov r1, s3
+; CHECK-NEXT:    vmov r1, s1
+; CHECK-NEXT:    muls r1, r2, r1
 ; CHECK-NEXT:    muls r0, r1, r0
 ; CHECK-NEXT:    bx lr
 entry:
-  %z = call i32 @llvm.experimental.vector.reduce.mul.v8i32(<8 x i32> %x)
+  %z = call i32 @llvm.vector.reduce.mul.v8i32(<8 x i32> %x)
   ret i32 %z
 }
 
 define arm_aapcs_vfpcc i16 @mul_v4i16(<4 x i16> %x) {
 ; CHECK-LABEL: mul_v4i16:
 ; CHECK:       @ %bb.0: @ %entry
-; CHECK-NEXT:    vmov r0, s1
-; CHECK-NEXT:    vmov r1, s0
-; CHECK-NEXT:    muls r0, r1, r0
+; CHECK-NEXT:    vmov r0, s3
 ; CHECK-NEXT:    vmov r1, s2
+; CHECK-NEXT:    vmov r2, s0
 ; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov r1, s3
+; CHECK-NEXT:    vmov r1, s1
+; CHECK-NEXT:    muls r1, r2, r1
 ; CHECK-NEXT:    muls r0, r1, r0
 ; CHECK-NEXT:    bx lr
 entry:
-  %z = call i16 @llvm.experimental.vector.reduce.mul.v4i16(<4 x i16> %x)
+  %z = call i16 @llvm.vector.reduce.mul.v4i16(<4 x i16> %x)
   ret i16 %z
 }
 
 define arm_aapcs_vfpcc i16 @mul_v8i16(<8 x i16> %x) {
 ; CHECK-LABEL: mul_v8i16:
 ; CHECK:       @ %bb.0: @ %entry
-; CHECK-NEXT:    vmov.u16 r0, q0[1]
-; CHECK-NEXT:    vmov.u16 r1, q0[0]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u16 r1, q0[2]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u16 r1, q0[3]
-; CHECK-NEXT:    muls r0, r1, r0
+; CHECK-NEXT:    vrev32.16 q1, q0
+; CHECK-NEXT:    vmul.i16 q0, q0, q1
+; CHECK-NEXT:    vmov.u16 r0, q0[6]
 ; CHECK-NEXT:    vmov.u16 r1, q0[4]
 ; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u16 r1, q0[5]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u16 r1, q0[6]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u16 r1, q0[7]
+; CHECK-NEXT:    vmov.u16 r1, q0[2]
+; CHECK-NEXT:    vmov.u16 r2, q0[0]
+; CHECK-NEXT:    muls r1, r2, r1
 ; CHECK-NEXT:    muls r0, r1, r0
 ; CHECK-NEXT:    bx lr
 entry:
-  %z = call i16 @llvm.experimental.vector.reduce.mul.v8i16(<8 x i16> %x)
+  %z = call i16 @llvm.vector.reduce.mul.v8i16(<8 x i16> %x)
   ret i16 %z
 }
 
@@ -90,88 +84,56 @@ define arm_aapcs_vfpcc i16 @mul_v16i16(<16 x i16> %x) {
 ; CHECK-LABEL: mul_v16i16:
 ; CHECK:       @ %bb.0: @ %entry
 ; CHECK-NEXT:    vmul.i16 q0, q0, q1
-; CHECK-NEXT:    vmov.u16 r0, q0[1]
-; CHECK-NEXT:    vmov.u16 r1, q0[0]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u16 r1, q0[2]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u16 r1, q0[3]
-; CHECK-NEXT:    muls r0, r1, r0
+; CHECK-NEXT:    vrev32.16 q1, q0
+; CHECK-NEXT:    vmul.i16 q0, q0, q1
+; CHECK-NEXT:    vmov.u16 r0, q0[6]
 ; CHECK-NEXT:    vmov.u16 r1, q0[4]
 ; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u16 r1, q0[5]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u16 r1, q0[6]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u16 r1, q0[7]
+; CHECK-NEXT:    vmov.u16 r1, q0[2]
+; CHECK-NEXT:    vmov.u16 r2, q0[0]
+; CHECK-NEXT:    muls r1, r2, r1
 ; CHECK-NEXT:    muls r0, r1, r0
 ; CHECK-NEXT:    bx lr
 entry:
-  %z = call i16 @llvm.experimental.vector.reduce.mul.v16i16(<16 x i16> %x)
+  %z = call i16 @llvm.vector.reduce.mul.v16i16(<16 x i16> %x)
   ret i16 %z
 }
 
 define arm_aapcs_vfpcc i8 @mul_v8i8(<8 x i8> %x) {
 ; CHECK-LABEL: mul_v8i8:
 ; CHECK:       @ %bb.0: @ %entry
-; CHECK-NEXT:    vmov.u16 r0, q0[1]
-; CHECK-NEXT:    vmov.u16 r1, q0[0]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u16 r1, q0[2]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u16 r1, q0[3]
-; CHECK-NEXT:    muls r0, r1, r0
+; CHECK-NEXT:    vrev32.16 q1, q0
+; CHECK-NEXT:    vmul.i16 q0, q0, q1
+; CHECK-NEXT:    vmov.u16 r0, q0[6]
 ; CHECK-NEXT:    vmov.u16 r1, q0[4]
 ; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u16 r1, q0[5]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u16 r1, q0[6]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u16 r1, q0[7]
+; CHECK-NEXT:    vmov.u16 r1, q0[2]
+; CHECK-NEXT:    vmov.u16 r2, q0[0]
+; CHECK-NEXT:    muls r1, r2, r1
 ; CHECK-NEXT:    muls r0, r1, r0
 ; CHECK-NEXT:    bx lr
 entry:
-  %z = call i8 @llvm.experimental.vector.reduce.mul.v8i8(<8 x i8> %x)
+  %z = call i8 @llvm.vector.reduce.mul.v8i8(<8 x i8> %x)
   ret i8 %z
 }
 
 define arm_aapcs_vfpcc i8 @mul_v16i8(<16 x i8> %x) {
 ; CHECK-LABEL: mul_v16i8:
 ; CHECK:       @ %bb.0: @ %entry
-; CHECK-NEXT:    vmov.u8 r0, q0[1]
-; CHECK-NEXT:    vmov.u8 r1, q0[0]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u8 r1, q0[2]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u8 r1, q0[3]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u8 r1, q0[4]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u8 r1, q0[5]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u8 r1, q0[6]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u8 r1, q0[7]
-; CHECK-NEXT:    muls r0, r1, r0
+; CHECK-NEXT:    vrev16.8 q1, q0
+; CHECK-NEXT:    vmul.i8 q0, q0, q1
+; CHECK-NEXT:    vrev32.8 q1, q0
+; CHECK-NEXT:    vmul.i8 q0, q0, q1
+; CHECK-NEXT:    vmov.u8 r0, q0[12]
 ; CHECK-NEXT:    vmov.u8 r1, q0[8]
 ; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u8 r1, q0[9]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u8 r1, q0[10]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u8 r1, q0[11]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u8 r1, q0[12]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u8 r1, q0[13]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u8 r1, q0[14]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u8 r1, q0[15]
+; CHECK-NEXT:    vmov.u8 r1, q0[4]
+; CHECK-NEXT:    vmov.u8 r2, q0[0]
+; CHECK-NEXT:    muls r1, r2, r1
 ; CHECK-NEXT:    muls r0, r1, r0
 ; CHECK-NEXT:    bx lr
 entry:
-  %z = call i8 @llvm.experimental.vector.reduce.mul.v16i8(<16 x i8> %x)
+  %z = call i8 @llvm.vector.reduce.mul.v16i8(<16 x i8> %x)
   ret i8 %z
 }
 
@@ -179,40 +141,20 @@ define arm_aapcs_vfpcc i8 @mul_v32i8(<32 x i8> %x) {
 ; CHECK-LABEL: mul_v32i8:
 ; CHECK:       @ %bb.0: @ %entry
 ; CHECK-NEXT:    vmul.i8 q0, q0, q1
-; CHECK-NEXT:    vmov.u8 r0, q0[1]
-; CHECK-NEXT:    vmov.u8 r1, q0[0]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u8 r1, q0[2]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u8 r1, q0[3]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u8 r1, q0[4]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u8 r1, q0[5]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u8 r1, q0[6]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u8 r1, q0[7]
-; CHECK-NEXT:    muls r0, r1, r0
+; CHECK-NEXT:    vrev16.8 q1, q0
+; CHECK-NEXT:    vmul.i8 q0, q0, q1
+; CHECK-NEXT:    vrev32.8 q1, q0
+; CHECK-NEXT:    vmul.i8 q0, q0, q1
+; CHECK-NEXT:    vmov.u8 r0, q0[12]
 ; CHECK-NEXT:    vmov.u8 r1, q0[8]
 ; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u8 r1, q0[9]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u8 r1, q0[10]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u8 r1, q0[11]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u8 r1, q0[12]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u8 r1, q0[13]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u8 r1, q0[14]
-; CHECK-NEXT:    muls r0, r1, r0
-; CHECK-NEXT:    vmov.u8 r1, q0[15]
+; CHECK-NEXT:    vmov.u8 r1, q0[4]
+; CHECK-NEXT:    vmov.u8 r2, q0[0]
+; CHECK-NEXT:    muls r1, r2, r1
 ; CHECK-NEXT:    muls r0, r1, r0
 ; CHECK-NEXT:    bx lr
 entry:
-  %z = call i8 @llvm.experimental.vector.reduce.mul.v32i8(<32 x i8> %x)
+  %z = call i8 @llvm.vector.reduce.mul.v32i8(<32 x i8> %x)
   ret i8 %z
 }
 
@@ -221,7 +163,7 @@ define arm_aapcs_vfpcc i64 @mul_v1i64(<1 x i64> %x) {
 ; CHECK:       @ %bb.0: @ %entry
 ; CHECK-NEXT:    bx lr
 entry:
-  %z = call i64 @llvm.experimental.vector.reduce.mul.v1i64(<1 x i64> %x)
+  %z = call i64 @llvm.vector.reduce.mul.v1i64(<1 x i64> %x)
   ret i64 %z
 }
 
@@ -237,7 +179,7 @@ define arm_aapcs_vfpcc i64 @mul_v2i64(<2 x i64> %x) {
 ; CHECK-NEXT:    mla r1, r3, r1, r2
 ; CHECK-NEXT:    bx lr
 entry:
-  %z = call i64 @llvm.experimental.vector.reduce.mul.v2i64(<2 x i64> %x)
+  %z = call i64 @llvm.vector.reduce.mul.v2i64(<2 x i64> %x)
   ret i64 %z
 }
 
@@ -265,7 +207,7 @@ define arm_aapcs_vfpcc i64 @mul_v4i64(<4 x i64> %x) {
 ; CHECK-NEXT:    mla r1, r1, r6, r4
 ; CHECK-NEXT:    pop.w {r4, r5, r6, r7, r8, pc}
 entry:
-  %z = call i64 @llvm.experimental.vector.reduce.mul.v4i64(<4 x i64> %x)
+  %z = call i64 @llvm.vector.reduce.mul.v4i64(<4 x i64> %x)
   ret i64 %z
 }
 
@@ -278,7 +220,7 @@ define arm_aapcs_vfpcc i32 @mul_v2i32_acc(<2 x i32> %x, i32 %y) {
 ; CHECK-NEXT:    muls r0, r1, r0
 ; CHECK-NEXT:    bx lr
 entry:
-  %z = call i32 @llvm.experimental.vector.reduce.mul.v2i32(<2 x i32> %x)
+  %z = call i32 @llvm.vector.reduce.mul.v2i32(<2 x i32> %x)
   %r = mul i32 %y, %z
   ret i32 %r
 }
@@ -286,17 +228,17 @@ entry:
 define arm_aapcs_vfpcc i32 @mul_v4i32_acc(<4 x i32> %x, i32 %y) {
 ; CHECK-LABEL: mul_v4i32_acc:
 ; CHECK:       @ %bb.0: @ %entry
-; CHECK-NEXT:    vmov r1, s1
-; CHECK-NEXT:    vmov r2, s0
-; CHECK-NEXT:    muls r1, r2, r1
+; CHECK-NEXT:    vmov r1, s3
 ; CHECK-NEXT:    vmov r2, s2
+; CHECK-NEXT:    vmov r3, s0
 ; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov r2, s3
+; CHECK-NEXT:    vmov r2, s1
+; CHECK-NEXT:    muls r2, r3, r2
 ; CHECK-NEXT:    muls r1, r2, r1
 ; CHECK-NEXT:    muls r0, r1, r0
 ; CHECK-NEXT:    bx lr
 entry:
-  %z = call i32 @llvm.experimental.vector.reduce.mul.v4i32(<4 x i32> %x)
+  %z = call i32 @llvm.vector.reduce.mul.v4i32(<4 x i32> %x)
   %r = mul i32 %y, %z
   ret i32 %r
 }
@@ -305,17 +247,17 @@ define arm_aapcs_vfpcc i32 @mul_v8i32_acc(<8 x i32> %x, i32 %y) {
 ; CHECK-LABEL: mul_v8i32_acc:
 ; CHECK:       @ %bb.0: @ %entry
 ; CHECK-NEXT:    vmul.i32 q0, q0, q1
-; CHECK-NEXT:    vmov r1, s1
-; CHECK-NEXT:    vmov r2, s0
-; CHECK-NEXT:    muls r1, r2, r1
+; CHECK-NEXT:    vmov r1, s3
 ; CHECK-NEXT:    vmov r2, s2
+; CHECK-NEXT:    vmov r3, s0
 ; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov r2, s3
+; CHECK-NEXT:    vmov r2, s1
+; CHECK-NEXT:    muls r2, r3, r2
 ; CHECK-NEXT:    muls r1, r2, r1
 ; CHECK-NEXT:    muls r0, r1, r0
 ; CHECK-NEXT:    bx lr
 entry:
-  %z = call i32 @llvm.experimental.vector.reduce.mul.v8i32(<8 x i32> %x)
+  %z = call i32 @llvm.vector.reduce.mul.v8i32(<8 x i32> %x)
   %r = mul i32 %y, %z
   ret i32 %r
 }
@@ -323,17 +265,17 @@ entry:
 define arm_aapcs_vfpcc i16 @mul_v4i16_acc(<4 x i16> %x, i16 %y) {
 ; CHECK-LABEL: mul_v4i16_acc:
 ; CHECK:       @ %bb.0: @ %entry
-; CHECK-NEXT:    vmov r1, s1
-; CHECK-NEXT:    vmov r2, s0
-; CHECK-NEXT:    muls r1, r2, r1
+; CHECK-NEXT:    vmov r1, s3
 ; CHECK-NEXT:    vmov r2, s2
+; CHECK-NEXT:    vmov r3, s0
 ; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov r2, s3
+; CHECK-NEXT:    vmov r2, s1
+; CHECK-NEXT:    muls r2, r3, r2
 ; CHECK-NEXT:    muls r1, r2, r1
 ; CHECK-NEXT:    muls r0, r1, r0
 ; CHECK-NEXT:    bx lr
 entry:
-  %z = call i16 @llvm.experimental.vector.reduce.mul.v4i16(<4 x i16> %x)
+  %z = call i16 @llvm.vector.reduce.mul.v4i16(<4 x i16> %x)
   %r = mul i16 %y, %z
   ret i16 %r
 }
@@ -341,25 +283,19 @@ entry:
 define arm_aapcs_vfpcc i16 @mul_v8i16_acc(<8 x i16> %x, i16 %y) {
 ; CHECK-LABEL: mul_v8i16_acc:
 ; CHECK:       @ %bb.0: @ %entry
-; CHECK-NEXT:    vmov.u16 r1, q0[1]
-; CHECK-NEXT:    vmov.u16 r2, q0[0]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u16 r2, q0[2]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u16 r2, q0[3]
-; CHECK-NEXT:    muls r1, r2, r1
+; CHECK-NEXT:    vrev32.16 q1, q0
+; CHECK-NEXT:    vmul.i16 q0, q0, q1
+; CHECK-NEXT:    vmov.u16 r1, q0[6]
 ; CHECK-NEXT:    vmov.u16 r2, q0[4]
 ; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u16 r2, q0[5]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u16 r2, q0[6]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u16 r2, q0[7]
+; CHECK-NEXT:    vmov.u16 r2, q0[2]
+; CHECK-NEXT:    vmov.u16 r3, q0[0]
+; CHECK-NEXT:    muls r2, r3, r2
 ; CHECK-NEXT:    muls r1, r2, r1
 ; CHECK-NEXT:    muls r0, r1, r0
 ; CHECK-NEXT:    bx lr
 entry:
-  %z = call i16 @llvm.experimental.vector.reduce.mul.v8i16(<8 x i16> %x)
+  %z = call i16 @llvm.vector.reduce.mul.v8i16(<8 x i16> %x)
   %r = mul i16 %y, %z
   ret i16 %r
 }
@@ -368,25 +304,19 @@ define arm_aapcs_vfpcc i16 @mul_v16i16_acc(<16 x i16> %x, i16 %y) {
 ; CHECK-LABEL: mul_v16i16_acc:
 ; CHECK:       @ %bb.0: @ %entry
 ; CHECK-NEXT:    vmul.i16 q0, q0, q1
-; CHECK-NEXT:    vmov.u16 r1, q0[1]
-; CHECK-NEXT:    vmov.u16 r2, q0[0]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u16 r2, q0[2]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u16 r2, q0[3]
-; CHECK-NEXT:    muls r1, r2, r1
+; CHECK-NEXT:    vrev32.16 q1, q0
+; CHECK-NEXT:    vmul.i16 q0, q0, q1
+; CHECK-NEXT:    vmov.u16 r1, q0[6]
 ; CHECK-NEXT:    vmov.u16 r2, q0[4]
 ; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u16 r2, q0[5]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u16 r2, q0[6]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u16 r2, q0[7]
+; CHECK-NEXT:    vmov.u16 r2, q0[2]
+; CHECK-NEXT:    vmov.u16 r3, q0[0]
+; CHECK-NEXT:    muls r2, r3, r2
 ; CHECK-NEXT:    muls r1, r2, r1
 ; CHECK-NEXT:    muls r0, r1, r0
 ; CHECK-NEXT:    bx lr
 entry:
-  %z = call i16 @llvm.experimental.vector.reduce.mul.v16i16(<16 x i16> %x)
+  %z = call i16 @llvm.vector.reduce.mul.v16i16(<16 x i16> %x)
   %r = mul i16 %y, %z
   ret i16 %r
 }
@@ -394,25 +324,19 @@ entry:
 define arm_aapcs_vfpcc i8 @mul_v8i8_acc(<8 x i8> %x, i8 %y) {
 ; CHECK-LABEL: mul_v8i8_acc:
 ; CHECK:       @ %bb.0: @ %entry
-; CHECK-NEXT:    vmov.u16 r1, q0[1]
-; CHECK-NEXT:    vmov.u16 r2, q0[0]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u16 r2, q0[2]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u16 r2, q0[3]
-; CHECK-NEXT:    muls r1, r2, r1
+; CHECK-NEXT:    vrev32.16 q1, q0
+; CHECK-NEXT:    vmul.i16 q0, q0, q1
+; CHECK-NEXT:    vmov.u16 r1, q0[6]
 ; CHECK-NEXT:    vmov.u16 r2, q0[4]
 ; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u16 r2, q0[5]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u16 r2, q0[6]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u16 r2, q0[7]
+; CHECK-NEXT:    vmov.u16 r2, q0[2]
+; CHECK-NEXT:    vmov.u16 r3, q0[0]
+; CHECK-NEXT:    muls r2, r3, r2
 ; CHECK-NEXT:    muls r1, r2, r1
 ; CHECK-NEXT:    muls r0, r1, r0
 ; CHECK-NEXT:    bx lr
 entry:
-  %z = call i8 @llvm.experimental.vector.reduce.mul.v8i8(<8 x i8> %x)
+  %z = call i8 @llvm.vector.reduce.mul.v8i8(<8 x i8> %x)
   %r = mul i8 %y, %z
   ret i8 %r
 }
@@ -420,41 +344,21 @@ entry:
 define arm_aapcs_vfpcc i8 @mul_v16i8_acc(<16 x i8> %x, i8 %y) {
 ; CHECK-LABEL: mul_v16i8_acc:
 ; CHECK:       @ %bb.0: @ %entry
-; CHECK-NEXT:    vmov.u8 r1, q0[1]
-; CHECK-NEXT:    vmov.u8 r2, q0[0]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u8 r2, q0[2]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u8 r2, q0[3]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u8 r2, q0[4]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u8 r2, q0[5]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u8 r2, q0[6]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u8 r2, q0[7]
-; CHECK-NEXT:    muls r1, r2, r1
+; CHECK-NEXT:    vrev16.8 q1, q0
+; CHECK-NEXT:    vmul.i8 q0, q0, q1
+; CHECK-NEXT:    vrev32.8 q1, q0
+; CHECK-NEXT:    vmul.i8 q0, q0, q1
+; CHECK-NEXT:    vmov.u8 r1, q0[12]
 ; CHECK-NEXT:    vmov.u8 r2, q0[8]
 ; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u8 r2, q0[9]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u8 r2, q0[10]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u8 r2, q0[11]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u8 r2, q0[12]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u8 r2, q0[13]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u8 r2, q0[14]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u8 r2, q0[15]
+; CHECK-NEXT:    vmov.u8 r2, q0[4]
+; CHECK-NEXT:    vmov.u8 r3, q0[0]
+; CHECK-NEXT:    muls r2, r3, r2
 ; CHECK-NEXT:    muls r1, r2, r1
 ; CHECK-NEXT:    muls r0, r1, r0
 ; CHECK-NEXT:    bx lr
 entry:
-  %z = call i8 @llvm.experimental.vector.reduce.mul.v16i8(<16 x i8> %x)
+  %z = call i8 @llvm.vector.reduce.mul.v16i8(<16 x i8> %x)
   %r = mul i8 %y, %z
   ret i8 %r
 }
@@ -463,41 +367,21 @@ define arm_aapcs_vfpcc i8 @mul_v32i8_acc(<32 x i8> %x, i8 %y) {
 ; CHECK-LABEL: mul_v32i8_acc:
 ; CHECK:       @ %bb.0: @ %entry
 ; CHECK-NEXT:    vmul.i8 q0, q0, q1
-; CHECK-NEXT:    vmov.u8 r1, q0[1]
-; CHECK-NEXT:    vmov.u8 r2, q0[0]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u8 r2, q0[2]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u8 r2, q0[3]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u8 r2, q0[4]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u8 r2, q0[5]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u8 r2, q0[6]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u8 r2, q0[7]
-; CHECK-NEXT:    muls r1, r2, r1
+; CHECK-NEXT:    vrev16.8 q1, q0
+; CHECK-NEXT:    vmul.i8 q0, q0, q1
+; CHECK-NEXT:    vrev32.8 q1, q0
+; CHECK-NEXT:    vmul.i8 q0, q0, q1
+; CHECK-NEXT:    vmov.u8 r1, q0[12]
 ; CHECK-NEXT:    vmov.u8 r2, q0[8]
 ; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u8 r2, q0[9]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u8 r2, q0[10]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u8 r2, q0[11]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u8 r2, q0[12]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u8 r2, q0[13]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u8 r2, q0[14]
-; CHECK-NEXT:    muls r1, r2, r1
-; CHECK-NEXT:    vmov.u8 r2, q0[15]
+; CHECK-NEXT:    vmov.u8 r2, q0[4]
+; CHECK-NEXT:    vmov.u8 r3, q0[0]
+; CHECK-NEXT:    muls r2, r3, r2
 ; CHECK-NEXT:    muls r1, r2, r1
 ; CHECK-NEXT:    muls r0, r1, r0
 ; CHECK-NEXT:    bx lr
 entry:
-  %z = call i8 @llvm.experimental.vector.reduce.mul.v32i8(<32 x i8> %x)
+  %z = call i8 @llvm.vector.reduce.mul.v32i8(<32 x i8> %x)
   %r = mul i8 %y, %z
   ret i8 %r
 }
@@ -513,7 +397,7 @@ define arm_aapcs_vfpcc i64 @mul_v1i64_acc(<1 x i64> %x, i64 %y) {
 ; CHECK-NEXT:    mov r0, r12
 ; CHECK-NEXT:    pop {r7, pc}
 entry:
-  %z = call i64 @llvm.experimental.vector.reduce.mul.v1i64(<1 x i64> %x)
+  %z = call i64 @llvm.vector.reduce.mul.v1i64(<1 x i64> %x)
   %r = mul i64 %y, %z
   ret i64 %r
 }
@@ -536,7 +420,7 @@ define arm_aapcs_vfpcc i64 @mul_v2i64_acc(<2 x i64> %x, i64 %y) {
 ; CHECK-NEXT:    mov r0, r2
 ; CHECK-NEXT:    pop {r4, pc}
 entry:
-  %z = call i64 @llvm.experimental.vector.reduce.mul.v2i64(<2 x i64> %x)
+  %z = call i64 @llvm.vector.reduce.mul.v2i64(<2 x i64> %x)
   %r = mul i64 %y, %z
   ret i64 %r
 }
@@ -569,20 +453,20 @@ define arm_aapcs_vfpcc i64 @mul_v4i64_acc(<4 x i64> %x, i64 %y) {
 ; CHECK-NEXT:    mov r0, r2
 ; CHECK-NEXT:    pop.w {r4, r5, r6, r7, r8, r9, r10, pc}
 entry:
-  %z = call i64 @llvm.experimental.vector.reduce.mul.v4i64(<4 x i64> %x)
+  %z = call i64 @llvm.vector.reduce.mul.v4i64(<4 x i64> %x)
   %r = mul i64 %y, %z
   ret i64 %r
 }
 
-declare i16 @llvm.experimental.vector.reduce.mul.v16i16(<16 x i16>)
-declare i16 @llvm.experimental.vector.reduce.mul.v4i16(<4 x i16>)
-declare i16 @llvm.experimental.vector.reduce.mul.v8i16(<8 x i16>)
-declare i32 @llvm.experimental.vector.reduce.mul.v2i32(<2 x i32>)
-declare i32 @llvm.experimental.vector.reduce.mul.v4i32(<4 x i32>)
-declare i32 @llvm.experimental.vector.reduce.mul.v8i32(<8 x i32>)
-declare i64 @llvm.experimental.vector.reduce.mul.v1i64(<1 x i64>)
-declare i64 @llvm.experimental.vector.reduce.mul.v2i64(<2 x i64>)
-declare i64 @llvm.experimental.vector.reduce.mul.v4i64(<4 x i64>)
-declare i8 @llvm.experimental.vector.reduce.mul.v16i8(<16 x i8>)
-declare i8 @llvm.experimental.vector.reduce.mul.v32i8(<32 x i8>)
-declare i8 @llvm.experimental.vector.reduce.mul.v8i8(<8 x i8>)
+declare i16 @llvm.vector.reduce.mul.v16i16(<16 x i16>)
+declare i16 @llvm.vector.reduce.mul.v4i16(<4 x i16>)
+declare i16 @llvm.vector.reduce.mul.v8i16(<8 x i16>)
+declare i32 @llvm.vector.reduce.mul.v2i32(<2 x i32>)
+declare i32 @llvm.vector.reduce.mul.v4i32(<4 x i32>)
+declare i32 @llvm.vector.reduce.mul.v8i32(<8 x i32>)
+declare i64 @llvm.vector.reduce.mul.v1i64(<1 x i64>)
+declare i64 @llvm.vector.reduce.mul.v2i64(<2 x i64>)
+declare i64 @llvm.vector.reduce.mul.v4i64(<4 x i64>)
+declare i8 @llvm.vector.reduce.mul.v16i8(<16 x i8>)
+declare i8 @llvm.vector.reduce.mul.v32i8(<32 x i8>)
+declare i8 @llvm.vector.reduce.mul.v8i8(<8 x i8>)
