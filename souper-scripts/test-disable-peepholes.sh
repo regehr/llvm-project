@@ -1,6 +1,6 @@
-set -e
+set -e -x
 
-CLANGBIN=$HOME/clang+llvm-10.0.0-x86_64-linux-gnu-ubuntu-18.04/bin
+CLANGBIN=$HOME/clang+llvm-11.0.0-x86_64-linux-gnu-ubuntu-20.04/bin
 
 DIR=$HOME/llvm-project
 CMAKE='cmake -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON ../llvm -DLLVM_ENABLE_PROJECTS="llvm;clang;compiler-rt"'
@@ -95,6 +95,8 @@ ninja check > check.out 2>&1 || true
 ninja install
 )
 
-size $DIR/install-default2/bin/clang-11 $DIR/install-no-ub2/bin/clang-11 $DIR/install-no-ub-no-peeps2/bin/clang-11
+size $DIR/install-default2/bin/clang-12 $DIR/install-no-ub2/bin/clang-12 $DIR/install-no-ub-no-peeps2/bin/clang-12
 
 grep 'Failed Tests' build-default2/check.out build-no-ub2/check.out build-no-ub-no-peeps2/check.out
+
+exit 0
