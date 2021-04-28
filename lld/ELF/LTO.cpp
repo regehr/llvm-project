@@ -112,6 +112,7 @@ static lto::Config createConfig() {
     }
   }
 
+  c.Options.PseudoProbeForProfiling = config->ltoPseudoProbeForProfiling;
   c.Options.UniqueBasicBlockSectionNames =
       config->ltoUniqueBasicBlockSectionNames;
 
@@ -143,6 +144,7 @@ static lto::Config createConfig() {
   c.RemarksFilename = std::string(config->optRemarksFilename);
   c.RemarksPasses = std::string(config->optRemarksPasses);
   c.RemarksWithHotness = config->optRemarksWithHotness;
+  c.RemarksHotnessThreshold = config->optRemarksHotnessThreshold;
   c.RemarksFormat = std::string(config->optRemarksFormat);
 
   c.SampleProfile = std::string(config->ltoSampleProfile);

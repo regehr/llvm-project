@@ -93,7 +93,7 @@ NativeProcessFreeBSD::Factory::Launch(ProcessLaunchInfo &launch_info,
       pid, launch_info.GetPTY().ReleasePrimaryFileDescriptor(), native_delegate,
       Info.GetArchitecture(), mainloop));
 
-  status = process_up->ReinitializeThreads();
+  status = process_up->SetupTrace();
   if (status.Fail())
     return status.ToError();
 
@@ -191,20 +191,65 @@ void NativeProcessFreeBSD::MonitorSIGTRAP(lldb::pid_t pid) {
     return;
   }
   assert(info.pl_event == PL_EVENT_SIGNAL);
-  // TODO: do we need to handle !PL_FLAG_SI?
-  assert(info.pl_flags & PL_FLAG_SI);
-  assert(info.pl_siginfo.si_signo == SIGTRAP);
 
-  LLDB_LOG(log, "got SIGTRAP, pid = {0}, lwpid = {1}, si_code = {2}", pid,
-           info.pl_lwpid, info.pl_siginfo.si_code);
-
+  LLDB_LOG(log, "got SIGTRAP, pid = {0}, lwpid = {1}, flags = {2:x}", pid,
+           info.pl_lwpid, info.pl_flags);
   NativeThreadFreeBSD *thread = nullptr;
+
+  if (info.pl_flags & (PL_FLAG_BORN | PL_FLAG_EXITED)) {
+    if (info.pl_flags & PL_FLAG_BORN) {
+      LLDB_LOG(log, "monitoring new thread, tid = {0}", info.pl_lwpid);
+      NativeThreadFreeBSD &t = AddThread(info.pl_lwpid);
+
+      // Technically, the FreeBSD kernel copies the debug registers to new
+      // threads.  However, there is a non-negligible delay between acquiring
+      // the DR values and reporting the new thread during which the user may
+      // establish a new watchpoint.  In order to ensure that watchpoints
+      // established during this period are propagated to new threads,
+      // explicitly copy the DR value at the time the new thread is reported.
+      //
+      // See also: https://bugs.freebsd.org/bugzilla/show_bug.cgi?id=250954
+
+      llvm::Error error = t.CopyWatchpointsFrom(
+          static_cast<NativeThreadFreeBSD &>(*GetCurrentThread()));
+      if (error) {
+        LLDB_LOG(log, "failed to copy watchpoints to new thread {0}: {1}",
+                 info.pl_lwpid, llvm::toString(std::move(error)));
+        SetState(StateType::eStateInvalid);
+        return;
+      }
+    } else /*if (info.pl_flags & PL_FLAG_EXITED)*/ {
+      LLDB_LOG(log, "thread exited, tid = {0}", info.pl_lwpid);
+      RemoveThread(info.pl_lwpid);
+    }
+
+    Status error =
+        PtraceWrapper(PT_CONTINUE, pid, reinterpret_cast<void *>(1), 0);
+    if (error.Fail())
+      SetState(StateType::eStateInvalid);
+    return;
+  }
+
+  if (info.pl_flags & PL_FLAG_EXEC) {
+    Status error = ReinitializeThreads();
+    if (error.Fail()) {
+      SetState(StateType::eStateInvalid);
+      return;
+    }
+
+    // Let our delegate know we have just exec'd.
+    NotifyDidExec();
+
+    for (const auto &thread : m_threads)
+      static_cast<NativeThreadFreeBSD &>(*thread).SetStoppedByExec();
+    SetState(StateType::eStateStopped, true);
+    return;
+  }
+
   if (info.pl_lwpid > 0) {
     for (const auto &t : m_threads) {
-      if (t->GetID() == static_cast<lldb::tid_t>(info.pl_lwpid)) {
+      if (t->GetID() == static_cast<lldb::tid_t>(info.pl_lwpid))
         thread = static_cast<NativeThreadFreeBSD *>(t.get());
-        break;
-      }
       static_cast<NativeThreadFreeBSD *>(t.get())->SetStoppedWithNoReason();
     }
     if (!thread)
@@ -212,20 +257,50 @@ void NativeProcessFreeBSD::MonitorSIGTRAP(lldb::pid_t pid) {
                info.pl_lwpid);
   }
 
-  switch (info.pl_siginfo.si_code) {
-  case TRAP_BRKPT:
-    if (thread) {
-      thread->SetStoppedByBreakpoint();
-      FixupBreakpointPCAsNeeded(*thread);
+  if (info.pl_flags & PL_FLAG_SI) {
+    assert(info.pl_siginfo.si_signo == SIGTRAP);
+    LLDB_LOG(log, "SIGTRAP siginfo: si_code = {0}, pid = {1}",
+             info.pl_siginfo.si_code, info.pl_siginfo.si_pid);
+
+    switch (info.pl_siginfo.si_code) {
+    case TRAP_BRKPT:
+      if (thread) {
+        thread->SetStoppedByBreakpoint();
+        FixupBreakpointPCAsNeeded(*thread);
+      }
+      SetState(StateType::eStateStopped, true);
+      return;
+    case TRAP_TRACE:
+      if (thread) {
+        auto &regctx = static_cast<NativeRegisterContextFreeBSD &>(
+            thread->GetRegisterContext());
+        uint32_t wp_index = LLDB_INVALID_INDEX32;
+        Status error =
+            regctx.GetWatchpointHitIndex(wp_index, LLDB_INVALID_ADDRESS);
+        if (error.Fail())
+          LLDB_LOG(log,
+                   "received error while checking for watchpoint hits, pid = "
+                   "{0}, LWP = {1}, error = {2}",
+                   pid, info.pl_lwpid, error);
+        if (wp_index != LLDB_INVALID_INDEX32) {
+          regctx.ClearWatchpointHit(wp_index);
+          thread->SetStoppedByWatchpoint(wp_index);
+          SetState(StateType::eStateStopped, true);
+          break;
+        }
+
+        thread->SetStoppedByTrace();
+      }
+
+      SetState(StateType::eStateStopped, true);
+      return;
     }
-    SetState(StateType::eStateStopped, true);
-    break;
-  case TRAP_TRACE:
-    if (thread)
-      thread->SetStoppedByTrace();
-    SetState(StateType::eStateStopped, true);
-    break;
   }
+
+  // Either user-generated SIGTRAP or an unknown event that would
+  // otherwise leave the debugger hanging.
+  LLDB_LOG(log, "unknown SIGTRAP, passing to generic handler");
+  MonitorSignal(pid, SIGTRAP);
 }
 
 void NativeProcessFreeBSD::MonitorSignal(lldb::pid_t pid, int signal) {
@@ -543,20 +618,6 @@ Status NativeProcessFreeBSD::PopulateMemoryRegionCache() {
   return Status();
 }
 
-Status NativeProcessFreeBSD::AllocateMemory(size_t size, uint32_t permissions,
-                                            lldb::addr_t &addr) {
-  return Status("Unimplemented");
-}
-
-Status NativeProcessFreeBSD::DeallocateMemory(lldb::addr_t addr) {
-  return Status("Unimplemented");
-}
-
-lldb::addr_t NativeProcessFreeBSD::GetSharedLibraryInfoAddress() {
-  // punt on this for now
-  return LLDB_INVALID_ADDRESS;
-}
-
 size_t NativeProcessFreeBSD::UpdateThreads() { return m_threads.size(); }
 
 Status NativeProcessFreeBSD::SetBreakpoint(lldb::addr_t addr, uint32_t size,
@@ -569,14 +630,40 @@ Status NativeProcessFreeBSD::SetBreakpoint(lldb::addr_t addr, uint32_t size,
 
 Status NativeProcessFreeBSD::GetLoadedModuleFileSpec(const char *module_path,
                                                      FileSpec &file_spec) {
-  return Status("Unimplemented");
+  Status error = PopulateMemoryRegionCache();
+  if (error.Fail())
+    return error;
+
+  FileSpec module_file_spec(module_path);
+  FileSystem::Instance().Resolve(module_file_spec);
+
+  file_spec.Clear();
+  for (const auto &it : m_mem_region_cache) {
+    if (it.second.GetFilename() == module_file_spec.GetFilename()) {
+      file_spec = it.second;
+      return Status();
+    }
+  }
+  return Status("Module file (%s) not found in process' memory map!",
+                module_file_spec.GetFilename().AsCString());
 }
 
 Status
 NativeProcessFreeBSD::GetFileLoadAddress(const llvm::StringRef &file_name,
                                          lldb::addr_t &load_addr) {
   load_addr = LLDB_INVALID_ADDRESS;
-  return Status();
+  Status error = PopulateMemoryRegionCache();
+  if (error.Fail())
+    return error;
+
+  FileSpec file(file_name);
+  for (const auto &it : m_mem_region_cache) {
+    if (it.second == file) {
+      load_addr = it.first.GetRange().GetRangeBase();
+      return Status();
+    }
+  }
+  return Status("No load address found for file %s.", file_name.str().c_str());
 }
 
 void NativeProcessFreeBSD::SigchldHandler() {
@@ -670,8 +757,9 @@ Status NativeProcessFreeBSD::Attach() {
       0)
     return Status(errno, eErrorTypePOSIX);
 
-  /* Initialize threads */
-  status = ReinitializeThreads();
+  // Initialize threads and tracing status
+  // NB: this needs to be called before we set thread state
+  status = SetupTrace();
   if (status.Fail())
     return status;
 
@@ -679,7 +767,8 @@ Status NativeProcessFreeBSD::Attach() {
     static_cast<NativeThreadFreeBSD &>(*thread).SetStoppedBySignal(SIGSTOP);
 
   // Let our process instance know the thread has stopped.
-  SetState(StateType::eStateStopped);
+  SetCurrentThreadID(m_threads.front()->GetID());
+  SetState(StateType::eStateStopped, false);
   return Status();
 }
 
@@ -750,6 +839,21 @@ NativeProcessFreeBSD::GetAuxvData() const {
     return std::error_code(errno, std::generic_category());
 
   return buf;
+}
+
+Status NativeProcessFreeBSD::SetupTrace() {
+  // Enable event reporting
+  int events;
+  Status status =
+      PtraceWrapper(PT_GET_EVENT_MASK, GetID(), &events, sizeof(events));
+  if (status.Fail())
+    return status;
+  events |= PTRACE_LWP;
+  status = PtraceWrapper(PT_SET_EVENT_MASK, GetID(), &events, sizeof(events));
+  if (status.Fail())
+    return status;
+
+  return ReinitializeThreads();
 }
 
 Status NativeProcessFreeBSD::ReinitializeThreads() {

@@ -464,7 +464,7 @@ void Option::addCategory(OptionCategory &C) {
   // must be explicitly added if you want multiple categories that include it.
   if (&C != &GeneralCategory && Categories[0] == &GeneralCategory)
     Categories[0] = &C;
-  else if (find(Categories, &C) == Categories.end())
+  else if (!is_contained(Categories, &C))
     Categories.push_back(&C);
 }
 
@@ -531,11 +531,7 @@ Option *CommandLineParser::LookupOption(SubCommand &Sub, StringRef &Arg,
   // If we have an equals sign, remember the value.
   if (EqualPos == StringRef::npos) {
     // Look up the option.
-    auto I = Sub.OptionsMap.find(Arg);
-    if (I == Sub.OptionsMap.end())
-      return nullptr;
-
-    return I != Sub.OptionsMap.end() ? I->second : nullptr;
+    return Sub.OptionsMap.lookup(Arg);
   }
 
   // If the argument before the = is a valid option name and the option allows
@@ -832,7 +828,7 @@ void cl::TokenizeGNUCommandLine(StringRef Src, StringSaver &Saver,
     // Consume runs of whitespace.
     if (Token.empty()) {
       while (I != E && isWhitespace(Src[I])) {
-        // Mark the end of lines in response files
+        // Mark the end of lines in response files.
         if (MarkEOLs && Src[I] == '\n')
           NewArgv.push_back(nullptr);
         ++I;
@@ -869,6 +865,9 @@ void cl::TokenizeGNUCommandLine(StringRef Src, StringSaver &Saver,
     if (isWhitespace(C)) {
       if (!Token.empty())
         NewArgv.push_back(Saver.save(StringRef(Token)).data());
+      // Mark the end of lines in response files.
+      if (MarkEOLs && C == '\n')
+        NewArgv.push_back(nullptr);
       Token.clear();
       continue;
     }
@@ -880,9 +879,6 @@ void cl::TokenizeGNUCommandLine(StringRef Src, StringSaver &Saver,
   // Append the last token after hitting EOF with no whitespace.
   if (!Token.empty())
     NewArgv.push_back(Saver.save(StringRef(Token)).data());
-  // Mark the end of response files
-  if (MarkEOLs)
-    NewArgv.push_back(nullptr);
 }
 
 /// Backslashes are interpreted in a rather complicated way in the Windows-style
@@ -956,11 +952,11 @@ tokenizeWindowsCommandLineImpl(StringRef Src, StringSaver &Saver,
         ++I;
       StringRef NormalChars = Src.slice(Start, I);
       if (I >= E || isWhitespaceOrNull(Src[I])) {
-        if (I < E && Src[I] == '\n')
-          MarkEOL();
         // No special characters: slice out the substring and start the next
         // token. Copy the string if the caller asks us to.
         AddToken(AlwaysCopy ? Saver.save(NormalChars) : NormalChars);
+        if (I < E && Src[I] == '\n')
+          MarkEOL();
       } else if (Src[I] == '\"') {
         Token += NormalChars;
         State = QUOTED;
@@ -1208,7 +1204,7 @@ bool cl::ExpandResponseFiles(StringSaver &Saver, TokenizerCallback Tokenizer,
     };
 
     // Check for recursive response files.
-    if (std::any_of(FileStack.begin() + 1, FileStack.end(), IsEquivalent)) {
+    if (any_of(drop_begin(FileStack), IsEquivalent)) {
       // This file is recursive, so we leave it in the argument stream and
       // move on.
       AllExpanded = false;
@@ -1730,6 +1726,19 @@ void Option::printHelpStr(StringRef HelpStr, size_t Indent,
   }
 }
 
+void Option::printEnumValHelpStr(StringRef HelpStr, size_t BaseIndent,
+                                 size_t FirstLineIndentedBy) {
+  const StringRef ValHelpPrefix = "  ";
+  assert(BaseIndent >= FirstLineIndentedBy + ValHelpPrefix.size());
+  std::pair<StringRef, StringRef> Split = HelpStr.split('\n');
+  outs().indent(BaseIndent - FirstLineIndentedBy)
+      << ArgHelpPrefix << ValHelpPrefix << Split.first << "\n";
+  while (!Split.second.empty()) {
+    Split = Split.second.split('\n');
+    outs().indent(BaseIndent + ValHelpPrefix.size()) << Split.first << "\n";
+  }
+}
+
 // Print out the option for the alias.
 void alias::printOptionInfo(size_t GlobalWidth) const {
   outs() << PrintArg(ArgStr);
@@ -1975,17 +1984,17 @@ void generic_parser_base::printOptionInfo(const Option &O,
       StringRef Description = getDescription(i);
       if (!shouldPrintOption(OptionName, Description, O))
         continue;
-      assert(GlobalWidth >= OptionName.size() + OptionPrefixesSize);
-      size_t NumSpaces = GlobalWidth - OptionName.size() - OptionPrefixesSize;
+      size_t FirstLineIndent = OptionName.size() + OptionPrefixesSize;
       outs() << OptionPrefix << OptionName;
       if (OptionName.empty()) {
         outs() << EmptyOption;
-        assert(NumSpaces >= EmptyOption.size());
-        NumSpaces -= EmptyOption.size();
+        assert(FirstLineIndent >= EmptyOption.size());
+        FirstLineIndent += EmptyOption.size();
       }
       if (!Description.empty())
-        outs().indent(NumSpaces) << ArgHelpPrefix << "  " << Description;
-      outs() << '\n';
+        Option::printEnumValHelpStr(Description, GlobalWidth, FirstLineIndent);
+      else
+        outs() << '\n';
     }
   } else {
     if (!O.HelpStr.empty())
@@ -2590,7 +2599,7 @@ void cl::HideUnrelatedOptions(ArrayRef<const cl::OptionCategory *> Categories,
                               SubCommand &Sub) {
   for (auto &I : Sub.OptionsMap) {
     for (auto &Cat : I.second->Categories) {
-      if (find(Categories, Cat) == Categories.end() && Cat != &GenericCategory)
+      if (!is_contained(Categories, Cat) && Cat != &GenericCategory)
         I.second->setHiddenFlag(cl::ReallyHidden);
     }
   }

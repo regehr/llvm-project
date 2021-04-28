@@ -63,12 +63,23 @@ Changes to the LLVM IR
 * Added the ``byref`` attribute to better represent argument passing
   for the `amdgpu_kernel` calling convention.
 
+* Added type parameter to the ``sret`` attribute to continue work on
+  removing pointer element types.
+
 * The ``llvm.experimental.vector.reduce`` family of intrinsics have been renamed
   to drop the "experimental" from the name, reflecting their now fully supported
   status in the IR.
 
+
 Changes to building LLVM
 ------------------------
+
+* The internal ``llvm-build`` Python script and the associated ``LLVMBuild.txt``
+  files used to describe the LLVM component structure have been removed and
+  replaced by a pure ``CMake`` approach, where each component stores extra
+  properties in the created targets. These properties are processed once all
+  components are defined to resolve library dependencies and produce the header
+  expected by llvm-config.
 
 Changes to TableGen
 -------------------
@@ -80,6 +91,29 @@ Changes to TableGen
   The old syntax used a hyphen in the range (e.g., ``{0-9}``). The new syntax
   uses the "`...`" range punctuation (e.g., ``{0...9}``). The hyphen syntax
   is deprecated.
+
+Changes to the AArch64 Backend
+--------------------------
+
+During this release ...
+
+* Lots of improvements to generation of Windows unwind data; the unwind
+  data is optimized and written in packed form where possible, reducing
+  the size of unwind data (pdata and xdata sections) by around 60%
+  compared with LLVM 11. The generation of prologs/epilogs is tweaked
+  when targeting Windows, to increase the chances of being able to use
+  the packed unwind info format.
+
+* Support for creating Windows unwind data using ``.seh_*`` assembler
+  directives.
+
+* Produce proper assembly output for the Windows target, including
+  ``:lo12:`` relocation specifiers, to allow the assembly output
+  to actually be assembled.
+
+* Changed the assembly comment string for MSVC targets to ``//`` (consistent
+  with the MinGW and ELF targets), freeing up ``;`` to be used as
+  statement separator.
 
 Changes to the ARM Backend
 --------------------------
@@ -95,7 +129,75 @@ During this release ...
 Changes to the PowerPC Target
 -----------------------------
 
-During this release ...
+Optimization:
+
+* Made improvements to loop unroll-and-jam including fix to respect user
+  provided #pragma unroll-and-jam for loops on targets other than ARM.
+* Improved PartialInliner allowing it to handle code regions in a switch
+  statements.
+* Improved PGO support on AIX by building and linking with compiler-rt profile
+  library.
+* Add support for Epilogue Vectorization and enabled it by default.
+
+CodeGen:
+
+* POWER10 support
+  * Implementation of PC Relative addressing in LLD including the associated
+    linker optimizations.
+  * Add support for the new matrix multiplication (MMA) instructions to Clang
+    and LLVM.
+  * Implementation of Power10 builtins.
+
+* Scheduling enhancements
+  * Add a new algorithm to cluster more loads/stores if the DAG is not too
+    complicated.
+  * Enable the PowerPC scheduling heuristic for Power10.
+
+* Target dependent passes tuning
+  * Enhance LoopStrengthReduce/PPCLoopInstrFormPrep pass for PowerPC,
+    especially for P10 intrinsics.
+  * Enhance machine combiner pass to reduce register pressure for PowerPC.
+  * Improve MachineSink to do more sinking based on register pressure and alias
+    analysis.
+
+* General improvements
+  * Complete the constrained floating point operations support.
+  * Improve the llvm-exegesis support.
+  * Improve the stack clash protection to probe the gap between stackptr and
+    realigned stackptr.
+  * Improve the IEEE long double support for Power8.
+  * Enable MemorySSA for LoopSink.
+  * Enhance LLVM debugging functionality via options such as -print-changed and
+    -print-before-changed.
+  * Add builtins for Power9 (i.e. darn, xvtdiv, xvtsqrt etc).
+  * Add options to disable all or part of LoopIdiomRecognizePass.
+  * Add support for printing the DDG in DOT form allowing for visual inspection
+    of the Data Dependence Graph.
+  * Remove the QPX support.
+  * Significant number of bug fixes including all the fixes necessary to
+    achieve a clean test run for Julia.
+
+AIX Support:
+
+* Compiler-rt support
+  * Add support for building compiler-rt for AIX and 32-bit Power targets.
+  * Made compiler-rt the default rtlib for AIX.
+
+* General Improvements
+  * Enable the AIX extended AltiVec ABI under option -mabi=vec-extabi.
+  * Add partial C99 complex type support.
+  * Implemente traceback table for functions (encodes vector information,
+    emits exception handling).
+  * Implemente code generation for C++ dynamic initialization and finalization.
+    of non-local variables for use with the -bcdtors option of the AIX linker.
+  * Add new option -mignore-xcoff-visibility.
+  * Enable explicit sections on AIX.
+  * Enable -f[no-]data-sections on AIX and set -fdata-sections to be the default
+    on AIX.
+  * Enable -f[no-]function-sections.
+  * Add support for relocation generation using the large code model.
+  * Add pragma align natural and sorted out pragma pack stack effect.
+
 
 Changes to the X86 Target
 -------------------------
@@ -105,7 +207,8 @@ During this release ...
 * The 'mpx' feature was removed from the backend. It had been removed from clang
   frontend in 10.0. Mention of the 'mpx' feature in an IR file will print a
   message to stderr, but IR should still compile.
-* Support for ``-march=sapphirerapids`` and ``-march=x86-64-v[234]`` has been added.
+* Support for ``-march=alderlake``, ``-march=sapphirerapids``,
+  ``-march=znver3`` and ``-march=x86-64-v[234]`` has been added.
 * The assembler now has support for {disp32} and {disp8} pseudo prefixes for
   controlling displacement size for memory operands and jump displacements. The
   assembler also supports the .d32 and .d8 mnemonic suffixes to do the same.
@@ -114,7 +217,9 @@ During this release ...
   the "target-cpu" attribute or TargetMachine CPU which will be used to select
   Instruction Set. If the attribute is not present, the tune CPU will follow
   the target CPU.
-* Support for ISA HRESET has been added.
+* Support for ``HRESET`` instructions has been added.
+* Support for ``UINTR`` instructions has been added.
+* Support for ``AVXVNNI`` instructions has been added.
 
 Changes to the AMDGPU Target
 -----------------------------
@@ -138,7 +243,6 @@ Changes to the OCaml bindings
 -----------------------------
 
 
-
 Changes to the C API
 --------------------
 
@@ -156,12 +260,22 @@ Changes to the Debug Info
 
 During this release ...
 
+* The DIModule metadata is extended with a field to indicate if it is a
+  module declaration. This extension enables the emission of debug info
+  for a Fortran 'use <external module>' statement. For more information
+  on what the debug info entries should look like and how the debugger
+  can use them, please see test/DebugInfo/X86/dimodule-external-fortran.ll.
+
 Changes to the LLVM tools
 ---------------------------------
 
 * llvm-readobj and llvm-readelf behavior has changed to report an error when
   executed with no input files instead of reading an input from stdin.
   Reading from stdin can still be achieved by specifying `-` as an input file.
+
+* llvm-mca supports serialization of the timeline and summary views.
+  The `--json` command line option prints a JSON representation of
+  these views to stdout.
 
 Changes to LLDB
 ---------------------------------
@@ -173,6 +287,9 @@ The integer sanitizer `-fsanitize=integer` now has a new sanitizer:
 `-fsanitize=unsigned-shift-base`. It's not undefined behavior for an unsigned
 left shift to overflow (i.e. to shift bits out), but it has been the source of
 bugs and exploits in certain codebases in the past.
+
+Many Sanitizers (asan, cfi, lsan, msan, tsan, ubsan) have support for
+musl-based Linux distributions. Some of them may be rudimentary.
 
 External Open Source Projects Using LLVM 12
 ===========================================

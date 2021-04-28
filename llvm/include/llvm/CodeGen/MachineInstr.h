@@ -456,6 +456,10 @@ public:
   /// it hasn't been assigned a number yet.
   unsigned peekDebugInstrNum() const { return DebugInstrNum; }
 
+  /// Set instruction number of this MachineInstr. Avoid using unless you're
+  /// deserializing this information.
+  void setDebugInstrNum(unsigned Num) { DebugInstrNum = Num; }
+
   /// Emit an error referring to the source location of this instruction.
   /// This should only be used for inline assembly that is somehow
   /// impossible to compile. Other errors should have been handled much
@@ -1152,6 +1156,10 @@ public:
     return getOpcode() == TargetOpcode::CFI_INSTRUCTION;
   }
 
+  bool isPseudoProbe() const {
+    return getOpcode() == TargetOpcode::PSEUDO_PROBE;
+  }
+  
   // True if the instruction represents a position in the function.
   bool isPosition() const { return isLabel() || isCFIInstruction(); }
 
@@ -1160,6 +1168,9 @@ public:
   bool isDebugRef() const { return getOpcode() == TargetOpcode::DBG_INSTR_REF; }
   bool isDebugInstr() const {
     return isDebugValue() || isDebugLabel() || isDebugRef();
+  }
+  bool isDebugOrPseudoInstr() const {
+    return isDebugInstr() || isPseudoProbe();
   }
 
   bool isDebugOffsetImm() const { return getDebugOffset().isImm(); }
@@ -1257,6 +1268,7 @@ public:
     case TargetOpcode::DBG_LABEL:
     case TargetOpcode::LIFETIME_START:
     case TargetOpcode::LIFETIME_END:
+    case TargetOpcode::PSEUDO_PROBE:
       return true;
     }
   }
@@ -1329,7 +1341,8 @@ public:
   /// Return true if the MachineInstr modifies (fully define or partially
   /// define) the specified register.
   /// NOTE: It's ignoring subreg indices on virtual registers.
-  bool modifiesRegister(Register Reg, const TargetRegisterInfo *TRI) const {
+  bool modifiesRegister(Register Reg,
+                        const TargetRegisterInfo *TRI = nullptr) const {
     return findRegisterDefOperandIdx(Reg, false, true, TRI) != -1;
   }
 
@@ -1780,8 +1793,10 @@ public:
   void setDebugValueUndef() {
     assert(isDebugValue() && "Must be a debug value instruction.");
     for (MachineOperand &MO : debug_operands()) {
-      if (MO.isReg())
+      if (MO.isReg()) {
         MO.setReg(0);
+        MO.setSubReg(0);
+      }
     }
   }
 

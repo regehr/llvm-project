@@ -11,6 +11,7 @@
 #include "Darwin.h"
 #include "clang/Basic/CharInfo.h"
 #include "clang/Basic/Version.h"
+#include "clang/Config/config.h"
 #include "clang/Driver/Compilation.h"
 #include "clang/Driver/Driver.h"
 #include "clang/Driver/DriverDiagnostic.h"
@@ -333,8 +334,10 @@ void visualstudio::Linker::ConstructJob(Compilation &C, const JobAction &JA,
         Args.MakeArgString(std::string("-out:") + Output.getFilename()));
 
   if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nostartfiles) &&
-      !C.getDriver().IsCLMode())
+      !C.getDriver().IsCLMode()) {
     CmdArgs.push_back("-defaultlib:libcmt");
+    CmdArgs.push_back("-defaultlib:oldnames");
+  }
 
   if (!llvm::sys::Process::GetEnv("LIB")) {
     // If the VC environment hasn't been configured (perhaps because the user
@@ -380,8 +383,7 @@ void visualstudio::Linker::ConstructJob(Compilation &C, const JobAction &JA,
 
   CmdArgs.push_back("-nologo");
 
-  if (Args.hasArg(options::OPT_g_Group, options::OPT__SLASH_Z7,
-                  options::OPT__SLASH_Zd))
+  if (Args.hasArg(options::OPT_g_Group, options::OPT__SLASH_Z7))
     CmdArgs.push_back("-debug");
 
   // Pass on /Brepro if it was passed to the compiler.
@@ -519,7 +521,10 @@ void visualstudio::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   // translate 'lld' into 'lld-link', and in the case of the regular msvc
   // linker, we need to use a special search algorithm.
   llvm::SmallString<128> linkPath;
-  StringRef Linker = Args.getLastArgValue(options::OPT_fuse_ld_EQ, "link");
+  StringRef Linker
+    = Args.getLastArgValue(options::OPT_fuse_ld_EQ, CLANG_DEFAULT_LINKER);
+  if (Linker.empty())
+    Linker = "link";
   if (Linker.equals_lower("lld"))
     Linker = "lld-link";
 

@@ -284,6 +284,14 @@ bool X86FastISel::foldX86XALUIntrinsic(X86::CondCode &CC, const Instruction *I,
       return false;
   }
 
+  // Make sure no potentially eflags clobbering phi moves can be inserted in
+  // between.
+  auto HasPhis = [](const BasicBlock *Succ) {
+    return !llvm::empty(Succ->phis());
+  };
+  if (I->isTerminator() && llvm::any_of(successors(I), HasPhis))
+    return false;
+
   CC = TmpCC;
   return true;
 }
@@ -779,13 +787,13 @@ bool X86FastISel::handleConstantAddresses(const Value *V, X86AddressMode &AM) {
         if (TLI.getPointerTy(DL) == MVT::i64) {
           Opc = X86::MOV64rm;
           RC  = &X86::GR64RegClass;
-
-          if (Subtarget->isPICStyleRIPRel())
-            StubAM.Base.Reg = X86::RIP;
         } else {
           Opc = X86::MOV32rm;
           RC  = &X86::GR32RegClass;
         }
+
+        if (Subtarget->isPICStyleRIPRel() || GVFlags == X86II::MO_GOTPCREL)
+          StubAM.Base.Reg = X86::RIP;
 
         LoadReg = createResultReg(RC);
         MachineInstrBuilder LoadMI =
@@ -1082,13 +1090,35 @@ bool X86FastISel::X86SelectCallAddress(const Value *V, X86AddressMode &AM) {
 
   // If all else fails, try to materialize the value in a register.
   if (!AM.GV || !Subtarget->isPICStyleRIPRel()) {
+    auto GetCallRegForValue = [this](const Value *V) {
+      Register Reg = getRegForValue(V);
+
+      // In 64-bit mode, we need a 64-bit register even if pointers are 32 bits.
+      if (Reg && Subtarget->isTarget64BitILP32()) {
+        Register CopyReg = createResultReg(&X86::GR32RegClass);
+        BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc, TII.get(X86::MOV32rr),
+                CopyReg)
+            .addReg(Reg);
+
+        Register ExtReg = createResultReg(&X86::GR64RegClass);
+        BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc,
+                TII.get(TargetOpcode::SUBREG_TO_REG), ExtReg)
+            .addImm(0)
+            .addReg(CopyReg)
+            .addImm(X86::sub_32bit);
+        Reg = ExtReg;
+      }
+
+      return Reg;
+    };
+
     if (AM.Base.Reg == 0) {
-      AM.Base.Reg = getRegForValue(V);
+      AM.Base.Reg = GetCallRegForValue(V);
       return AM.Base.Reg != 0;
     }
     if (AM.IndexReg == 0) {
       assert(AM.Scale == 1 && "Scale with no index!");
-      AM.IndexReg = getRegForValue(V);
+      AM.IndexReg = GetCallRegForValue(V);
       return AM.IndexReg != 0;
     }
   }
@@ -2708,10 +2738,9 @@ bool X86FastISel::fastLowerIntrinsicCall(const IntrinsicInst *II) {
     // movq (%rax), %rax
     // movq (%rax), %rax
     // ...
-    unsigned DestReg;
     unsigned Depth = cast<ConstantInt>(II->getOperand(0))->getZExtValue();
     while (Depth--) {
-      DestReg = createResultReg(RC);
+      Register DestReg = createResultReg(RC);
       addDirectMem(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc,
                            TII.get(Opc), DestReg), SrcReg);
       SrcReg = DestReg;
