@@ -24,6 +24,7 @@
 #include "deltas/ReduceGlobalVarInitializers.h"
 #include "deltas/ReduceGlobalVars.h"
 #include "deltas/ReduceInstructions.h"
+#include "deltas/ReduceInstsToArguments.h"
 #include "deltas/ReduceMetadata.h"
 #include "deltas/ReduceModuleInlineAsm.h"
 #include "deltas/ReduceOperandBundles.h"
@@ -48,6 +49,7 @@ static cl::opt<std::string>
   DELTA_PASS("global-variables", reduceGlobalsDeltaPass)                       \
   DELTA_PASS("metadata", reduceMetadataDeltaPass)                              \
   DELTA_PASS("arguments", reduceArgumentsDeltaPass)                            \
+  DELTA_PASS("insts-to-arguments", reduceInstsToArgumentsDeltaPass)            \
   DELTA_PASS("instructions", reduceInstructionsDeltaPass)                      \
   DELTA_PASS("operand-bundles", reduceOperandBundesDeltaPass)                  \
   DELTA_PASS("attributes", reduceAttributesDeltaPass)                          \
