@@ -6,8 +6,9 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file implements a function which calls the Generic Delta pass in order
-// to reduce uninteresting Arguments from defined functions.
+// This file implements a function which calls the Generic Delta pass
+// in order to make values come from function arguments instead of
+// being produced by instructions.
 //
 //===----------------------------------------------------------------------===//
 
@@ -100,27 +101,50 @@ static void extractArgumentsFromModule(std::vector<Chunk> ChunksToKeep,
   }
 }
 
-/// Counts the amount of arguments in non-declaration functions and prints their
-/// respective name, index, and parent function name
-static int countArguments(Module *Program) {
-  // TODO: Silence index with --quiet flag
-  outs() << "----------------------------\n";
-  outs() << "Param Index Reference:\n";
-  int ArgsCount = 0;
-  for (auto &F : *Program)
-    if (!F.arg_empty()) {
-      outs() << "  " << F.getName() << "\n";
-      for (auto &A : F.args())
-        outs() << "\t" << ++ArgsCount << ": " << A.getName() << "\n";
+/// Removes out-of-chunk arguments from functions, and modifies their calls
+/// accordingly. It also removes allocations of out-of-chunk arguments.
+static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
+                                   Module *Program) {
+  Oracle O(ChunksToKeep);
 
-      outs() << "----------------------------\n";
+  std::set<Instruction *> InstToKeep;
+
+  for (auto &F : *Program)
+    for (auto &BB : F) {
+      for (auto &Inst : BB)
+        if (O.shouldKeep() || Inst.getType()->isVoidTy())
+          InstToKeep.insert(&Inst);
     }
 
-  return ArgsCount;
+  std::vector<Instruction *> InstToDelete;
+  for (auto &F : *Program)
+    for (auto &BB : F)
+      for (auto &Inst : BB)
+        if (!InstToKeep.count(&Inst)) {
+          Inst.replaceAllUsesWith(UndefValue::get(Inst.getType()));
+          InstToDelete.push_back(&Inst);
+        }
+
+  for (auto &I : InstToDelete)
+    I->eraseFromParent();
+}  
+
+/// Counts the amount of basic blocks and prints their name & respective index
+static unsigned countInstructions(Module *Program) {
+  // TODO: Silence index with --quiet flag
+  outs() << "----------------------------\n";
+  int InstCount = 0;
+  for (auto &F : *Program)
+    for (auto &BB : F)
+      // Well-formed blocks have terminators, which we cannot remove.
+      InstCount += BB.getInstList().size() - 1;
+  outs() << "Number of instructions: " << InstCount << "\n";
+
+  return InstCount;
 }
 
 void llvm::reduceInstsToArgumentsDeltaPass(TestRunner &Test) {
-  outs() << "*** Reducing Arguments...\n";
-  int ArgCount = countArguments(Test.getProgram());
-  runDeltaPass(Test, ArgCount, extractArgumentsFromModule);
+  outs() << "*** Reducing Instructions to Arguments...\n";
+  unsigned InstCount = countInstructions(Test.getProgram());
+  runDeltaPass(Test, InstCount, instToArgumentInModule);
 }
