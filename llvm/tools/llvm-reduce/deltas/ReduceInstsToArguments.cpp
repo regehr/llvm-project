@@ -109,6 +109,7 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
 
   std::set<Instruction *> InstToKeep;
 
+  // We only want to eliminate non-void instructions
   for (auto &F : *Program)
     for (auto &BB : F) {
       for (auto &Inst : BB)
@@ -128,6 +129,65 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
   for (auto &I : InstToDelete)
     I->eraseFromParent();
 }  
+
+static void extractArgumentsFromModule(std::vector<Chunk> ChunksToKeep,
+                                       Module *Program) {
+  Oracle O(ChunksToKeep);
+
+  std::set<Instruction *> InstToKeep;
+  std::vector<Function *> Funcs;
+  // We only want to eliminate non-void instructions
+  for (auto &F : *Program)
+    for (auto &BB : F) {
+      for (auto &Inst : BB)
+        if (O.shouldKeep() || Inst.getType()->isVoidTy())
+          InstToKeep.insert(&Inst);
+    }
+
+  for (auto *F : Funcs) {
+    ValueToValueMapTy VMap;
+    std::vector<WeakVH> InstToDelete;
+    for (auto &A : F->args())
+      if (!ArgsToKeep.count(&A)) {
+        // By adding undesired arguments to the VMap, CloneFunction will remove
+        // them from the resulting Function
+        VMap[&A] = UndefValue::get(A.getType());
+        for (auto *U : A.users())
+          if (auto *I = dyn_cast<Instruction>(*&U))
+            InstToDelete.push_back(I);
+      }
+    // Delete any (unique) instruction that uses the argument
+    for (Value *V : InstToDelete) {
+      if (!V)
+        continue;
+      auto *I = cast<Instruction>(V);
+      I->replaceAllUsesWith(UndefValue::get(I->getType()));
+      if (!I->isTerminator())
+        I->eraseFromParent();
+    }
+
+    // No arguments to reduce
+    if (VMap.empty())
+      continue;
+
+    std::set<int> ArgIndexesToKeep;
+    for (auto &Arg : enumerate(F->args()))
+      if (ArgsToKeep.count(&Arg.value()))
+        ArgIndexesToKeep.insert(Arg.index());
+
+    auto *ClonedFunc = CloneFunction(F, VMap);
+    // In order to preserve function order, we move Clone after old Function
+    ClonedFunc->removeFromParent();
+    Program->getFunctionList().insertAfter(F->getIterator(), ClonedFunc);
+
+    replaceFunctionCalls(*F, *ClonedFunc, ArgIndexesToKeep);
+    // Rename Cloned Function to Old's name
+    std::string FName = std::string(F->getName());
+    F->replaceAllUsesWith(ConstantExpr::getBitCast(ClonedFunc, F->getType()));
+    F->eraseFromParent();
+    ClonedFunc->setName(FName);
+  }
+}
 
 /// Counts the amount of basic blocks and prints their name & respective index
 static unsigned countInstructions(Module *Program) {
