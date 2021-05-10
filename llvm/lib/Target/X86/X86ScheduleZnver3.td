@@ -57,11 +57,7 @@ def Znver3Model : SchedMachineModel {
 
   let PostRAScheduler = 1; // Enable Post RegAlloc Scheduler pass.
 
-  // FIXME: This variable is required for incomplete model.
-  // We haven't catered all instructions.
-  // So, we reset the value of this variable so as to
-  // say that the model is incomplete.
-  let CompleteModel = 0;
+  let CompleteModel = 1;
 }
 
 let SchedModel = Znver3Model in {
@@ -506,6 +502,9 @@ defm : Zn3WriteResInt<WriteStore, [Zn3AGU012, Zn3Store], Znver3Model.StoreLatenc
 defm : Zn3WriteResInt<WriteStoreNT, [Zn3AGU012, Zn3Store], Znver3Model.StoreLatency, [1, 2], 1>;
 defm : Zn3WriteResInt<WriteMove, [Zn3ALU0123], 1, [4], 1>;
 
+// Treat misc copies as a move.
+def : InstRW<[WriteMove], (instrs COPY)>;
+
 def Zn3WriteMOVBE16rm : SchedWriteRes<[Zn3AGU012, Zn3Load, Zn3ALU0123]> {
   let Latency = Znver3Model.LoadLatency;
   let ResourceCycles = [1, 1, 4];
@@ -612,7 +611,7 @@ defm : Zn3WriteResIntPair<WriteIMul16Reg, [Zn3Multiplier], 3, [1], 1>; // Intege
 defm : Zn3WriteResIntPair<WriteIMul32, [Zn3Multiplier], 3, [3], 2>;    // Integer 32-bit multiplication.
 
 def Zn3MULX32rr : SchedWriteRes<[Zn3Multiplier]> {
-  let Latency = 3;
+  let Latency = 4;
   let ResourceCycles = [1];
   let NumMicroOps = 2;
 }
@@ -1444,14 +1443,22 @@ defm : Zn3WriteResInt<WriteNop, [Zn3ALU0123], 0, [1], 1>; // FIXME: latency not 
 // Zero Cycle Move
 ///////////////////////////////////////////////////////////////////////////////
 
-def Zn3WriteMoveRenameable : SchedWriteRes<[]> {
+def Zn3WriteZeroLatency : SchedWriteRes<[]> {
   let Latency = 0;
   let ResourceCycles = [];
   let NumMicroOps = 1;
 }
-def : InstRW<[Zn3WriteMoveRenameable], (instrs MOV32rr, MOV32rr_REV,
+def : InstRW<[Zn3WriteZeroLatency], (instrs MOV32rr, MOV32rr_REV,
                                                MOV64rr, MOV64rr_REV,
                                                MOVSX32rr32)>;
+
+def Zn3WriteSwapRenameable : SchedWriteRes<[]> {
+  let Latency = 0;
+  let ResourceCycles = [];
+  let NumMicroOps = 2;
+}
+def : InstRW<[Zn3WriteSwapRenameable], (instrs XCHG32rr, XCHG32ar,
+                                               XCHG64rr, XCHG64ar)>;
 
 defm : Zn3WriteResInt<WriteXCHG, [Zn3ALU0123], 0, [8], 2>;        // Compare+Exchange - TODO RMW support.
 
@@ -1469,7 +1476,8 @@ def : IsOptimizableRegisterMove<[
     MOV32rr, MOV32rr_REV,
     MOV64rr, MOV64rr_REV,
     MOVSX32rr32,
-    // FIXME: XCHG32rr/XCHG64rr after MCA is fixed
+    XCHG32rr, XCHG32ar,
+    XCHG64rr, XCHG64ar,
 
     // MMX variants.
     // MMX moves are *NOT* eliminated.
@@ -1498,6 +1506,44 @@ def : IsOptimizableRegisterMove<[
     VMOVDQAYrr, VMOVDQAYrr_REV,
     VMOVDQUYrr, VMOVDQUYrr_REV,
   ], TruePred >
+]>;
+
+///////////////////////////////////////////////////////////////////////////////
+// Dependency breaking instructions.
+///////////////////////////////////////////////////////////////////////////////
+
+def Zn3WriteZeroIdiom : SchedWriteVariant<[
+    SchedVar<MCSchedPredicate<ZeroIdiomPredicate>, [Zn3WriteZeroLatency]>,
+    SchedVar<NoSchedPred,                          [WriteALU]>
+]>;
+def : InstRW<[Zn3WriteZeroIdiom], (instrs XOR32rr, XOR32rr_REV,
+                                          XOR64rr, XOR64rr_REV,
+                                          SUB32rr, SUB32rr_REV,
+                                          SUB64rr, SUB64rr_REV)>;
+
+def Zn3WriteZeroIdiomEFLAGS : SchedWriteVariant<[
+    SchedVar<MCSchedPredicate<CheckSameRegOperand<0, 1>>, [Zn3WriteZeroLatency]>,
+    SchedVar<NoSchedPred,                                 [WriteALU]>
+]>;
+def : InstRW<[Zn3WriteZeroIdiomEFLAGS], (instrs CMP32rr, CMP32rr_REV,
+                                                CMP64rr, CMP64rr_REV)>;
+
+def : IsZeroIdiomFunction<[
+  // GPR Zero-idioms.
+  DepBreakingClass<[ XOR32rr, XOR32rr_REV,
+                     XOR64rr, XOR64rr_REV,
+                     SUB32rr, SUB32rr_REV,
+                     SUB64rr, SUB64rr_REV ], ZeroIdiomPredicate>,
+]>;
+
+def : IsDepBreakingFunction<[
+  // GPR
+  DepBreakingClass<[ SBB32rr, SBB32rr_REV,
+                     SBB64rr, SBB64rr_REV ], ZeroIdiomPredicate>,
+  DepBreakingClass<[ CMP32rr, CMP32rr_REV,
+                     CMP64rr, CMP64rr_REV ], CheckSameRegOperand<0, 1> >,
+
+
 ]>;
 
 } // SchedModel
