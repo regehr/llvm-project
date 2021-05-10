@@ -57,6 +57,13 @@ static void extractArgumentsFromModule(std::vector<Chunk> ChunksToKeep,
     }
 
   for (auto *F : Funcs) {
+    // bail early if we're not doing anything to this function
+    // make a copy of argument list
+    // add more arguments corresponding to deleted instructions
+    //   setup vmap to point to new args
+    // make new function
+    // clone old function's instructions into new one
+
     ValueToValueMapTy VMap;
     std::vector<WeakVH> InstToDelete;
     for (auto &A : F->args())
