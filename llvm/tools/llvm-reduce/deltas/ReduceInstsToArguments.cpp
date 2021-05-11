@@ -121,6 +121,7 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
     llvm::outs() << "here5\n";
 
 #if 0
+    // FIXME!!!! must update calls to have extra undef arguments of the correct types
     replaceFunctionCalls(F, *ClonedFunc, ArgIndexesToKeep);
 #endif
 
