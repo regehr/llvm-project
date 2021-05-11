@@ -104,7 +104,7 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
     ClonedFunc->removeFromParent();
     Program->getFunctionList().insertAfter(F.getIterator(), ClonedFunc);
 
-#if 1
+#if 0
     std::error_code EC;
     llvm::raw_fd_ostream OS("module.bc", EC, llvm::sys::fs::F_None);
     WriteBitcodeToFile(*Program, OS);
