@@ -41,31 +41,46 @@ static void replaceFunctionCalls(Function &OldF, Function &NewF,
 
 /// Removes out-of-chunk arguments from functions, and modifies their calls
 /// accordingly. It also removes allocations of out-of-chunk arguments.
-static void extractArgumentsFromModule(std::vector<Chunk> ChunksToKeep,
-                                       Module *Program) {
+static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
+                                   Module *Program) {
   Oracle O(ChunksToKeep);
 
-  std::set<Argument *> ArgsToKeep;
-  std::vector<Function *> Funcs;
-  // Get inside-chunk arguments, as well as their parent function
-  for (auto &F : *Program)
-    if (!F.arg_empty()) {
-      Funcs.push_back(&F);
-      for (auto &A : F.args())
-        if (O.shouldKeep())
-          ArgsToKeep.insert(&A);
-    }
+  for (auto &F : *Program) {
+    // Make a list of instructions in the current function that are in
+    // the chunk and that do not return void
+    std::vector<Instruction *> InstToDelete;
+    for (auto &BB : F)
+      for (auto &Inst : BB)
+        if (!O.shouldKeep() && !Inst.getType()->isVoidTy())
+          InstToDelete.push_back(&Inst);
 
-  for (auto *F : Funcs) {
-    // bail early if we're not doing anything to this function
-    // make a copy of argument list
-    // add more arguments corresponding to deleted instructions
+    // Bail early if we're not changing this function
+    if (InstToDelete.empty())
+      continue;
+
+    // Start with original argument list
+    std::vector<Type *> ArgTy;
+    for (auto &A : F.args())
+      ArgTy.push_back(A.getType());
+
+    // Add an argument corresponding to value produced by each deleted
+    // insn
+    for (auto &Inst : InstToDelete)
+      ArgTy.push_back(Inst->getType());
+    
+    auto FuncTy = FunctionType::get(F.getReturnType(), ArgTy, false);
+    auto NewFunc = Function::Create(FuncTy, F.getLinkage(), F.getName(), Program);
+  }
+
+    #if 0
+  ValueToValueMapTy VMap;
     //   setup vmap to point to new args
     // make new function
     // clone old function's instructions into new one
+    // update callers, make them provide undefs
 
-    ValueToValueMapTy VMap;
-    std::vector<WeakVH> InstToDelete;
+    // debug by dumping original and modified modules
+
     for (auto &A : F->args())
       if (!ArgsToKeep.count(&A)) {
         // By adding undesired arguments to the VMap, CloneFunction will remove
@@ -106,23 +121,11 @@ static void extractArgumentsFromModule(std::vector<Chunk> ChunksToKeep,
     F->eraseFromParent();
     ClonedFunc->setName(FName);
   }
-}
 
-/// Removes out-of-chunk arguments from functions, and modifies their calls
-/// accordingly. It also removes allocations of out-of-chunk arguments.
-static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
-                                   Module *Program) {
-  Oracle O(ChunksToKeep);
 
-  std::set<Instruction *> InstToKeep;
 
-  // We only want to eliminate non-void instructions
-  for (auto &F : *Program)
-    for (auto &BB : F) {
-      for (auto &Inst : BB)
-        if (O.shouldKeep() || Inst.getType()->isVoidTy())
-          InstToKeep.insert(&Inst);
-    }
+
+  ///// PREV CODE
 
   std::vector<Instruction *> InstToDelete;
   for (auto &F : *Program)
@@ -135,66 +138,8 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
 
   for (auto &I : InstToDelete)
     I->eraseFromParent();
+#endif
 }  
-
-static void extractArgumentsFromModule(std::vector<Chunk> ChunksToKeep,
-                                       Module *Program) {
-  Oracle O(ChunksToKeep);
-
-  std::set<Instruction *> InstToKeep;
-  std::vector<Function *> Funcs;
-  // We only want to eliminate non-void instructions
-  for (auto &F : *Program)
-    for (auto &BB : F) {
-      for (auto &Inst : BB)
-        if (O.shouldKeep() || Inst.getType()->isVoidTy())
-          InstToKeep.insert(&Inst);
-    }
-
-  for (auto *F : Funcs) {
-    ValueToValueMapTy VMap;
-    std::vector<WeakVH> InstToDelete;
-    for (auto &A : F->args())
-      if (!ArgsToKeep.count(&A)) {
-        // By adding undesired arguments to the VMap, CloneFunction will remove
-        // them from the resulting Function
-        VMap[&A] = UndefValue::get(A.getType());
-        for (auto *U : A.users())
-          if (auto *I = dyn_cast<Instruction>(*&U))
-            InstToDelete.push_back(I);
-      }
-    // Delete any (unique) instruction that uses the argument
-    for (Value *V : InstToDelete) {
-      if (!V)
-        continue;
-      auto *I = cast<Instruction>(V);
-      I->replaceAllUsesWith(UndefValue::get(I->getType()));
-      if (!I->isTerminator())
-        I->eraseFromParent();
-    }
-
-    // No arguments to reduce
-    if (VMap.empty())
-      continue;
-
-    std::set<int> ArgIndexesToKeep;
-    for (auto &Arg : enumerate(F->args()))
-      if (ArgsToKeep.count(&Arg.value()))
-        ArgIndexesToKeep.insert(Arg.index());
-
-    auto *ClonedFunc = CloneFunction(F, VMap);
-    // In order to preserve function order, we move Clone after old Function
-    ClonedFunc->removeFromParent();
-    Program->getFunctionList().insertAfter(F->getIterator(), ClonedFunc);
-
-    replaceFunctionCalls(*F, *ClonedFunc, ArgIndexesToKeep);
-    // Rename Cloned Function to Old's name
-    std::string FName = std::string(F->getName());
-    F->replaceAllUsesWith(ConstantExpr::getBitCast(ClonedFunc, F->getType()));
-    F->eraseFromParent();
-    ClonedFunc->setName(FName);
-  }
-}
 
 /// Counts the amount of basic blocks and prints their name & respective index
 static unsigned countInstructions(Module *Program) {
