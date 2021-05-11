@@ -47,11 +47,17 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
                                    Module *Program) {
   Oracle O(ChunksToKeep);
 
-  for (auto &F : *Program) {
+  llvm::outs() << "here0\n";
+
+  std::vector<Function *> Funcs;
+  for (auto &F : *Program)
+    Funcs.push_back(&F);
+
+  for (auto F : Funcs) {
     // Make a list of instructions in the current function that are in
     // the chunk and that do not return void
     std::vector<Instruction *> InstToDelete;
-    for (auto &BB : F)
+    for (auto &BB : *F)
       for (auto &Inst : BB)
         if (!O.shouldKeep() && !Inst.getType()->isVoidTy())
           InstToDelete.push_back(&Inst);
@@ -62,7 +68,7 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
 
     // Start with original argument list
     std::vector<Type *> ArgTy;
-    for (auto &A : F.args())
+    for (auto &A : F->args())
       ArgTy.push_back(A.getType());
 
     // Add an argument corresponding to value produced by each deleted
@@ -70,16 +76,18 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
     for (auto &Inst : InstToDelete)
       ArgTy.push_back(Inst->getType());
     
-    auto FuncTy = FunctionType::get(F.getReturnType(), ArgTy, F.isVarArg());
-    auto ClonedFunc = Function::Create(FuncTy, F.getLinkage(), F.getAddressSpace(),
-                                       F.getName(), Program);
+    auto FuncTy = FunctionType::get(F->getReturnType(), ArgTy, F->isVarArg());
+    auto ClonedFunc = Function::Create(FuncTy, F->getLinkage(), F->getAddressSpace(),
+                                       F->getName(), Program);
 
     ValueToValueMapTy VMap;
     auto A = ClonedFunc->arg_begin();
-    for (auto &V : F.args())
+    for (auto &V : F->args())
       VMap[&V] = A++;
     for (auto &Inst : InstToDelete)
       VMap[Inst] = A++;
+
+    llvm::outs() << "here1\n";
 
     // Delete any (unique) instruction that uses the argument
     for (Value *V : InstToDelete) {
@@ -89,6 +97,8 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
         I->eraseFromParent();
     }
 
+    llvm::outs() << "here2\n";
+
 #if 0
     std::set<int> ArgIndexesToKeep;
     for (auto &Arg : enumerate(F->args()))
@@ -96,33 +106,41 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
         ArgIndexesToKeep.insert(Arg.index());
 #endif
 
+    llvm::outs() << "here3\n";
+
     SmallVector<ReturnInst *, 8> Returns;
-    CloneFunctionInto(ClonedFunc, &F, VMap,
+    CloneFunctionInto(ClonedFunc, F, VMap,
                       CloneFunctionChangeType::LocalChangesOnly, Returns);
       
+    llvm::outs() << "here4\n";
+
     // In order to preserve function order, we move Clone after old Function
     ClonedFunc->removeFromParent();
-    Program->getFunctionList().insertAfter(F.getIterator(), ClonedFunc);
+    Program->getFunctionList().insertAfter(F->getIterator(), ClonedFunc);
 
-#if 0
-    std::error_code EC;
-    llvm::raw_fd_ostream OS("module.bc", EC, llvm::sys::fs::F_None);
-    WriteBitcodeToFile(*Program, OS);
-    OS.flush();
-    llvm::outs() << "exiting after printing\n";
-    exit(0);
-#endif
+    llvm::outs() << "here5\n";
 
 #if 0
     replaceFunctionCalls(F, *ClonedFunc, ArgIndexesToKeep);
 #endif
 
     // Rename Cloned Function to Old's name
-    std::string FName = std::string(F.getName());
-    F.replaceAllUsesWith(ConstantExpr::getBitCast(ClonedFunc, F.getType()));
-    F.eraseFromParent();
+    std::string FName = std::string(F->getName());
+    F->replaceAllUsesWith(ConstantExpr::getBitCast(ClonedFunc, F->getType()));
+    F->eraseFromParent();
     ClonedFunc->setName(FName);
+    llvm::outs() << "here6\n";
+
   }
+#if 1
+    std::error_code EC;
+    llvm::raw_fd_ostream OS("module.bc", EC, llvm::sys::fs::F_None);
+    WriteBitcodeToFile(*Program, OS);
+    OS.flush();
+    // exit(0);
+#endif
+    
+  llvm::outs() << "done with transformation\n";
 }  
 
 /// Counts the amount of basic blocks and prints their name & respective index
