@@ -18,6 +18,8 @@
 #include <set>
 #include <vector>
 
+#include "llvm/Bitcode/BitcodeWriter.h"
+
 using namespace llvm;
 
 /// Goes over OldF calls and replaces them with a call to NewF
@@ -69,14 +71,30 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
       ArgTy.push_back(Inst->getType());
     
     auto FuncTy = FunctionType::get(F.getReturnType(), ArgTy, F.isVarArg());
-    auto ClonedFunc = Function::Create(FuncTy, F.getLinkage(), F.getName(), Program);
+    auto ClonedFunc = Function::Create(FuncTy, F.getLinkage(), F.getAddressSpace(),
+                                       F.getName(), Program);
 
     ValueToValueMapTy VMap;
     auto A = ClonedFunc->arg_begin();
     for (auto &V : F.args())
-      ++A;
+      VMap[&V] = A++;
     for (auto &Inst : InstToDelete)
-      VMap[Inst] = A;
+      VMap[Inst] = A++;
+
+    // Delete any (unique) instruction that uses the argument
+    for (Value *V : InstToDelete) {
+      auto *I = cast<Instruction>(V);
+      I->replaceAllUsesWith(UndefValue::get(I->getType()));
+      if (!I->isTerminator())
+        I->eraseFromParent();
+    }
+
+#if 0
+    std::set<int> ArgIndexesToKeep;
+    for (auto &Arg : enumerate(F->args()))
+      if (ArgsToKeep.count(&Arg.value()))
+        ArgIndexesToKeep.insert(Arg.index());
+#endif
 
     SmallVector<ReturnInst *, 8> Returns;
     CloneFunctionInto(ClonedFunc, &F, VMap,
@@ -84,20 +102,27 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
       
     // In order to preserve function order, we move Clone after old Function
     ClonedFunc->removeFromParent();
-    Program->getFunctionList().insertAfter(F->getIterator(), ClonedFunc);
+    Program->getFunctionList().insertAfter(F.getIterator(), ClonedFunc);
 
-    replaceFunctionCalls(*F, *ClonedFunc, ArgIndexesToKeep);
+#if 1
+    std::error_code EC;
+    llvm::raw_fd_ostream OS("module", EC, llvm::sys::fs::F_None);
+    WriteBitcodeToFile(*Program, OS);
+    OS.flush();
+    llvm::outs() << "exiting after printing\n";
+    exit(0);
+#endif
+
+#if 0
+    replaceFunctionCalls(F, *ClonedFunc, ArgIndexesToKeep);
+#endif
+
     // Rename Cloned Function to Old's name
-    std::string FName = std::string(F->getName());
-    F->replaceAllUsesWith(ConstantExpr::getBitCast(ClonedFunc, F->getType()));
-    F->eraseFromParent();
+    std::string FName = std::string(F.getName());
+    F.replaceAllUsesWith(ConstantExpr::getBitCast(ClonedFunc, F.getType()));
+    F.eraseFromParent();
     ClonedFunc->setName(FName);
   }
-
-    // FIXME update callers, make them provide undefs
-
-    // debug by dumping original and modified modules
-
 }  
 
 /// Counts the amount of basic blocks and prints their name & respective index
@@ -107,8 +132,7 @@ static unsigned countInstructions(Module *Program) {
   int InstCount = 0;
   for (auto &F : *Program)
     for (auto &BB : F)
-      // Well-formed blocks have terminators, which we cannot remove.
-      InstCount += BB.getInstList().size() - 1;
+      InstCount += BB.getInstList().size();
   outs() << "Number of instructions: " << InstCount << "\n";
 
   return InstCount;

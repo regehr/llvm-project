@@ -8,6 +8,7 @@ set(LLVM_LINK_COMPONENTS
   Support
   Target
   TransformUtils
+  BitWriter
   )
 
 add_llvm_tool(llvm-reduce
