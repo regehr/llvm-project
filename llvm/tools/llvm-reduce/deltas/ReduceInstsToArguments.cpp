@@ -46,10 +46,6 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
   Oracle O(ChunksToKeep);
 
   for (auto &F : *Program) {
-    // TODO
-    if (F.isVarArg())
-      continue;
-    
     // Make a list of instructions in the current function that are in
     // the chunk and that do not return void
     std::vector<Instruction *> InstToDelete;
@@ -72,13 +68,19 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
     for (auto &Inst : InstToDelete)
       ArgTy.push_back(Inst->getType());
     
-    auto FuncTy = FunctionType::get(F.getReturnType(), ArgTy, /*isVarArg=*/false);
+    auto FuncTy = FunctionType::get(F.getReturnType(), ArgTy, F.isVarArg());
     auto NewFunc = Function::Create(FuncTy, F.getLinkage(), F.getName(), Program);
 
     ValueToValueMapTy VMap;
+    auto A = NewFunc->arg_begin();
+    for (auto &V : F.args())
+      ++A;
     for (auto &Inst : InstToDelete)
-      VMap[Inst] = Inst;
-      
+      VMap[Inst] = A;
+
+    SmallVector<ReturnInst *, 8> Returns;
+    CloneFunctionInto(NewFunc, &F, VMap,
+                      CloneFunctionChangeType::LocalChangesOnly, Returns);
       
 #if 0
     //   setup vmap to point to new args
