@@ -106,7 +106,7 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
 
 #if 1
     std::error_code EC;
-    llvm::raw_fd_ostream OS("module", EC, llvm::sys::fs::F_None);
+    llvm::raw_fd_ostream OS("module.bc", EC, llvm::sys::fs::F_None);
     WriteBitcodeToFile(*Program, OS);
     OS.flush();
     llvm::outs() << "exiting after printing\n";
