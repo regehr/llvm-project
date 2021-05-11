@@ -69,55 +69,19 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
       ArgTy.push_back(Inst->getType());
     
     auto FuncTy = FunctionType::get(F.getReturnType(), ArgTy, F.isVarArg());
-    auto NewFunc = Function::Create(FuncTy, F.getLinkage(), F.getName(), Program);
+    auto ClonedFunc = Function::Create(FuncTy, F.getLinkage(), F.getName(), Program);
 
     ValueToValueMapTy VMap;
-    auto A = NewFunc->arg_begin();
+    auto A = ClonedFunc->arg_begin();
     for (auto &V : F.args())
       ++A;
     for (auto &Inst : InstToDelete)
       VMap[Inst] = A;
 
     SmallVector<ReturnInst *, 8> Returns;
-    CloneFunctionInto(NewFunc, &F, VMap,
+    CloneFunctionInto(ClonedFunc, &F, VMap,
                       CloneFunctionChangeType::LocalChangesOnly, Returns);
       
-#if 0
-    //   setup vmap to point to new args
-    // clone old function's instructions into new one
-    // update callers, make them provide undefs
-
-    // debug by dumping original and modified modules
-
-    for (auto &A : F->args())
-      if (!ArgsToKeep.count(&A)) {
-        // By adding undesired arguments to the VMap, CloneFunction will remove
-        // them from the resulting Function
-        VMap[&A] = UndefValue::get(A.getType());
-        for (auto *U : A.users())
-          if (auto *I = dyn_cast<Instruction>(*&U))
-            InstToDelete.push_back(I);
-      }
-    // Delete any (unique) instruction that uses the argument
-    for (Value *V : InstToDelete) {
-      if (!V)
-        continue;
-      auto *I = cast<Instruction>(V);
-      I->replaceAllUsesWith(UndefValue::get(I->getType()));
-      if (!I->isTerminator())
-        I->eraseFromParent();
-    }
-
-    // No arguments to reduce
-    if (VMap.empty())
-      continue;
-
-    std::set<int> ArgIndexesToKeep;
-    for (auto &Arg : enumerate(F->args()))
-      if (ArgsToKeep.count(&Arg.value()))
-        ArgIndexesToKeep.insert(Arg.index());
-
-    auto *ClonedFunc = CloneFunction(F, VMap);
     // In order to preserve function order, we move Clone after old Function
     ClonedFunc->removeFromParent();
     Program->getFunctionList().insertAfter(F->getIterator(), ClonedFunc);
@@ -130,21 +94,10 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
     ClonedFunc->setName(FName);
   }
 
-  ///// PREV CODE
+    // FIXME update callers, make them provide undefs
 
-  std::vector<Instruction *> InstToDelete;
-  for (auto &F : *Program)
-    for (auto &BB : F)
-      for (auto &Inst : BB)
-        if (!InstToKeep.count(&Inst)) {
-          Inst.replaceAllUsesWith(UndefValue::get(Inst.getType()));
-          InstToDelete.push_back(&Inst);
-        }
+    // debug by dumping original and modified modules
 
-  for (auto &I : InstToDelete)
-    I->eraseFromParent();
-#endif
-}
 }  
 
 /// Counts the amount of basic blocks and prints their name & respective index
