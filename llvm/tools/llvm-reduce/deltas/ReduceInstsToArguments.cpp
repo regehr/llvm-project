@@ -70,12 +70,10 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
     
     auto FuncTy = FunctionType::get(F.getReturnType(), ArgTy, false);
     auto NewFunc = Function::Create(FuncTy, F.getLinkage(), F.getName(), Program);
-  }
 
-    #if 0
+#if 0
   ValueToValueMapTy VMap;
     //   setup vmap to point to new args
-    // make new function
     // clone old function's instructions into new one
     // update callers, make them provide undefs
 
@@ -122,9 +120,6 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
     ClonedFunc->setName(FName);
   }
 
-
-
-
   ///// PREV CODE
 
   std::vector<Instruction *> InstToDelete;
@@ -139,6 +134,7 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
   for (auto &I : InstToDelete)
     I->eraseFromParent();
 #endif
+}
 }  
 
 /// Counts the amount of basic blocks and prints their name & respective index
