@@ -25,7 +25,8 @@ using namespace llvm;
 
 static cl::opt<bool> AbortOnInvalidReduction(
     "abort-on-invalid-reduction",
-    cl::desc("Abort if any reduction results in invalid IR"));
+    cl::desc("Abort if any reduction results in invalid IR"),
+    cl::init(true));
 
 void writeOutput(llvm::Module *M, llvm::StringRef Message);
 
@@ -107,7 +108,7 @@ void llvm::runDeltaPass(
 
   if (Module *Program = Test.getProgram()) {
     SmallString<128> CurrentFilepath;
-    if (!isReduced(*Program, Test, CurrentFilepath)) {
+    if (false && !isReduced(*Program, Test, CurrentFilepath)) {
       errs() << "\nInput isn't interesting! Verify interesting-ness test\n";
       exit(1);
     }

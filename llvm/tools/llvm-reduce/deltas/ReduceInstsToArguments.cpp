@@ -47,20 +47,29 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
                                    Module *Program) {
   Oracle O(ChunksToKeep);
 
-  llvm::outs() << "here0\n";
-
   std::vector<Function *> Funcs;
   for (auto &F : *Program)
     Funcs.push_back(&F);
 
   for (auto F : Funcs) {
+    llvm::outs() << "function: " << F->getName() << "\n";
+    
     // Make a list of instructions in the current function that are in
     // the chunk and that do not return void
     std::vector<Instruction *> InstToDelete;
-    for (auto &BB : *F)
-      for (auto &Inst : BB)
-        if (!O.shouldKeep() && !Inst.getType()->isVoidTy())
+    for (auto &BB : *F) {
+      int i = 0;
+      for (auto &Inst : BB) {
+        llvm::outs() << i++ << " : ";
+        bool k = O.shouldKeep();
+        if (k)
+          llvm::outs() << "keep\n";
+        else
+          llvm::outs() << "remove\n";
+        if (!k && !Inst.getType()->isVoidTy())
           InstToDelete.push_back(&Inst);
+      }
+    }
 
     // Bail early if we're not changing this function
     if (InstToDelete.empty())
@@ -87,8 +96,6 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
     for (auto &Inst : InstToDelete)
       VMap[Inst] = A++;
 
-    llvm::outs() << "here1\n";
-
     // Delete any (unique) instruction that uses the argument
     for (Value *V : InstToDelete) {
       auto *I = cast<Instruction>(V);
@@ -97,8 +104,6 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
         I->eraseFromParent();
     }
 
-    llvm::outs() << "here2\n";
-
 #if 0
     std::set<int> ArgIndexesToKeep;
     for (auto &Arg : enumerate(F->args()))
@@ -106,19 +111,13 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
         ArgIndexesToKeep.insert(Arg.index());
 #endif
 
-    llvm::outs() << "here3\n";
-
     SmallVector<ReturnInst *, 8> Returns;
     CloneFunctionInto(ClonedFunc, F, VMap,
                       CloneFunctionChangeType::LocalChangesOnly, Returns);
       
-    llvm::outs() << "here4\n";
-
     // In order to preserve function order, we move Clone after old Function
     ClonedFunc->removeFromParent();
     Program->getFunctionList().insertAfter(F->getIterator(), ClonedFunc);
-
-    llvm::outs() << "here5\n";
 
 #if 0
     // FIXME!!!! must update calls to have extra undef arguments of the correct types
@@ -130,18 +129,7 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
     F->replaceAllUsesWith(ConstantExpr::getBitCast(ClonedFunc, F->getType()));
     F->eraseFromParent();
     ClonedFunc->setName(FName);
-    llvm::outs() << "here6\n";
-
   }
-#if 1
-    std::error_code EC;
-    llvm::raw_fd_ostream OS("module.bc", EC, llvm::sys::fs::F_None);
-    WriteBitcodeToFile(*Program, OS);
-    OS.flush();
-    // exit(0);
-#endif
-    
-  llvm::outs() << "done with transformation\n";
 }  
 
 /// Counts the amount of basic blocks and prints their name & respective index
