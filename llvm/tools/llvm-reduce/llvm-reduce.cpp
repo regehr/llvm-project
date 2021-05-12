@@ -131,12 +131,13 @@ int main(int Argc, char **Argv) {
   Tester.setProgram(std::move(OriginalProgram));
 
   // Try to reduce code
-  int OldSize;
-  int NewSize = getProgramSize(Tester.getProgram());
+  int OldSize, Iterations = 0, NewSize = getProgramSize(Tester.getProgram());
   do {
     OldSize = NewSize;
     runDeltaPasses(Tester);
     NewSize = getProgramSize(Tester.getProgram());
+    errs() << "Iteration " << ++Iterations << " : " <<
+      "size changed from " << OldSize << " to " << NewSize << "\n";
   } while (NewSize < OldSize);
 
   if (!Tester.getProgram()) {
