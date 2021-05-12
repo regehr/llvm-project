@@ -102,6 +102,10 @@ void writeOutput(Module *M, StringRef Message) {
   errs() << Message << OutputFilename << "\n";
 }
 
+int getProgramSize(std::unique_ptr<Module> Program) {
+  
+}
+
 int main(int Argc, char **Argv) {
   InitLLVM X(Argc, Argv);
 
@@ -121,7 +125,13 @@ int main(int Argc, char **Argv) {
   Tester.setProgram(std::move(OriginalProgram));
 
   // Try to reduce code
-  runDeltaPasses(Tester);
+  int OldSize;
+  int NewSize = getProgramSize(OriginalProgram);
+  do {
+    OldSize = NewSize;
+    runDeltaPasses(Tester);
+    NewSize = getProgramSize(Tester.getProgram());
+  } while (NewSize < OldSize);
 
   if (!Tester.getProgram()) {
     errs() << "\nCouldnt reduce input :/\n";
