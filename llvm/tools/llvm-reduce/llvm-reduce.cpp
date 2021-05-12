@@ -102,8 +102,14 @@ void writeOutput(Module *M, StringRef Message) {
   errs() << Message << OutputFilename << "\n";
 }
 
-int getProgramSize(std::unique_ptr<Module> Program) {
-  
+int getProgramSize(Module *M) {
+  if (!M)
+    return 0;
+  std::error_code EC;
+  std::string Str;
+  raw_string_ostream SS(Str);
+  M->print(SS, /*AnnotationWriter=*/nullptr);
+  return SS.str().length();
 }
 
 int main(int Argc, char **Argv) {
@@ -126,7 +132,7 @@ int main(int Argc, char **Argv) {
 
   // Try to reduce code
   int OldSize;
-  int NewSize = getProgramSize(OriginalProgram);
+  int NewSize = getProgramSize(Tester.getProgram());
   do {
     OldSize = NewSize;
     runDeltaPasses(Tester);
