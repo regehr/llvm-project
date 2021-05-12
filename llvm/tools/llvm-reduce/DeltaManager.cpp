@@ -50,12 +50,11 @@ static cl::opt<std::string>
   DELTA_PASS("metadata", reduceMetadataDeltaPass)                              \
   DELTA_PASS("arguments", reduceArgumentsDeltaPass)                            \
   DELTA_PASS("instructions", reduceInstructionsDeltaPass)                      \
+  DELTA_PASS("insts-to-arguments", reduceInstsToArgumentsDeltaPass)            \
   DELTA_PASS("operand-bundles", reduceOperandBundesDeltaPass)                  \
   DELTA_PASS("attributes", reduceAttributesDeltaPass)                          \
   DELTA_PASS("module-inline-asm", reduceModuleInlineAsmDeltaPass)
 
-//  DELTA_PASS("insts-to-arguments", reduceInstsToArgumentsDeltaPass)
-  
 static void runAllDeltaPasses(TestRunner &Tester) {
 #define DELTA_PASS(NAME, FUNC) FUNC(Tester);
   DELTA_PASSES
