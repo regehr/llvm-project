@@ -491,9 +491,34 @@ createLinalgBodyCalculationForElementwiseOp(Operation *op, ValueRange args,
                                            args.front(), zero);
     }
 
-    if (mlir::FPToSIOp::areCastCompatible(srcTy, dstTy))
-      return rewriter.create<mlir::FPToSIOp>(loc, resultTypes, args,
-                                             mlir::None);
+    if (mlir::FPToSIOp::areCastCompatible(srcTy, dstTy)) {
+      auto zero =
+          rewriter.create<ConstantOp>(loc, rewriter.getF32FloatAttr(0.0f));
+      auto half =
+          rewriter.create<ConstantOp>(loc, rewriter.getF32FloatAttr(0.5f));
+
+      auto intMin = rewriter.create<ConstantOp>(
+          loc, rewriter.getF32FloatAttr(
+                   APInt::getSignedMinValue(dstTy.getIntOrFloatBitWidth())
+                       .getSExtValue()));
+
+      auto intMax = rewriter.create<ConstantOp>(
+          loc, rewriter.getF32FloatAttr(
+                   APInt::getSignedMaxValue(dstTy.getIntOrFloatBitWidth())
+                       .getSExtValue()));
+
+      auto added = rewriter.create<AddFOp>(loc, args[0], half);
+      auto subbed = rewriter.create<SubFOp>(loc, args[0], half);
+      auto negative =
+          rewriter.create<mlir::CmpFOp>(loc, CmpFPredicate::OLT, args[0], zero);
+      auto rounded =
+          rewriter.create<mlir::SelectOp>(loc, negative, subbed, added);
+
+      auto clamped = clampHelper<mlir::CmpFOp>(loc, rounded, intMin, intMax,
+                                               CmpFPredicate::OLT, rewriter);
+
+      return rewriter.create<mlir::FPToSIOp>(loc, dstTy, clamped);
+    }
 
     // Casting to boolean, integers need to only be checked as not-equal to
     // zero.
@@ -508,9 +533,23 @@ createLinalgBodyCalculationForElementwiseOp(Operation *op, ValueRange args,
       return rewriter.create<mlir::SignExtendIOp>(loc, resultTypes, args,
                                                   mlir::None);
 
-    if (srcTy.isa<IntegerType>() && dstTy.isa<IntegerType>() && !bitExtend)
-      return rewriter.create<mlir::TruncateIOp>(loc, resultTypes, args,
-                                                mlir::None);
+    if (srcTy.isa<IntegerType>() && dstTy.isa<IntegerType>() && !bitExtend) {
+      auto intMin = rewriter.create<ConstantIntOp>(
+          loc,
+          APInt::getSignedMinValue(dstTy.getIntOrFloatBitWidth())
+              .getSExtValue(),
+          srcTy.getIntOrFloatBitWidth());
+
+      auto intMax = rewriter.create<ConstantIntOp>(
+          loc,
+          APInt::getSignedMaxValue(dstTy.getIntOrFloatBitWidth())
+              .getSExtValue(),
+          srcTy.getIntOrFloatBitWidth());
+
+      auto clamped = clampHelper<mlir::CmpIOp>(loc, args[0], intMin, intMax,
+                                               CmpIPredicate::slt, rewriter);
+      return rewriter.create<mlir::TruncateIOp>(loc, dstTy, clamped);
+    }
   }
 
   (void)rewriter.notifyMatchFailure(
@@ -522,17 +561,18 @@ static LogicalResult
 elementwiseMatchAndRewriteHelper(Operation *operation,
                                  PatternRewriter &rewriter) {
   auto loc = operation->getLoc();
+
+  assert(operation->getNumResults() == 1 &&
+         "All TOSA elementwise ops should only return a single result.");
+
   auto results = operation->getResults();
-  auto resultTy = operation->getOperand(0).getType().dyn_cast<ShapedType>();
+  auto resultTy = operation->getResult(0).getType().dyn_cast<ShapedType>();
 
   if (!resultTy)
     return rewriter.notifyMatchFailure(operation,
                                        "All results must be a shaped type");
 
   unsigned rank = resultTy.getRank();
-
-  assert(operation->getNumResults() == 1 &&
-         "All TOSA elementwise ops should only return a single result.");
 
   // Construct the indexing maps needed for linalg.generic ops.
   SmallVector<Type> bodyArgTypes;
@@ -565,11 +605,18 @@ elementwiseMatchAndRewriteHelper(Operation *operation,
   // Input indexing maps may be broadcasted.
   for (Value operand : operation->getOperands()) {
     ShapedType type = operand.getType().cast<ShapedType>();
+
+    if (type.getShape() == resultTy.getShape()) {
+      operands.push_back(operand);
+      indexingMaps.push_back(rewriter.getMultiDimIdentityMap(rank));
+      continue;
+    }
+
     SmallVector<int64_t, 5> newShape;
     SmallVector<AffineExpr, 4> affineExprs;
     newShape.reserve(type.getRank());
     for (auto it : llvm::enumerate(type.getShape())) {
-      if (it.value() != 1) {
+      if (it.value() == resultTy.getDimSize(it.index())) {
         newShape.push_back(it.value());
         affineExprs.push_back(
             mlir::getAffineDimExpr(it.index(), rewriter.getContext()));
@@ -2320,7 +2367,6 @@ void mlir::tosa::populateTosaToLinalgOnTensorsConversionPatterns(
       PointwiseConverter<tosa::ReluNOp>,
       PointwiseConverter<tosa::SigmoidOp>,
       IdentityNConverter<tosa::IdentityOp>,
-      IdentityNConverter<tosa::IdentityNOp>,
       ReduceConverter<tosa::ReduceAllOp>,
       ReduceConverter<tosa::ReduceAnyOp>,
       ReduceConverter<tosa::ReduceMinOp>,
