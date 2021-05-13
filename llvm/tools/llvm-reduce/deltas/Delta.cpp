@@ -26,7 +26,7 @@ using namespace llvm;
 static cl::opt<bool> AbortOnInvalidReduction(
     "abort-on-invalid-reduction",
     cl::desc("Abort if any reduction results in invalid IR"),
-    cl::init(false));
+    cl::init(true));
 
 void writeOutput(llvm::Module *M, llvm::StringRef Message);
 

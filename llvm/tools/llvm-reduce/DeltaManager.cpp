@@ -84,7 +84,7 @@ void llvm::runDeltaPasses(TestRunner &Tester) {
   if (DeltaPasses.empty()) {
     runAllDeltaPasses(Tester);
   } else {
-    std::string Passes = DeltaPasses;
+    StringRef Passes = DeltaPasses;
     while (!Passes.empty()) {
       auto Split = Passes.split(",");
       runDeltaPassName(Tester, Split.first);
