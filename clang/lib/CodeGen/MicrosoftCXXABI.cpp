@@ -2046,7 +2046,7 @@ MicrosoftCXXABI::EmitVirtualMemPtrThunk(const CXXMethodDecl *MD,
   if (MD->isExternallyVisible())
     ThunkFn->setComdat(CGM.getModule().getOrInsertComdat(ThunkFn->getName()));
 
-  CGM.SetLLVMFunctionAttributes(MD, FnInfo, ThunkFn);
+  CGM.SetLLVMFunctionAttributes(MD, FnInfo, ThunkFn, /*IsThunk=*/false);
   CGM.SetLLVMFunctionAttributesForDefinition(MD, ThunkFn);
 
   // Add the "thunk" attribute so that LLVM knows that the return type is
@@ -2167,8 +2167,7 @@ void MicrosoftCXXABI::emitVBTableDefinition(const VPtrInfo &VBT,
   }
 
   assert(Offsets.size() ==
-         cast<llvm::ArrayType>(cast<llvm::PointerType>(GV->getType())
-                               ->getElementType())->getNumElements());
+         cast<llvm::ArrayType>(GV->getValueType())->getNumElements());
   llvm::ArrayType *VBTableType =
     llvm::ArrayType::get(CGM.IntTy, Offsets.size());
   llvm::Constant *Init = llvm::ConstantArray::get(VBTableType, Offsets);
