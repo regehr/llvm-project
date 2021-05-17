@@ -43,8 +43,9 @@ static void reduceOperandsInModule(std::vector<Chunk> ChunksToKeep,
         int NumOperands = I.getNumOperands();
         for (int OpIndex = 0; OpIndex < NumOperands; ++OpIndex) {
           // If it's already zero, who cares?? we'll just set it to zero again
-          if (!O.shouldKeep())
-            I.setOperand(OpIndex, getDefaultValue(I.getOperand(OpIndex)->getType()));
+          auto T = I.getOperand(OpIndex)->getType();
+          if (!isa<GetElementPtrInst>(I) && !isa<SwitchInst>(I) && !T->isLabelTy() && !O.shouldKeep())
+            I.setOperand(OpIndex, getDefaultValue(T));
         }
       }
     }
