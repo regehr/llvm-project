@@ -23,7 +23,10 @@
 using namespace llvm;
 
 static Value *getDefaultValue(Type *T) {
-  return Constant::getNullValue(T);
+  if (false)
+    return UndefValue::get(T);
+  else
+    return Constant::getNullValue(T);
 }
 
 /// Removes out-of-chunk arguments from functions, and modifies their calls
