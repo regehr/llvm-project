@@ -23,14 +23,14 @@
 using namespace llvm;
 
 static Value *getDefaultValue(Type *T) {
+  // FIXME make this a command line option
   if (false)
     return UndefValue::get(T);
   else
     return Constant::getNullValue(T);
 }
 
-/// Removes out-of-chunk arguments from functions, and modifies their calls
-/// accordingly. It also removes allocations of out-of-chunk arguments.
+/// Turn out-of-chunk operands into the default value
 static void reduceOperandsInModule(std::vector<Chunk> ChunksToKeep,
                                    Module *Program) {
   Oracle O(ChunksToKeep);
@@ -42,6 +42,7 @@ static void reduceOperandsInModule(std::vector<Chunk> ChunksToKeep,
       for (auto &I : BB) {
         int NumOperands = I.getNumOperands();
         for (int OpIndex = 0; OpIndex < NumOperands; ++OpIndex) {
+          // If it's already zero, who cares?? we'll just set it to zero again
           if (!O.shouldKeep())
             I.setOperand(OpIndex, getDefaultValue(I.getOperand(OpIndex)->getType()));
         }
