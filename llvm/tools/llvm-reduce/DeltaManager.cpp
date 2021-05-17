@@ -25,6 +25,7 @@
 #include "deltas/ReduceGlobalVars.h"
 #include "deltas/ReduceInstructions.h"
 #include "deltas/ReduceInstsToArguments.h"
+#include "deltas/ReduceOperands.h"
 #include "deltas/ReduceMetadata.h"
 #include "deltas/ReduceModuleInlineAsm.h"
 #include "deltas/ReduceOperandBundles.h"
@@ -51,6 +52,7 @@ static cl::opt<std::string>
   DELTA_PASS("arguments", reduceArgumentsDeltaPass)                            \
   DELTA_PASS("instructions", reduceInstructionsDeltaPass)                      \
   DELTA_PASS("insts-to-arguments", reduceInstsToArgumentsDeltaPass)            \
+  DELTA_PASS("operands", reduceOperandsDeltaPass)                              \
   DELTA_PASS("operand-bundles", reduceOperandBundesDeltaPass)                  \
   DELTA_PASS("attributes", reduceAttributesDeltaPass)                          \
   DELTA_PASS("module-inline-asm", reduceModuleInlineAsmDeltaPass)
