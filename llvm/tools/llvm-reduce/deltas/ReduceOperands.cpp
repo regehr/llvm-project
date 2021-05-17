@@ -23,7 +23,7 @@
 using namespace llvm;
 
 static Value *getDefaultValue(Type *T) {
-  return 0;
+  return Constant::getNullValue(T);
 }
 
 /// Removes out-of-chunk arguments from functions, and modifies their calls
@@ -39,9 +39,8 @@ static void reduceOperandsInModule(std::vector<Chunk> ChunksToKeep,
       for (auto &I : BB) {
         int NumOperands = I.getNumOperands();
         for (int OpIndex = 0; OpIndex < NumOperands; ++OpIndex) {
-          if (O.shouldKeep())
-            continue;
-          I.setOperand(OpIndex, getDefaultValue(I.getOperand(OpIndex)->getType()));
+          if (!O.shouldKeep())
+            I.setOperand(OpIndex, getDefaultValue(I.getOperand(OpIndex)->getType()));
         }
       }
     }
