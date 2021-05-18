@@ -3,6 +3,10 @@ set(LLVM_LINK_COMPONENTS
   AllTargetsCodeGens
   AllTargetsDescs
   AllTargetsInfos
+  Analysis
+  ScalarOpts
+  InstCombine
+  Passes
   Core
   IRReader
   Support

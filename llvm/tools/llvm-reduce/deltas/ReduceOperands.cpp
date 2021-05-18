@@ -18,8 +18,6 @@
 #include <set>
 #include <vector>
 
-#include "llvm/Bitcode/BitcodeWriter.h"
-
 using namespace llvm;
 
 static Value *getDefaultValue(Type *T) {
