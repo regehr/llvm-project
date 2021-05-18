@@ -46,19 +46,19 @@ static void runOptPasses(std::vector<Chunk> ChunksToKeep,
                          Module *Program) {
   Oracle O(ChunksToKeep);
 
-  llvm::LoopAnalysisManager LAM;
-  llvm::FunctionAnalysisManager FAM;
-  llvm::CGSCCAnalysisManager CGAM;
-  llvm::ModuleAnalysisManager MAM;
+  LoopAnalysisManager LAM;
+  FunctionAnalysisManager FAM;
+  CGSCCAnalysisManager CGAM;
+  ModuleAnalysisManager MAM;
 
-  llvm::PassBuilder PB;
+  PassBuilder PB;
   PB.registerModuleAnalyses(MAM);
   PB.registerCGSCCAnalyses(CGAM);
   PB.registerFunctionAnalyses(FAM);
   PB.registerLoopAnalyses(LAM);
   PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
 
-  llvm::FunctionPassManager FPM;
+  FunctionPassManager FPM;
 
   if (!O.shouldKeep()) {
     outs() << "InstSimplify\n";
@@ -115,7 +115,7 @@ static void runOptPasses(std::vector<Chunk> ChunksToKeep,
   }
   */
 
-  llvm::ModulePassManager MPM;
+  ModulePassManager MPM;
 
   if (!O.shouldKeep()) {
     outs() << "GlobalDCE\n";
@@ -143,10 +143,10 @@ static void runOptPasses(std::vector<Chunk> ChunksToKeep,
   }
   if (!O.shouldKeep()) {
     outs() << "PruneEH\n";
-    MPM.addPass(CreatePruneEHPass());
+    // MPM.addPass(createPruneEHPass());
   }
 
-  llvm::LoopPassManager LPM;
+  LoopPassManager LPM;
 
   if (!O.shouldKeep()) {
     outs() << "LICM\n";
