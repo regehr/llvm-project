@@ -24,18 +24,19 @@
 #include "llvm/Transforms/Scalar/ADCE.h"
 #include "llvm/Transforms/Scalar/BDCE.h"
 #include "llvm/Transforms/Scalar/GVN.h"
+#include "llvm/Transforms/Scalar/SROA.h"
 #include "llvm/Transforms/Scalar/LICM.h"
 #include "llvm/Transforms/Scalar/LoopDeletion.h"
 #include "llvm/Transforms/Scalar/JumpThreading.h"
+#include "llvm/Transforms/Scalar/MemCpyOptimizer.h"
 #include "llvm/Transforms/Scalar/NewGVN.h"
 #include "llvm/Transforms/Scalar/DeadStoreElimination.h"
 #include "llvm/Transforms/IPO/DeadArgumentElimination.h"
 #include "llvm/Transforms/IPO/GlobalDCE.h"
 #include "llvm/Transforms/IPO/GlobalOpt.h"
 #include "llvm/Transforms/IPO/Internalize.h"
+#include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/IPO/SCCP.h"
-#include <set>
-#include <vector>
 
 using namespace llvm;
 
@@ -99,6 +100,14 @@ static void runOptPasses(std::vector<Chunk> ChunksToKeep,
     outs() << "JumpThreading\n";
     FPM.addPass(JumpThreadingPass());
   }
+  if (!O.shouldKeep()) {
+    outs() << "MemCpyOpt\n";
+    FPM.addPass(MemCpyOptPass());
+  }
+  if (!O.shouldKeep()) {
+    outs() << "SROA\n";
+    FPM.addPass(SROA());
+  }
   /*
   if (!O.shouldKeep()) {
     outs() << "\n";
@@ -131,6 +140,10 @@ static void runOptPasses(std::vector<Chunk> ChunksToKeep,
   if (!O.shouldKeep()) {
     outs() << "IPSCCP\n";
     MPM.addPass(IPSCCPPass());
+  }
+  if (!O.shouldKeep()) {
+    outs() << "PruneEH\n";
+    MPM.addPass(CreatePruneEHPass());
   }
 
   llvm::LoopPassManager LPM;
