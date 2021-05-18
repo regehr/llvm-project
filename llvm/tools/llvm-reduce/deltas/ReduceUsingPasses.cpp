@@ -27,7 +27,18 @@
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/Scalar/ADCE.h"
 #include "llvm/Transforms/Scalar/BDCE.h"
+#include "llvm/Transforms/Scalar/CorrelatedValuePropagation.h"
 #include "llvm/Transforms/Scalar/DCE.h"
+#include "llvm/Transforms/Scalar/LoopInstSimplify.h"
+#include "llvm/Transforms/Scalar/InstSimplifyPass.h"
+#include "llvm/Transforms/Scalar/IndVarSimplify.h"
+#include "llvm/Transforms/Scalar/LoopSimplifyCFG.h"
+#include "llvm/Transforms/Scalar/TailRecursionElimination.h"
+#include "llvm/Transforms/Scalar/SimplifyCFG.h"
+#include "llvm/Transforms/Scalar/EarlyCSE.h"
+#include "llvm/Transforms/Scalar/Reassociate.h"
+#include "llvm/Transforms/Scalar/SimpleLoopUnswitch.h"
+#include "llvm/Transforms/Scalar/LoopIdiomRecognize.h"
 #include "llvm/Transforms/Scalar/DeadStoreElimination.h"
 #include "llvm/Transforms/Scalar/GVN.h"
 #include "llvm/Transforms/Scalar/InstSimplifyPass.h"
@@ -57,6 +68,37 @@ static void runOptPasses(std::vector<Chunk> ChunksToKeep, Module *Program) {
   PB.registerFunctionAnalyses(FAM);
   PB.registerLoopAnalyses(LAM);
   PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+
+  LoopPassManager LPM;
+
+  if (!O.shouldKeep()) {
+    outs() << "LICM\n";
+    LPM.addPass(LICMPass());
+  }
+  if (!O.shouldKeep()) {
+    outs() << "LoopDeletion\n";
+    LPM.addPass(LoopDeletionPass());
+  }
+  if (!O.shouldKeep()) {
+    outs() << "LoopInstSimplify\n";
+    LPM.addPass(LoopInstSimplifyPass());
+  }
+  if (!O.shouldKeep()) {
+    outs() << "LoopSimplifyCFG\n";
+    LPM.addPass(LoopSimplifyCFGPass());
+  }
+  if (!O.shouldKeep()) {
+    outs() << "SimpleLoopUnswitch\n";
+    LPM.addPass(SimpleLoopUnswitchPass());
+  }
+  if (!O.shouldKeep()) {
+    outs() << "LoopIdiomRecognize\n";
+    LPM.addPass(LoopIdiomRecognizePass());
+  }
+  if (!O.shouldKeep()) {
+    outs() << "IndVarSimplify\n";
+    LPM.addPass(IndVarSimplifyPass());
+  }
 
   FunctionPassManager FPM;
 
@@ -108,12 +150,30 @@ static void runOptPasses(std::vector<Chunk> ChunksToKeep, Module *Program) {
     outs() << "SROA\n";
     FPM.addPass(SROA());
   }
-  /*
   if (!O.shouldKeep()) {
-    outs() << "\n";
-    FPM.addPass(Pass());
+    outs() << "SCCP\n";
+    FPM.addPass(SCCPPass());
   }
-  */
+  if (!O.shouldKeep()) {
+    outs() << "SimplifyCFG\n";
+    FPM.addPass(SimplifyCFGPass());
+  }
+  if (!O.shouldKeep()) {
+    outs() << "EarlyCSE\n";
+    FPM.addPass(EarlyCSEPass());
+  }
+  if (!O.shouldKeep()) {
+    outs() << "Reassociate\n";
+    FPM.addPass(ReassociatePass());
+  }
+  if (!O.shouldKeep()) {
+    outs() << "CorrelatedValuePropagation\n";
+    FPM.addPass(CorrelatedValuePropagationPass());
+  }
+  if (!O.shouldKeep()) {
+    outs() << "TailCallElim\n";
+    FPM.addPass(TailCallElimPass());
+  }
 
   ModulePassManager MPM;
 
@@ -141,21 +201,6 @@ static void runOptPasses(std::vector<Chunk> ChunksToKeep, Module *Program) {
     outs() << "IPSCCP\n";
     MPM.addPass(IPSCCPPass());
   }
-  if (!O.shouldKeep()) {
-    outs() << "PruneEH\n";
-    // FIXME: MPM.addPass(createPruneEHPass());
-  }
-
-  LoopPassManager LPM;
-
-  if (!O.shouldKeep()) {
-    outs() << "LICM\n";
-    LPM.addPass(LICMPass());
-  }
-  if (!O.shouldKeep()) {
-    outs() << "LoopDeletion\n";
-    LPM.addPass(LoopDeletionPass());
-  }
 
   MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
   MPM.addPass(createModuleToFunctionPassAdaptor(
@@ -165,5 +210,5 @@ static void runOptPasses(std::vector<Chunk> ChunksToKeep, Module *Program) {
 
 void llvm::reduceUsingPassesDeltaPass(TestRunner &Test) {
   outs() << "*** Reducing with Optimization Passes...\n";
-  runDeltaPass(Test, 13, runOptPasses);
+  runDeltaPass(Test, 31, runOptPasses);
 }
