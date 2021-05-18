@@ -6,6 +6,7 @@ set(LLVM_LINK_COMPONENTS
   Analysis
   ScalarOpts
   InstCombine
+  AggressiveInstCombine
   Passes
   IPO
   Core

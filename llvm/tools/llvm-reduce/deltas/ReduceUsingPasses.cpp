@@ -63,28 +63,28 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
   if (O.shouldKeep())
     FPM.addPass(BDCEPass());
   if (O.shouldKeep())
-    FPM.addPass(DeadArgumentEliminationPass());
-  /*
-  if (O.shouldKeep())
     FPM.addPass(DSEPass());
-  if (O.shouldKeep())
-    FPM.addPass(GlobalOptPass());
   if (O.shouldKeep())
     FPM.addPass(GVN());
   if (O.shouldKeep())
     FPM.addPass(NewGVNPass());
   if (O.shouldKeep())
-    FPM.addPass(InlinerPass());
-  if (O.shouldKeep())
     FPM.addPass(InstCombinePass());
   if (O.shouldKeep())
     FPM.addPass(AggressiveInstCombinePass());
-  */
 
   llvm::ModulePassManager MPM;
 
   if (O.shouldKeep())
     MPM.addPass(GlobalDCEPass());
+  if (O.shouldKeep())
+    MPM.addPass(DeadArgumentEliminationPass());
+  if (O.shouldKeep())
+    MPM.addPass(GlobalOptPass());
+  /*
+  if (O.shouldKeep())
+    MPM.addPass(InlinerPass());
+  */
 
   MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
   MPM.run(*Program, MAM);
