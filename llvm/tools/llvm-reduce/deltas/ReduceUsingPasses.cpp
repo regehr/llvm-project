@@ -24,11 +24,15 @@
 #include "llvm/Transforms/Scalar/ADCE.h"
 #include "llvm/Transforms/Scalar/BDCE.h"
 #include "llvm/Transforms/Scalar/GVN.h"
+#include "llvm/Transforms/Scalar/LICM.h"
+#include "llvm/Transforms/Scalar/JumpThreading.h"
 #include "llvm/Transforms/Scalar/NewGVN.h"
 #include "llvm/Transforms/Scalar/DeadStoreElimination.h"
+#include "llvm/Transforms/IPO/DeadArgumentElimination.h"
 #include "llvm/Transforms/IPO/GlobalDCE.h"
 #include "llvm/Transforms/IPO/GlobalOpt.h"
-#include "llvm/Transforms/IPO/DeadArgumentElimination.h"
+#include "llvm/Transforms/IPO/Internalize.h"
+#include "llvm/Transforms/IPO/SCCP.h"
 #include <set>
 #include <vector>
 
@@ -90,6 +94,16 @@ static void runOptPasses(std::vector<Chunk> ChunksToKeep,
     outs() << "AggressiveInstCombine\n";
     FPM.addPass(AggressiveInstCombinePass());
   }
+  if (!O.shouldKeep()) {
+    outs() << "JumpThreading\n";
+    FPM.addPass(JumpThreadingPass());
+  }
+  /*
+  if (!O.shouldKeep()) {
+    outs() << "\n";
+    FPM.addPass(Pass());
+  }
+  */
 
   llvm::ModulePassManager MPM;
 
@@ -109,8 +123,24 @@ static void runOptPasses(std::vector<Chunk> ChunksToKeep,
     outs() << "ModuleInliner\n";
     MPM.addPass(ModuleInlinerWrapperPass());
   }
+  if (!O.shouldKeep()) {
+    outs() << "Internalize\n";
+    MPM.addPass(InternalizePass());
+  }
+  if (!O.shouldKeep()) {
+    outs() << "IPSCCP\n";
+    MPM.addPass(IPSCCPPass());
+  }
+
+  llvm::LoopPassManager LPM;
+
+  if (!O.shouldKeep()) {
+    outs() << "LICM\n";
+    LPM.addPass(LICMPass());
+  }
 
   MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
+  MPM.addPass(createModuleToFunctionPassAdaptor(createFunctionToLoopPassAdaptor(std::move(LPM))));
   MPM.run(*Program, MAM);
 }  
 
