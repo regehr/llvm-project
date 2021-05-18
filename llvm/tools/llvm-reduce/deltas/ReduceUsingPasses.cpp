@@ -17,33 +17,33 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
-#include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/AggressiveInstCombine/AggressiveInstCombine.h"
-#include "llvm/Transforms/Scalar/InstSimplifyPass.h"
-#include "llvm/Transforms/Scalar/DCE.h"
-#include "llvm/Transforms/Scalar/ADCE.h"
-#include "llvm/Transforms/Scalar/BDCE.h"
-#include "llvm/Transforms/Scalar/GVN.h"
-#include "llvm/Transforms/Scalar/SROA.h"
-#include "llvm/Transforms/Scalar/LICM.h"
-#include "llvm/Transforms/Scalar/LoopDeletion.h"
-#include "llvm/Transforms/Scalar/JumpThreading.h"
-#include "llvm/Transforms/Scalar/MemCpyOptimizer.h"
-#include "llvm/Transforms/Scalar/NewGVN.h"
-#include "llvm/Transforms/Scalar/DeadStoreElimination.h"
+#include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/IPO/DeadArgumentElimination.h"
 #include "llvm/Transforms/IPO/GlobalDCE.h"
 #include "llvm/Transforms/IPO/GlobalOpt.h"
 #include "llvm/Transforms/IPO/Internalize.h"
-#include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/IPO/SCCP.h"
+#include "llvm/Transforms/InstCombine/InstCombine.h"
+#include "llvm/Transforms/Scalar/ADCE.h"
+#include "llvm/Transforms/Scalar/BDCE.h"
+#include "llvm/Transforms/Scalar/DCE.h"
+#include "llvm/Transforms/Scalar/DeadStoreElimination.h"
+#include "llvm/Transforms/Scalar/GVN.h"
+#include "llvm/Transforms/Scalar/InstSimplifyPass.h"
+#include "llvm/Transforms/Scalar/JumpThreading.h"
+#include "llvm/Transforms/Scalar/LICM.h"
+#include "llvm/Transforms/Scalar/LoopDeletion.h"
+#include "llvm/Transforms/Scalar/MemCpyOptimizer.h"
+#include "llvm/Transforms/Scalar/NewGVN.h"
+#include "llvm/Transforms/Scalar/SCCP.h"
+#include "llvm/Transforms/Scalar/SROA.h"
 
 using namespace llvm;
 
 /// Removes out-of-chunk arguments from functions, and modifies their calls
 /// accordingly. It also removes allocations of out-of-chunk arguments.
-static void runOptPasses(std::vector<Chunk> ChunksToKeep,
-                         Module *Program) {
+static void runOptPasses(std::vector<Chunk> ChunksToKeep, Module *Program) {
   Oracle O(ChunksToKeep);
 
   LoopAnalysisManager LAM;
@@ -143,7 +143,7 @@ static void runOptPasses(std::vector<Chunk> ChunksToKeep,
   }
   if (!O.shouldKeep()) {
     outs() << "PruneEH\n";
-    MPM.addPass(createPruneEHPass());
+    // FIXME: MPM.addPass(createPruneEHPass());
   }
 
   LoopPassManager LPM;
@@ -158,9 +158,10 @@ static void runOptPasses(std::vector<Chunk> ChunksToKeep,
   }
 
   MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
-  MPM.addPass(createModuleToFunctionPassAdaptor(createFunctionToLoopPassAdaptor(std::move(LPM))));
+  MPM.addPass(createModuleToFunctionPassAdaptor(
+      createFunctionToLoopPassAdaptor(std::move(LPM))));
   MPM.run(*Program, MAM);
-}  
+}
 
 void llvm::reduceUsingPassesDeltaPass(TestRunner &Test) {
   outs() << "*** Reducing with Optimization Passes...\n";
