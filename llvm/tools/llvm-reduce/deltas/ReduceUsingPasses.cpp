@@ -36,8 +36,8 @@ using namespace llvm;
 
 /// Removes out-of-chunk arguments from functions, and modifies their calls
 /// accordingly. It also removes allocations of out-of-chunk arguments.
-static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
-                                   Module *Program) {
+static void runOptPasses(std::vector<Chunk> ChunksToKeep,
+                         Module *Program) {
   Oracle O(ChunksToKeep);
 
   llvm::LoopAnalysisManager LAM;
@@ -54,35 +54,61 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
 
   llvm::FunctionPassManager FPM;
 
-  if (O.shouldKeep())
+  if (!O.shouldKeep()) {
+    outs() << "InstSimplify\n";
     FPM.addPass(InstSimplifyPass());
-  if (O.shouldKeep())
+  }
+  if (!O.shouldKeep()) {
+    outs() << "DCE\n";
     FPM.addPass(DCEPass());
-  if (O.shouldKeep())
+  }
+  if (!O.shouldKeep()) {
+    outs() << "ADCE\n";
     FPM.addPass(ADCEPass());
-  if (O.shouldKeep())
+  }
+  if (!O.shouldKeep()) {
+    outs() << "BDCE\n";
     FPM.addPass(BDCEPass());
-  if (O.shouldKeep())
+  }
+  if (!O.shouldKeep()) {
+    outs() << "DSE\n";
     FPM.addPass(DSEPass());
-  if (O.shouldKeep())
+  }
+  if (!O.shouldKeep()) {
+    outs() << "GVN\n";
     FPM.addPass(GVN());
-  if (O.shouldKeep())
+  }
+  if (!O.shouldKeep()) {
+    outs() << "NewGVN\n";
     FPM.addPass(NewGVNPass());
-  if (O.shouldKeep())
+  }
+  if (!O.shouldKeep()) {
+    outs() << "InstCombine\n";
     FPM.addPass(InstCombinePass());
-  if (O.shouldKeep())
+  }
+  if (!O.shouldKeep()) {
+    outs() << "AggressiveInstCombine\n";
     FPM.addPass(AggressiveInstCombinePass());
+  }
 
   llvm::ModulePassManager MPM;
 
-  if (O.shouldKeep())
+  if (!O.shouldKeep()) {
+    outs() << "GlobalDCE\n";
     MPM.addPass(GlobalDCEPass());
-  if (O.shouldKeep())
+  }
+  if (!O.shouldKeep()) {
+    outs() << "DeadArgumentElimination\n";
     MPM.addPass(DeadArgumentEliminationPass());
-  if (O.shouldKeep())
+  }
+  if (!O.shouldKeep()) {
+    outs() << "GlobalOpt\n";
     MPM.addPass(GlobalOptPass());
-  if (O.shouldKeep())
+  }
+  if (!O.shouldKeep()) {
+    outs() << "ModuleInliner\n";
     MPM.addPass(ModuleInlinerWrapperPass());
+  }
 
   MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
   MPM.run(*Program, MAM);
@@ -90,5 +116,5 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
 
 void llvm::reduceUsingPassesDeltaPass(TestRunner &Test) {
   outs() << "*** Reducing with Optimization Passes...\n";
-  runDeltaPass(Test, 1, instToArgumentInModule);
+  runDeltaPass(Test, 13, runOptPasses);
 }

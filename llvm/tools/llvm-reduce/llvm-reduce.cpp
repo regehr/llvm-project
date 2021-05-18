@@ -138,7 +138,7 @@ int main(int Argc, char **Argv) {
     NewSize = getProgramSize(Tester.getProgram());
     errs() << "Iteration " << ++Iterations << " : " <<
       "size changed from " << OldSize << " to " << NewSize << "\n";
-  } while (NewSize < OldSize);
+  } while (NewSize != OldSize); // Hope it won't oscillate or keep increasing!
 
   if (!Tester.getProgram()) {
     errs() << "\nCouldnt reduce input :/\n";
