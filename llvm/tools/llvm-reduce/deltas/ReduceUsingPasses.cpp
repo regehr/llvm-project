@@ -143,7 +143,7 @@ static void runOptPasses(std::vector<Chunk> ChunksToKeep,
   }
   if (!O.shouldKeep()) {
     outs() << "PruneEH\n";
-    // MPM.addPass(createPruneEHPass());
+    MPM.addPass(createPruneEHPass());
   }
 
   LoopPassManager LPM;
