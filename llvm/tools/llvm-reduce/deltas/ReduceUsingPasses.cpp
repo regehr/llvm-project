@@ -81,10 +81,8 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
     MPM.addPass(DeadArgumentEliminationPass());
   if (O.shouldKeep())
     MPM.addPass(GlobalOptPass());
-  /*
   if (O.shouldKeep())
-    MPM.addPass(InlinerPass());
-  */
+    MPM.addPass(ModuleInlinerWrapperPass());
 
   MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
   MPM.run(*Program, MAM);
