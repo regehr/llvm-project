@@ -62,9 +62,9 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
     FPM.addPass(ADCEPass());
   if (O.shouldKeep())
     FPM.addPass(BDCEPass());
-  /*
   if (O.shouldKeep())
     FPM.addPass(DeadArgumentEliminationPass());
+  /*
   if (O.shouldKeep())
     FPM.addPass(DSEPass());
   if (O.shouldKeep())
