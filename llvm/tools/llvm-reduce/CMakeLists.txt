@@ -7,6 +7,7 @@ set(LLVM_LINK_COMPONENTS
   ScalarOpts
   InstCombine
   Passes
+  IPO
   Core
   IRReader
   Support

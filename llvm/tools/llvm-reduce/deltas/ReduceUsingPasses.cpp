@@ -17,7 +17,18 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Transforms/InstCombine/InstCombine.h"
+#include "llvm/Transforms/AggressiveInstCombine/AggressiveInstCombine.h"
 #include "llvm/Transforms/Scalar/InstSimplifyPass.h"
+#include "llvm/Transforms/Scalar/DCE.h"
+#include "llvm/Transforms/Scalar/ADCE.h"
+#include "llvm/Transforms/Scalar/BDCE.h"
+#include "llvm/Transforms/Scalar/GVN.h"
+#include "llvm/Transforms/Scalar/NewGVN.h"
+#include "llvm/Transforms/Scalar/DeadStoreElimination.h"
+#include "llvm/Transforms/IPO/GlobalDCE.h"
+#include "llvm/Transforms/IPO/GlobalOpt.h"
+#include "llvm/Transforms/IPO/DeadArgumentElimination.h"
 #include <set>
 #include <vector>
 
@@ -45,8 +56,36 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
 
   if (O.shouldKeep())
     FPM.addPass(InstSimplifyPass());
+  if (O.shouldKeep())
+    FPM.addPass(DCEPass());
+  if (O.shouldKeep())
+    FPM.addPass(ADCEPass());
+  if (O.shouldKeep())
+    FPM.addPass(BDCEPass());
+  /*
+  if (O.shouldKeep())
+    FPM.addPass(DeadArgumentEliminationPass());
+  if (O.shouldKeep())
+    FPM.addPass(DSEPass());
+  if (O.shouldKeep())
+    FPM.addPass(GlobalOptPass());
+  if (O.shouldKeep())
+    FPM.addPass(GVN());
+  if (O.shouldKeep())
+    FPM.addPass(NewGVNPass());
+  if (O.shouldKeep())
+    FPM.addPass(InlinerPass());
+  if (O.shouldKeep())
+    FPM.addPass(InstCombinePass());
+  if (O.shouldKeep())
+    FPM.addPass(AggressiveInstCombinePass());
+  */
 
   llvm::ModulePassManager MPM;
+
+  if (O.shouldKeep())
+    MPM.addPass(GlobalDCEPass());
+
   MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
   MPM.run(*Program, MAM);
 }  
