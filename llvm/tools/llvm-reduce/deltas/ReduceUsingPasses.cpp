@@ -25,6 +25,7 @@
 #include "llvm/Transforms/Scalar/BDCE.h"
 #include "llvm/Transforms/Scalar/GVN.h"
 #include "llvm/Transforms/Scalar/LICM.h"
+#include "llvm/Transforms/Scalar/LoopDeletion.h"
 #include "llvm/Transforms/Scalar/JumpThreading.h"
 #include "llvm/Transforms/Scalar/NewGVN.h"
 #include "llvm/Transforms/Scalar/DeadStoreElimination.h"
@@ -137,6 +138,10 @@ static void runOptPasses(std::vector<Chunk> ChunksToKeep,
   if (!O.shouldKeep()) {
     outs() << "LICM\n";
     LPM.addPass(LICMPass());
+  }
+  if (!O.shouldKeep()) {
+    outs() << "LoopDeletion\n";
+    LPM.addPass(LoopDeletionPass());
   }
 
   MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
