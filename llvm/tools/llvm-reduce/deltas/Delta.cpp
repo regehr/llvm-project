@@ -23,6 +23,14 @@
 
 using namespace llvm;
 
+Value *getDefaultValue(Type *T) {
+  // FIXME make this a command line option
+  if (true)
+    return UndefValue::get(T);
+  else
+    return Constant::getNullValue(T);
+}
+
 static cl::opt<bool> AbortOnInvalidReduction(
     "abort-on-invalid-reduction",
     cl::desc("Abort if any reduction results in invalid IR"),

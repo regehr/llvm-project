@@ -62,7 +62,7 @@ static void extractArgumentsFromModule(std::vector<Chunk> ChunksToKeep,
       if (!ArgsToKeep.count(&A)) {
         // By adding undesired arguments to the VMap, CloneFunction will remove
         // them from the resulting Function
-        VMap[&A] = UndefValue::get(A.getType());
+        VMap[&A] = getDefaultValue(A.getType());
         for (auto *U : A.users())
           if (auto *I = dyn_cast<Instruction>(*&U))
             InstToDelete.push_back(I);

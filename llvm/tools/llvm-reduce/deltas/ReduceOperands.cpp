@@ -20,14 +20,6 @@
 
 using namespace llvm;
 
-static Value *getDefaultValue(Type *T) {
-  // FIXME make this a command line option
-  if (false)
-    return UndefValue::get(T);
-  else
-    return Constant::getNullValue(T);
-}
-
 /// Turn out-of-chunk operands into the default value
 static void reduceOperandsInModule(std::vector<Chunk> ChunksToKeep,
                                    Module *Program) {

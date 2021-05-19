@@ -17,9 +17,12 @@
 
 #include "TestRunner.h"
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/IR/Constants.h"
 #include <functional>
 #include <utility>
 #include <vector>
+
+llvm::Value *getDefaultValue(llvm::Type *T);
 
 namespace llvm {
 
