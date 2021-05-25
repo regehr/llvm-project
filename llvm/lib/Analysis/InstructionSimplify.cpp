@@ -203,6 +203,9 @@ static Value *handleOtherCmpSelSimplifications(Value *TCmp, Value *FCmp,
                                                Value *Cond,
                                                const SimplifyQuery &Q,
                                                unsigned MaxRecurse) {
+  if (DisablePeepholes)
+    return nullptr;
+
   // If the false value simplified to false, then the result of the compare
   // is equal to "Cond && TCmp".  This also catches the case when the false
   // value simplified to false and the true value to true, returning "Cond".
@@ -294,6 +297,9 @@ static Value *expandCommutativeBinOp(Instruction::BinaryOps Opcode,
                                      Instruction::BinaryOps OpcodeToExpand,
                                      const SimplifyQuery &Q,
                                      unsigned MaxRecurse) {
+  if (DisablePeepholes)
+    return nullptr;
+
   // Recursion is always used, so bail out at once if we already hit the limit.
   if (!MaxRecurse--)
     return nullptr;
@@ -636,9 +642,6 @@ static Constant *foldOrCommuteConstant(Instruction::BinaryOps Opcode,
     if (auto *CRHS = dyn_cast<Constant>(Op1))
       return ConstantFoldBinaryOpOperands(Opcode, CLHS, CRHS, Q.DL);
 
-    if (DisablePeepholes)
-      return nullptr;
-
     // Canonicalize the constant to the RHS if this is a commutative operation.
     if (Instruction::isCommutative(Opcode))
       std::swap(Op0, Op1);
@@ -978,6 +981,7 @@ static Value *simplifyDivRem(Value *Op0, Value *Op1, bool IsDiv,
                              const SimplifyQuery &Q) {
   if (DisablePeepholes)
     return nullptr;
+
   Type *Ty = Op0->getType();
 
   // X / undef -> poison
@@ -1796,6 +1800,9 @@ static Value *simplifyAndOfICmpsWithAdd(ICmpInst *Op0, ICmpInst *Op1,
 /// Try to eliminate compares with signed or unsigned min/max constants.
 static Value *simplifyAndOrOfICmpsWithLimitConst(ICmpInst *Cmp0, ICmpInst *Cmp1,
                                                  bool IsAnd) {
+  if (DisablePeepholes)
+    return nullptr;
+
   // Canonicalize an equality compare as Cmp0.
   if (Cmp1->isEquality())
     std::swap(Cmp0, Cmp1);
@@ -2052,9 +2059,6 @@ static Value *simplifyAndOrOfCmps(const SimplifyQuery &Q,
 ///   %Op1 = extractvalue { i4, i1 } %Agg, 1
 static bool omitCheckForZeroBeforeMulWithOverflowInternal(Value *Op1,
                                                           Value *X) {
-  if (DisablePeepholes)
-    return false;
-
   auto *Extract = dyn_cast<ExtractValueInst>(Op1);
   // We should only be extracting the overflow bit.
   if (!Extract || !Extract->getIndices().equals(1))
@@ -2131,6 +2135,9 @@ static Value *omitCheckForZeroBeforeInvertedMulWithOverflow(Value *Op0,
 /// source value and inverted constant (identity: C - X -> ~(X + ~C)).
 static Value *simplifyLogicOfAddSub(Value *Op0, Value *Op1,
                                     Instruction::BinaryOps Opcode) {
+  if (DisablePeepholes)
+    return false;
+
   assert(Op0->getType() == Op1->getType() && "Mismatched binop types");
   assert(BinaryOperator::isBitwiseLogicOp(Opcode) && "Expected logic op");
   Value *X;
@@ -2505,11 +2512,11 @@ Value *llvm::SimplifyOrInst(Value *Op0, Value *Op1, const SimplifyQuery &Q) {
 /// If not, this returns null.
 static Value *SimplifyXorInst(Value *Op0, Value *Op1, const SimplifyQuery &Q,
                               unsigned MaxRecurse) {
-  if (DisablePeepholes)
-    return nullptr;
-
   if (Constant *C = foldOrCommuteConstant(Instruction::Xor, Op0, Op1, Q))
     return C;
+
+  if (DisablePeepholes)
+    return nullptr;
 
   // A ^ undef -> undef
   if (Q.isUndefValue(Op1))
@@ -2994,6 +3001,9 @@ static Value *simplifyICmpWithConstant(CmpInst::Predicate Pred, Value *LHS,
 static Value *simplifyICmpWithBinOpOnLHS(
     CmpInst::Predicate Pred, BinaryOperator *LBO, Value *RHS,
     const SimplifyQuery &Q, unsigned MaxRecurse) {
+  if (DisablePeepholes)
+    return nullptr;
+
   Type *ITy = GetCompareTy(RHS); // The return type.
 
   Value *Y = nullptr;
@@ -3513,6 +3523,9 @@ static Value *simplifyICmpWithMinMax(CmpInst::Predicate Pred, Value *LHS,
 static Value *simplifyICmpWithDominatingAssume(CmpInst::Predicate Predicate,
                                                Value *LHS, Value *RHS,
                                                const SimplifyQuery &Q) {
+  if (DisablePeepholes)
+    return nullptr;
+
   // Gracefully handle instructions that have not been inserted yet.
   if (!Q.AC || !Q.CxtI || !Q.CxtI->getParent())
     return nullptr;
@@ -5667,6 +5680,9 @@ static ICmpInst::Predicate getMaxMinPredicate(Intrinsic::ID IID) {
 /// operand that is another min/max intrinsic with shared operand(s). The caller
 /// is expected to swap the operand arguments to handle commutation.
 static Value *foldMinMaxSharedOp(Intrinsic::ID IID, Value *Op0, Value *Op1) {
+  if (DisablePeepholes)
+    return nullptr;
+
   Value *X, *Y;
   if (!match(Op0, m_MaxOrMin(m_Value(X), m_Value(Y))))
     return nullptr;
