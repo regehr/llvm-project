@@ -2136,7 +2136,7 @@ static Value *omitCheckForZeroBeforeInvertedMulWithOverflow(Value *Op0,
 static Value *simplifyLogicOfAddSub(Value *Op0, Value *Op1,
                                     Instruction::BinaryOps Opcode) {
   if (DisablePeepholes)
-    return false;
+    return nullptr;
 
   assert(Op0->getType() == Op1->getType() && "Mismatched binop types");
   assert(BinaryOperator::isBitwiseLogicOp(Opcode) && "Expected logic op");
