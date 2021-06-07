@@ -3551,9 +3551,6 @@ static Value *simplifyICmpWithDominatingAssume(CmpInst::Predicate Predicate,
 /// If not, this returns null.
 static Value *SimplifyICmpInst(unsigned Predicate, Value *LHS, Value *RHS,
                                const SimplifyQuery &Q, unsigned MaxRecurse) {
-  if (DisablePeepholes)
-    return nullptr;
-
   CmpInst::Predicate Pred = (CmpInst::Predicate)Predicate;
   assert(CmpInst::isIntPredicate(Pred) && "Not an integer compare!");
 
@@ -3566,6 +3563,9 @@ static Value *SimplifyICmpInst(unsigned Predicate, Value *LHS, Value *RHS,
     Pred = CmpInst::getSwappedPredicate(Pred);
   }
   assert(!isa<UndefValue>(LHS) && "Unexpected icmp undef,%X");
+
+  if (DisablePeepholes)
+    return nullptr;
 
   Type *ITy = GetCompareTy(LHS); // The return type.
 
