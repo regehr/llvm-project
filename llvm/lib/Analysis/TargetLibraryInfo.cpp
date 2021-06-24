@@ -151,6 +151,11 @@ static void initialize(TargetLibraryInfoImpl &TLI, const Triple &T,
   TLI.setShouldExtI32Return(ShouldExtI32Return);
   TLI.setShouldSignExtI32Param(ShouldSignExtI32Param);
 
+  // Let's assume by default that the size of int is 32 bits, unless the target
+  // is a 16-bit architecture because then it most likely is 16 bits. If that
+  // isn't true for a target those defaults should be overridden below.
+  TLI.setIntSize(T.isArch16Bit() ? 16 : 32);
+
   if (T.isAMDGPU())
     TLI.disableAllFunctions();
 
@@ -160,6 +165,8 @@ static void initialize(TargetLibraryInfoImpl &TLI, const Triple &T,
     TLI.setUnavailable(LibFunc_memcpy);
     TLI.setUnavailable(LibFunc_memset);
     TLI.setUnavailable(LibFunc_memset_pattern16);
+    TLI.setAvailable(llvm::LibFunc___kmpc_alloc_shared);
+    TLI.setAvailable(llvm::LibFunc___kmpc_free_shared);
     return;
   }
 
@@ -352,59 +359,63 @@ static void initialize(TargetLibraryInfoImpl &TLI, const Triple &T,
     // Win32 does not support these functions, but
     // they are generally available on POSIX-compliant systems.
     TLI.setUnavailable(LibFunc_access);
+    TLI.setUnavailable(LibFunc_chmod);
+    TLI.setUnavailable(LibFunc_closedir);
+    TLI.setUnavailable(LibFunc_fdopen);
+    TLI.setUnavailable(LibFunc_fileno);
+    TLI.setUnavailable(LibFunc_fseeko);
+    TLI.setUnavailable(LibFunc_fstat);
+    TLI.setUnavailable(LibFunc_ftello);
+    TLI.setUnavailable(LibFunc_gettimeofday);
+    TLI.setUnavailable(LibFunc_memccpy);
+    TLI.setUnavailable(LibFunc_mkdir);
+    TLI.setUnavailable(LibFunc_open);
+    TLI.setUnavailable(LibFunc_opendir);
+    TLI.setUnavailable(LibFunc_pclose);
+    TLI.setUnavailable(LibFunc_popen);
+    TLI.setUnavailable(LibFunc_read);
+    TLI.setUnavailable(LibFunc_rmdir);
+    TLI.setUnavailable(LibFunc_stat);
+    TLI.setUnavailable(LibFunc_strcasecmp);
+    TLI.setUnavailable(LibFunc_strncasecmp);
+    TLI.setUnavailable(LibFunc_unlink);
+    TLI.setUnavailable(LibFunc_utime);
+    TLI.setUnavailable(LibFunc_write);
+  }
+
+  if (T.isOSWindows() && !T.isWindowsCygwinEnvironment()) {
+    // These functions aren't available in either MSVC or MinGW environments.
     TLI.setUnavailable(LibFunc_bcmp);
     TLI.setUnavailable(LibFunc_bcopy);
     TLI.setUnavailable(LibFunc_bzero);
-    TLI.setUnavailable(LibFunc_chmod);
     TLI.setUnavailable(LibFunc_chown);
-    TLI.setUnavailable(LibFunc_closedir);
     TLI.setUnavailable(LibFunc_ctermid);
-    TLI.setUnavailable(LibFunc_fdopen);
     TLI.setUnavailable(LibFunc_ffs);
-    TLI.setUnavailable(LibFunc_fileno);
     TLI.setUnavailable(LibFunc_flockfile);
-    TLI.setUnavailable(LibFunc_fseeko);
-    TLI.setUnavailable(LibFunc_fstat);
     TLI.setUnavailable(LibFunc_fstatvfs);
-    TLI.setUnavailable(LibFunc_ftello);
     TLI.setUnavailable(LibFunc_ftrylockfile);
     TLI.setUnavailable(LibFunc_funlockfile);
     TLI.setUnavailable(LibFunc_getitimer);
     TLI.setUnavailable(LibFunc_getlogin_r);
     TLI.setUnavailable(LibFunc_getpwnam);
-    TLI.setUnavailable(LibFunc_gettimeofday);
     TLI.setUnavailable(LibFunc_htonl);
     TLI.setUnavailable(LibFunc_htons);
     TLI.setUnavailable(LibFunc_lchown);
     TLI.setUnavailable(LibFunc_lstat);
-    TLI.setUnavailable(LibFunc_memccpy);
-    TLI.setUnavailable(LibFunc_mkdir);
     TLI.setUnavailable(LibFunc_ntohl);
     TLI.setUnavailable(LibFunc_ntohs);
-    TLI.setUnavailable(LibFunc_open);
-    TLI.setUnavailable(LibFunc_opendir);
-    TLI.setUnavailable(LibFunc_pclose);
-    TLI.setUnavailable(LibFunc_popen);
     TLI.setUnavailable(LibFunc_pread);
     TLI.setUnavailable(LibFunc_pwrite);
-    TLI.setUnavailable(LibFunc_read);
     TLI.setUnavailable(LibFunc_readlink);
     TLI.setUnavailable(LibFunc_realpath);
-    TLI.setUnavailable(LibFunc_rmdir);
     TLI.setUnavailable(LibFunc_setitimer);
-    TLI.setUnavailable(LibFunc_stat);
     TLI.setUnavailable(LibFunc_statvfs);
     TLI.setUnavailable(LibFunc_stpcpy);
     TLI.setUnavailable(LibFunc_stpncpy);
-    TLI.setUnavailable(LibFunc_strcasecmp);
-    TLI.setUnavailable(LibFunc_strncasecmp);
     TLI.setUnavailable(LibFunc_times);
     TLI.setUnavailable(LibFunc_uname);
-    TLI.setUnavailable(LibFunc_unlink);
     TLI.setUnavailable(LibFunc_unsetenv);
-    TLI.setUnavailable(LibFunc_utime);
     TLI.setUnavailable(LibFunc_utimes);
-    TLI.setUnavailable(LibFunc_write);
   }
 
   switch (T.getOS()) {
@@ -603,6 +614,8 @@ static void initialize(TargetLibraryInfoImpl &TLI, const Triple &T,
     //    TLI.setAvailable(llvm::LibFunc_memcpy);
     //    TLI.setAvailable(llvm::LibFunc_memset);
 
+    TLI.setAvailable(llvm::LibFunc___kmpc_alloc_shared);
+    TLI.setAvailable(llvm::LibFunc___kmpc_free_shared);
   } else {
     TLI.setUnavailable(LibFunc_nvvm_reflect);
   }
@@ -635,7 +648,8 @@ TargetLibraryInfoImpl::TargetLibraryInfoImpl(const Triple &T) {
 TargetLibraryInfoImpl::TargetLibraryInfoImpl(const TargetLibraryInfoImpl &TLI)
     : CustomNames(TLI.CustomNames), ShouldExtI32Param(TLI.ShouldExtI32Param),
       ShouldExtI32Return(TLI.ShouldExtI32Return),
-      ShouldSignExtI32Param(TLI.ShouldSignExtI32Param) {
+      ShouldSignExtI32Param(TLI.ShouldSignExtI32Param),
+      SizeOfInt(TLI.SizeOfInt) {
   memcpy(AvailableArray, TLI.AvailableArray, sizeof(AvailableArray));
   VectorDescs = TLI.VectorDescs;
   ScalarDescs = TLI.ScalarDescs;
@@ -645,7 +659,8 @@ TargetLibraryInfoImpl::TargetLibraryInfoImpl(TargetLibraryInfoImpl &&TLI)
     : CustomNames(std::move(TLI.CustomNames)),
       ShouldExtI32Param(TLI.ShouldExtI32Param),
       ShouldExtI32Return(TLI.ShouldExtI32Return),
-      ShouldSignExtI32Param(TLI.ShouldSignExtI32Param) {
+      ShouldSignExtI32Param(TLI.ShouldSignExtI32Param),
+      SizeOfInt(TLI.SizeOfInt) {
   std::move(std::begin(TLI.AvailableArray), std::end(TLI.AvailableArray),
             AvailableArray);
   VectorDescs = TLI.VectorDescs;
@@ -657,6 +672,7 @@ TargetLibraryInfoImpl &TargetLibraryInfoImpl::operator=(const TargetLibraryInfoI
   ShouldExtI32Param = TLI.ShouldExtI32Param;
   ShouldExtI32Return = TLI.ShouldExtI32Return;
   ShouldSignExtI32Param = TLI.ShouldSignExtI32Param;
+  SizeOfInt = TLI.SizeOfInt;
   memcpy(AvailableArray, TLI.AvailableArray, sizeof(AvailableArray));
   return *this;
 }
@@ -666,6 +682,7 @@ TargetLibraryInfoImpl &TargetLibraryInfoImpl::operator=(TargetLibraryInfoImpl &&
   ShouldExtI32Param = TLI.ShouldExtI32Param;
   ShouldExtI32Return = TLI.ShouldExtI32Return;
   ShouldSignExtI32Param = TLI.ShouldSignExtI32Param;
+  SizeOfInt = TLI.SizeOfInt;
   std::move(std::begin(TLI.AvailableArray), std::end(TLI.AvailableArray),
             AvailableArray);
   return *this;
@@ -893,6 +910,7 @@ bool TargetLibraryInfoImpl::isValidProtoForLibFunc(const FunctionType &FTy,
             FTy.getParamType(2)->isPointerTy());
   case LibFunc_system:
     return (NumParams == 1 && FTy.getParamType(0)->isPointerTy());
+  case LibFunc___kmpc_alloc_shared:
   case LibFunc_malloc:
   case LibFunc_vec_malloc:
     return (NumParams == 1 && FTy.getReturnType()->isPointerTy());
@@ -1029,6 +1047,7 @@ bool TargetLibraryInfoImpl::isValidProtoForLibFunc(const FunctionType &FTy,
   case LibFunc_mktime:
   case LibFunc_times:
   case LibFunc_vec_free:
+  case LibFunc___kmpc_free_shared:
     return (NumParams != 0 && FTy.getParamType(0)->isPointerTy());
 
   case LibFunc_fopen:
@@ -1494,7 +1513,7 @@ bool TargetLibraryInfoImpl::isValidProtoForLibFunc(const FunctionType &FTy,
   case LibFunc_ldexpl:
     return (NumParams == 2 && FTy.getReturnType()->isFloatingPointTy() &&
             FTy.getReturnType() == FTy.getParamType(0) &&
-            FTy.getParamType(1)->isIntegerTy(32));
+            FTy.getParamType(1)->isIntegerTy(getIntSize()));
 
   case LibFunc_ffs:
   case LibFunc_ffsl:

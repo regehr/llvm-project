@@ -590,6 +590,18 @@ public:
   /// Transparently provide more efficient getOperand methods.
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
 
+  static bool isValidSuccessOrdering(AtomicOrdering Ordering) {
+    return Ordering != AtomicOrdering::NotAtomic &&
+           Ordering != AtomicOrdering::Unordered;
+  }
+
+  static bool isValidFailureOrdering(AtomicOrdering Ordering) {
+    return Ordering != AtomicOrdering::NotAtomic &&
+           Ordering != AtomicOrdering::Unordered &&
+           Ordering != AtomicOrdering::AcquireRelease &&
+           Ordering != AtomicOrdering::Release;
+  }
+
   /// Returns the success ordering constraint of this cmpxchg instruction.
   AtomicOrdering getSuccessOrdering() const {
     return getSubclassData<SuccessOrderingField>();
@@ -597,8 +609,8 @@ public:
 
   /// Sets the success ordering constraint of this cmpxchg instruction.
   void setSuccessOrdering(AtomicOrdering Ordering) {
-    assert(Ordering != AtomicOrdering::NotAtomic &&
-           "CmpXchg instructions can only be atomic.");
+    assert(isValidSuccessOrdering(Ordering) &&
+           "invalid CmpXchg success ordering");
     setSubclassData<SuccessOrderingField>(Ordering);
   }
 
@@ -609,9 +621,23 @@ public:
 
   /// Sets the failure ordering constraint of this cmpxchg instruction.
   void setFailureOrdering(AtomicOrdering Ordering) {
-    assert(Ordering != AtomicOrdering::NotAtomic &&
-           "CmpXchg instructions can only be atomic.");
+    assert(isValidFailureOrdering(Ordering) &&
+           "invalid CmpXchg failure ordering");
     setSubclassData<FailureOrderingField>(Ordering);
+  }
+
+  /// Returns a single ordering which is at least as strong as both the
+  /// success and failure orderings for this cmpxchg.
+  AtomicOrdering getMergedOrdering() const {
+    if (getFailureOrdering() == AtomicOrdering::SequentiallyConsistent)
+      return AtomicOrdering::SequentiallyConsistent;
+    if (getFailureOrdering() == AtomicOrdering::Acquire) {
+      if (getSuccessOrdering() == AtomicOrdering::Monotonic)
+        return AtomicOrdering::Acquire;
+      if (getSuccessOrdering() == AtomicOrdering::Release)
+        return AtomicOrdering::AcquireRelease;
+    }
+    return getSuccessOrdering();
   }
 
   /// Returns the synchronization scope ID of this cmpxchg instruction.
@@ -1005,8 +1031,8 @@ public:
   void setResultElementType(Type *Ty) { ResultElementType = Ty; }
 
   Type *getResultElementType() const {
-    assert(ResultElementType ==
-           cast<PointerType>(getType()->getScalarType())->getElementType());
+    assert(cast<PointerType>(getType()->getScalarType())
+               ->isOpaqueOrPointeeTypeMatches(ResultElementType));
     return ResultElementType;
   }
 
@@ -1072,8 +1098,12 @@ public:
   /// instruction, which may be a vector of pointers.
   static Type *getGEPReturnType(Type *ElTy, Value *Ptr,
                                 ArrayRef<Value *> IdxList) {
-    Type *PtrTy = PointerType::get(checkGEPType(getIndexedType(ElTy, IdxList)),
-                                   Ptr->getType()->getPointerAddressSpace());
+    PointerType *OrigPtrTy = cast<PointerType>(Ptr->getType()->getScalarType());
+    unsigned AddrSpace = OrigPtrTy->getAddressSpace();
+    Type *ResultElemTy = checkGEPType(getIndexedType(ElTy, IdxList));
+    Type *PtrTy = OrigPtrTy->isOpaque()
+      ? PointerType::get(OrigPtrTy->getContext(), AddrSpace)
+      : PointerType::get(ResultElemTy, AddrSpace);
     // Vector GEP
     if (auto *PtrVTy = dyn_cast<VectorType>(Ptr->getType())) {
       ElementCount EltCount = PtrVTy->getElementCount();
@@ -1146,8 +1176,8 @@ GetElementPtrInst::GetElementPtrInst(Type *PointeeType, Value *Ptr,
                   Values, InsertBefore),
       SourceElementType(PointeeType),
       ResultElementType(getIndexedType(PointeeType, IdxList)) {
-  assert(ResultElementType ==
-         cast<PointerType>(getType()->getScalarType())->getElementType());
+  assert(cast<PointerType>(getType()->getScalarType())
+             ->isOpaqueOrPointeeTypeMatches(ResultElementType));
   init(Ptr, IdxList, NameStr);
 }
 
@@ -1160,8 +1190,8 @@ GetElementPtrInst::GetElementPtrInst(Type *PointeeType, Value *Ptr,
                   Values, InsertAtEnd),
       SourceElementType(PointeeType),
       ResultElementType(getIndexedType(PointeeType, IdxList)) {
-  assert(ResultElementType ==
-         cast<PointerType>(getType()->getScalarType())->getElementType());
+  assert(cast<PointerType>(getType()->getScalarType())
+             ->isOpaqueOrPointeeTypeMatches(ResultElementType));
   init(Ptr, IdxList, NameStr);
 }
 

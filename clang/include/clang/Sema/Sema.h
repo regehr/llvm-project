@@ -32,6 +32,7 @@
 #include "clang/AST/NSAPI.h"
 #include "clang/AST/PrettyPrinter.h"
 #include "clang/AST/StmtCXX.h"
+#include "clang/AST/StmtOpenMP.h"
 #include "clang/AST/TypeLoc.h"
 #include "clang/AST/TypeOrdering.h"
 #include "clang/Basic/BitmaskEnum.h"
@@ -911,6 +912,10 @@ public:
     OpaqueParser = P;
   }
 
+  // Does the work necessary to deal with a SYCL kernel lambda. At the moment,
+  // this just marks the list of lambdas required to name the kernel.
+  void AddSYCLKernelLambda(const FunctionDecl *FD);
+
   class DelayedDiagnostics;
 
   class DelayedDiagnosticsState {
@@ -1514,6 +1519,11 @@ public:
 
   bool WarnedStackExhausted = false;
 
+  /// Increment when we find a reference; decrement when we find an ignored
+  /// assignment.  Ultimately the value is 0 if every reference is an ignored
+  /// assignment.
+  llvm::DenseMap<const VarDecl *, int> RefsMinusAssignments;
+
 public:
   Sema(Preprocessor &pp, ASTContext &ctxt, ASTConsumer &consumer,
        TranslationUnitKind TUKind = TU_Complete,
@@ -1786,7 +1796,7 @@ public:
   private:
     /// Function or variable declarations to be checked for whether the deferred
     /// diagnostics should be emitted.
-    SmallVector<Decl *, 4> DeclsToCheckForDeferredDiags;
+    llvm::SmallSetVector<Decl *, 4> DeclsToCheckForDeferredDiags;
 
   public:
   // Emit all deferred diagnostics.
@@ -1881,6 +1891,10 @@ public:
 
   /// Retrieve the current captured region, if any.
   sema::CapturedRegionScopeInfo *getCurCapturedRegion();
+
+  /// Retrieve the current function, if any, that should be analyzed for
+  /// potential availability violations.
+  sema::FunctionScopeInfo *getCurFunctionAvailabilityContext();
 
   /// WeakTopLevelDeclDecls - access to \#pragma weak-generated Decls
   SmallVectorImpl<Decl *> &WeakTopLevelDecls() { return WeakTopLevelDecl; }
@@ -3139,6 +3153,7 @@ public:
   void ActOnStartCXXMemberDeclarations(Scope *S, Decl *TagDecl,
                                        SourceLocation FinalLoc,
                                        bool IsFinalSpelledSealed,
+                                       bool IsAbstract,
                                        SourceLocation LBraceLoc);
 
   /// ActOnTagFinishDefinition - Invoked once we have finished parsing
@@ -3439,12 +3454,6 @@ public:
                             QualType &ResultTy);
   bool DiagnoseMultipleUserDefinedConversion(Expr *From, QualType ToType);
   bool isSameOrCompatibleFunctionType(CanQualType Param, CanQualType Arg);
-
-  ExprResult PerformMoveOrCopyInitialization(const InitializedEntity &Entity,
-                                             const VarDecl *NRVOCandidate,
-                                             QualType ResultType,
-                                             Expr *Value,
-                                             bool AllowNRVO = true);
 
   bool CanPerformAggregateInitializationForOverloadResolution(
       const InitializedEntity &Entity, InitListExpr *From);
@@ -4113,7 +4122,8 @@ public:
                                         bool RValueThis, unsigned ThisQuals);
   CXXDestructorDecl *LookupDestructor(CXXRecordDecl *Class);
 
-  bool checkLiteralOperatorId(const CXXScopeSpec &SS, const UnqualifiedId &Id);
+  bool checkLiteralOperatorId(const CXXScopeSpec &SS, const UnqualifiedId &Id,
+                              bool IsUDSuffix);
   LiteralOperatorLookupResult
   LookupLiteralOperator(Scope *S, LookupResult &R, ArrayRef<QualType> ArgTys,
                         bool AllowRaw, bool AllowTemplate,
@@ -4745,28 +4755,30 @@ public:
                                            SourceLocation Loc,
                                            unsigned NumParams);
 
-  enum CopyElisionSemanticsKind {
-    CES_Strict = 0,
-    CES_AllowParameters = 1,
-    CES_AllowDifferentTypes = 2,
-    CES_AllowExceptionVariables = 4,
-    CES_AllowRValueReferenceType = 8,
-    CES_ImplicitlyMovableCXX11CXX14CXX17 =
-        (CES_AllowParameters | CES_AllowDifferentTypes),
-    CES_ImplicitlyMovableCXX20 =
-        (CES_AllowParameters | CES_AllowDifferentTypes |
-         CES_AllowExceptionVariables | CES_AllowRValueReferenceType),
-  };
+  struct NamedReturnInfo {
+    const VarDecl *Candidate;
 
-  VarDecl *getCopyElisionCandidate(QualType ReturnType, Expr *E,
-                                   CopyElisionSemanticsKind CESK);
-  bool isCopyElisionCandidate(QualType ReturnType, const VarDecl *VD,
-                              CopyElisionSemanticsKind CESK);
+    enum Status : uint8_t { None, MoveEligible, MoveEligibleAndCopyElidable };
+    Status S;
+
+    bool isMoveEligible() const { return S != None; };
+    bool isCopyElidable() const { return S == MoveEligibleAndCopyElidable; }
+  };
+  NamedReturnInfo getNamedReturnInfo(Expr *&E, bool ForceCXX2b = false);
+  NamedReturnInfo getNamedReturnInfo(const VarDecl *VD,
+                                     bool ForceCXX20 = false);
+  const VarDecl *getCopyElisionCandidate(NamedReturnInfo &Info,
+                                         QualType ReturnType);
+
+  ExprResult PerformMoveOrCopyInitialization(const InitializedEntity &Entity,
+                                             const NamedReturnInfo &NRInfo,
+                                             Expr *Value);
 
   StmtResult ActOnReturnStmt(SourceLocation ReturnLoc, Expr *RetValExp,
                              Scope *CurScope);
   StmtResult BuildReturnStmt(SourceLocation ReturnLoc, Expr *RetValExp);
-  StmtResult ActOnCapScopeReturnStmt(SourceLocation ReturnLoc, Expr *RetValExp);
+  StmtResult ActOnCapScopeReturnStmt(SourceLocation ReturnLoc, Expr *RetValExp,
+                                     NamedReturnInfo &NRInfo);
 
   StmtResult ActOnGCCAsmStmt(SourceLocation AsmLoc, bool IsSimple,
                              bool IsVolatile, unsigned NumOutputs,
@@ -4860,6 +4872,10 @@ public:
   void DiagnoseUnusedExprResult(const Stmt *S);
   void DiagnoseUnusedNestedTypedefs(const RecordDecl *D);
   void DiagnoseUnusedDecl(const NamedDecl *ND);
+
+  /// If VD is set but not otherwise used, diagnose, for a parameter or a
+  /// variable.
+  void DiagnoseUnusedButSetDecl(const VarDecl *VD);
 
   /// Emit \p DiagID if statement located on \p StmtLoc has a suspicious null
   /// statement as a \p Body, and it is located on the same line.
@@ -5185,6 +5201,15 @@ public:
                                  PredefinedExpr::IdentKind IK);
   ExprResult ActOnPredefinedExpr(SourceLocation Loc, tok::TokenKind Kind);
   ExprResult ActOnIntegerConstant(SourceLocation Loc, uint64_t Val);
+
+  ExprResult BuildSYCLUniqueStableNameExpr(SourceLocation OpLoc,
+                                           SourceLocation LParen,
+                                           SourceLocation RParen,
+                                           TypeSourceInfo *TSI);
+  ExprResult ActOnSYCLUniqueStableNameExpr(SourceLocation OpLoc,
+                                           SourceLocation LParen,
+                                           SourceLocation RParen,
+                                           ParsedType ParsedTy);
 
   bool CheckLoopHintExpr(Expr *E, SourceLocation Loc);
 
@@ -5674,11 +5699,12 @@ public:
                                SourceLocation IdentLoc,
                                IdentifierInfo *Ident);
 
+  void FilterUsingLookup(Scope *S, LookupResult &lookup);
   void HideUsingShadowDecl(Scope *S, UsingShadowDecl *Shadow);
-  bool CheckUsingShadowDecl(UsingDecl *UD, NamedDecl *Target,
+  bool CheckUsingShadowDecl(BaseUsingDecl *BUD, NamedDecl *Target,
                             const LookupResult &PreviousDecls,
                             UsingShadowDecl *&PrevShadow);
-  UsingShadowDecl *BuildUsingShadowDecl(Scope *S, UsingDecl *UD,
+  UsingShadowDecl *BuildUsingShadowDecl(Scope *S, BaseUsingDecl *BUD,
                                         NamedDecl *Target,
                                         UsingShadowDecl *PrevDecl);
 
@@ -5687,17 +5713,23 @@ public:
                                    const CXXScopeSpec &SS,
                                    SourceLocation NameLoc,
                                    const LookupResult &Previous);
-  bool CheckUsingDeclQualifier(SourceLocation UsingLoc,
-                               bool HasTypename,
+  bool CheckUsingDeclQualifier(SourceLocation UsingLoc, bool HasTypename,
                                const CXXScopeSpec &SS,
                                const DeclarationNameInfo &NameInfo,
-                               SourceLocation NameLoc);
+                               SourceLocation NameLoc,
+                               const LookupResult *R = nullptr,
+                               const UsingDecl *UD = nullptr);
 
   NamedDecl *BuildUsingDeclaration(
       Scope *S, AccessSpecifier AS, SourceLocation UsingLoc,
       bool HasTypenameKeyword, SourceLocation TypenameLoc, CXXScopeSpec &SS,
       DeclarationNameInfo NameInfo, SourceLocation EllipsisLoc,
-      const ParsedAttributesView &AttrList, bool IsInstantiation);
+      const ParsedAttributesView &AttrList, bool IsInstantiation,
+      bool IsUsingIfExists);
+  NamedDecl *BuildUsingEnumDeclaration(Scope *S, AccessSpecifier AS,
+                                       SourceLocation UsingLoc,
+                                       SourceLocation EnumLoc,
+                                       SourceLocation NameLoc, EnumDecl *ED);
   NamedDecl *BuildUsingPackDecl(NamedDecl *InstantiatedFrom,
                                 ArrayRef<NamedDecl *> Expansions);
 
@@ -5715,6 +5747,9 @@ public:
                               SourceLocation TypenameLoc, CXXScopeSpec &SS,
                               UnqualifiedId &Name, SourceLocation EllipsisLoc,
                               const ParsedAttributesView &AttrList);
+  Decl *ActOnUsingEnumDeclaration(Scope *CurScope, AccessSpecifier AS,
+                                  SourceLocation UsingLoc,
+                                  SourceLocation EnumLoc, const DeclSpec &);
   Decl *ActOnAliasDeclaration(Scope *CurScope, AccessSpecifier AS,
                               MultiTemplateParamsArg TemplateParams,
                               SourceLocation UsingLoc, UnqualifiedId &Name,
@@ -6369,6 +6404,9 @@ public:
 
   // Marks SS invalid if it represents an incomplete type.
   bool RequireCompleteDeclContext(CXXScopeSpec &SS, DeclContext *DC);
+  // Complete an enum decl, maybe without a scope spec.
+  bool RequireCompleteEnumDecl(EnumDecl *D, SourceLocation L,
+                               CXXScopeSpec *SS = nullptr);
 
   DeclContext *computeDeclContext(QualType T);
   DeclContext *computeDeclContext(const CXXScopeSpec &SS,
@@ -10180,7 +10218,8 @@ private:
   void DestroyDataSharingAttributesStack();
   ExprResult
   VerifyPositiveIntegerConstantInClause(Expr *Op, OpenMPClauseKind CKind,
-                                        bool StrictlyPositive = true);
+                                        bool StrictlyPositive = true,
+                                        bool SuppressExprDiags = false);
   /// Returns OpenMP nesting level for current directive.
   unsigned getOpenMPNestingLevel() const;
 
@@ -10197,6 +10236,25 @@ private:
 
   /// Pop OpenMP function region for non-capturing function.
   void popOpenMPFunctionRegion(const sema::FunctionScopeInfo *OldFSI);
+
+  /// Analyzes and checks a loop nest for use by a loop transformation.
+  ///
+  /// \param Kind          The loop transformation directive kind.
+  /// \param NumLoops      How many nested loops the directive is expecting.
+  /// \param AStmt         Associated statement of the transformation directive.
+  /// \param LoopHelpers   [out] The loop analysis result.
+  /// \param Body          [out] The body code nested in \p NumLoops loop.
+  /// \param OriginalInits [out] Collection of statements and declarations that
+  ///                      must have been executed/declared before entering the
+  ///                      loop.
+  ///
+  /// \return Whether there was any error.
+  bool checkTransformableLoopNest(
+      OpenMPDirectiveKind Kind, Stmt *AStmt, int NumLoops,
+      SmallVectorImpl<OMPLoopBasedDirective::HelperExprs> &LoopHelpers,
+      Stmt *&Body,
+      SmallVectorImpl<SmallVector<llvm::PointerUnion<Stmt *, Decl *>, 0>>
+          &OriginalInits);
 
   /// Helper to keep information about the current `omp begin/end declare
   /// variant` nesting.
@@ -10503,6 +10561,11 @@ public:
   StmtResult ActOnOpenMPTileDirective(ArrayRef<OMPClause *> Clauses,
                                       Stmt *AStmt, SourceLocation StartLoc,
                                       SourceLocation EndLoc);
+  /// Called on well-formed '#pragma omp unroll' after parsing of its clauses
+  /// and the associated statement.
+  StmtResult ActOnOpenMPUnrollDirective(ArrayRef<OMPClause *> Clauses,
+                                        Stmt *AStmt, SourceLocation StartLoc,
+                                        SourceLocation EndLoc);
   /// Called on well-formed '\#pragma omp for' after parsing
   /// of the associated statement.
   StmtResult
@@ -10858,6 +10921,13 @@ public:
                                     SourceLocation StartLoc,
                                     SourceLocation LParenLoc,
                                     SourceLocation EndLoc);
+  /// Called on well-form 'full' clauses.
+  OMPClause *ActOnOpenMPFullClause(SourceLocation StartLoc,
+                                   SourceLocation EndLoc);
+  /// Called on well-form 'partial' clauses.
+  OMPClause *ActOnOpenMPPartialClause(Expr *FactorExpr, SourceLocation StartLoc,
+                                      SourceLocation LParenLoc,
+                                      SourceLocation EndLoc);
   /// Called on well-formed 'collapse' clause.
   OMPClause *ActOnOpenMPCollapseClause(Expr *NumForLoops,
                                        SourceLocation StartLoc,
@@ -11247,11 +11317,11 @@ public:
   /// ImpCastExprToType - If Expr is not of type 'Type', insert an implicit
   /// cast.  If there is already an implicit cast, merge into the existing one.
   /// If isLvalue, the result of the cast is an lvalue.
-  ExprResult ImpCastExprToType(Expr *E, QualType Type, CastKind CK,
-                               ExprValueKind VK = VK_RValue,
-                               const CXXCastPath *BasePath = nullptr,
-                               CheckedConversionKind CCK
-                                  = CCK_ImplicitConversion);
+  ExprResult
+  ImpCastExprToType(Expr *E, QualType Type, CastKind CK,
+                    ExprValueKind VK = VK_PRValue,
+                    const CXXCastPath *BasePath = nullptr,
+                    CheckedConversionKind CCK = CCK_ImplicitConversion);
 
   /// ScalarTypeToBooleanCastKind - Returns the cast kind corresponding
   /// to the conversion from scalar type ScalarTy to the Boolean type.
@@ -11536,7 +11606,7 @@ public:
                                        CheckedConversionKind CCK);
 
   ExprResult PerformQualificationConversion(
-      Expr *E, QualType Ty, ExprValueKind VK = VK_RValue,
+      Expr *E, QualType Ty, ExprValueKind VK = VK_PRValue,
       CheckedConversionKind CCK = CCK_ImplicitConversion);
 
   /// the following "Check" methods will return a valid/converted QualType
@@ -12065,6 +12135,15 @@ public:
   CUDAFunctionTarget IdentifyCUDATarget(const FunctionDecl *D,
                                         bool IgnoreImplicitHDAttr = false);
   CUDAFunctionTarget IdentifyCUDATarget(const ParsedAttributesView &Attrs);
+
+  enum CUDAVariableTarget {
+    CVT_Device,  /// Emitted on device side with a shadow variable on host side
+    CVT_Host,    /// Emitted on host side only
+    CVT_Both,    /// Emitted on both sides with different addresses
+    CVT_Unified, /// Emitted as a unified address, e.g. managed variables
+  };
+  /// Determines whether the given variable is emitted on host or device side.
+  CUDAVariableTarget IdentifyCUDATarget(const VarDecl *D);
 
   /// Gets the CUDA target for the current context.
   CUDAFunctionTarget CurrentCUDATarget() {

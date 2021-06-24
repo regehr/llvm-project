@@ -134,11 +134,11 @@ template <class Stream, class T>
 */
 
 #include <__config>
-#include <ios>
-#include <streambuf>
-#include <locale>
-#include <iterator>
 #include <bitset>
+#include <ios>
+#include <iterator>
+#include <locale>
+#include <streambuf>
 #include <version>
 
 #if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
@@ -254,8 +254,7 @@ public:
     ~sentry();
 
     _LIBCPP_INLINE_VISIBILITY
-        _LIBCPP_EXPLICIT
-        operator bool() const {return __ok_;}
+    explicit operator bool() const {return __ok_;}
 };
 
 template <class _CharT, class _Traits>

@@ -32,6 +32,7 @@
 #include "llvm/IR/GlobalIFunc.h"
 #include "llvm/IR/GlobalObject.h"
 #include "llvm/IR/InlineAsm.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Metadata.h"
@@ -356,10 +357,6 @@ bool LLParser::parseTopLevelEntities() {
       if (parseModuleAsm())
         return true;
       break;
-    case lltok::kw_deplibs:
-      if (parseDepLibs())
-        return true;
-      break;
     case lltok::LocalVarID:
       if (parseUnnamedType())
         return true;
@@ -457,29 +454,6 @@ bool LLParser::parseSourceFileName() {
   if (M)
     M->setSourceFileName(SourceFileName);
   return false;
-}
-
-/// toplevelentity
-///   ::= 'deplibs' '=' '[' ']'
-///   ::= 'deplibs' '=' '[' STRINGCONSTANT (',' STRINGCONSTANT)* ']'
-/// FIXME: Remove in 4.0. Currently parse, but ignore.
-bool LLParser::parseDepLibs() {
-  assert(Lex.getKind() == lltok::kw_deplibs);
-  Lex.Lex();
-  if (parseToken(lltok::equal, "expected '=' after deplibs") ||
-      parseToken(lltok::lsquare, "expected '=' after deplibs"))
-    return true;
-
-  if (EatIfPresent(lltok::rsquare))
-    return false;
-
-  do {
-    std::string Str;
-    if (parseStringConstant(Str))
-      return true;
-  } while (EatIfPresent(lltok::comma));
-
-  return parseToken(lltok::rsquare, "expected ']' at end of list");
 }
 
 /// parseUnnamedType:
@@ -1397,6 +1371,9 @@ bool LLParser::parseFnAttributeValuePairs(AttrBuilder &B,
     case lltok::kw_noprofile: B.addAttribute(Attribute::NoProfile); break;
     case lltok::kw_norecurse: B.addAttribute(Attribute::NoRecurse); break;
     case lltok::kw_nounwind: B.addAttribute(Attribute::NoUnwind); break;
+    case lltok::kw_nosanitize_coverage:
+      B.addAttribute(Attribute::NoSanitizeCoverage);
+      break;
     case lltok::kw_null_pointer_is_valid:
       B.addAttribute(Attribute::NullPointerIsValid); break;
     case lltok::kw_optforfuzzing:
@@ -1493,23 +1470,19 @@ static inline GlobalValue *createGlobalFwdRef(Module *M, PointerType *PTy,
 
 Value *LLParser::checkValidVariableType(LocTy Loc, const Twine &Name, Type *Ty,
                                         Value *Val, bool IsCall) {
-  if (Val->getType() == Ty)
+  Type *ValTy = Val->getType();
+  if (ValTy == Ty)
     return Val;
-  // For calls we also accept variables in the program address space.
-  Type *SuggestedTy = Ty;
-  if (IsCall && isa<PointerType>(Ty)) {
-    Type *TyInProgAS = cast<PointerType>(Ty)->getElementType()->getPointerTo(
-        M->getDataLayout().getProgramAddressSpace());
-    SuggestedTy = TyInProgAS;
-    if (Val->getType() == TyInProgAS)
-      return Val;
-  }
+  // For calls, we also allow opaque pointers.
+  if (IsCall && ValTy == PointerType::get(Ty->getContext(),
+                                          Ty->getPointerAddressSpace()))
+    return Val;
   if (Ty->isLabelTy())
     error(Loc, "'" + Name + "' is not a basic block");
   else
     error(Loc, "'" + Name + "' defined with type '" +
                    getTypeString(Val->getType()) + "' but expected '" +
-                   getTypeString(SuggestedTy) + "'");
+                   getTypeString(Ty) + "'");
   return nullptr;
 }
 
@@ -1824,6 +1797,7 @@ bool LLParser::parseOptionalParamAttrs(AttrBuilder &B) {
     case lltok::kw_noreturn:
     case lltok::kw_nocf_check:
     case lltok::kw_nounwind:
+    case lltok::kw_nosanitize_coverage:
     case lltok::kw_optforfuzzing:
     case lltok::kw_optnone:
     case lltok::kw_optsize:
@@ -1935,6 +1909,7 @@ bool LLParser::parseOptionalReturnAttrs(AttrBuilder &B) {
     case lltok::kw_noreturn:
     case lltok::kw_nocf_check:
     case lltok::kw_nounwind:
+    case lltok::kw_nosanitize_coverage:
     case lltok::kw_optforfuzzing:
     case lltok::kw_optnone:
     case lltok::kw_optsize:
@@ -3870,7 +3845,7 @@ bool LLParser::parseValID(ValID &ID, PerFunctionState *PFS) {
 
       Type *BaseType = Elts[0]->getType();
       auto *BasePointerType = cast<PointerType>(BaseType->getScalarType());
-      if (Ty != BasePointerType->getElementType()) {
+      if (!BasePointerType->isOpaqueOrPointeeTypeMatches(Ty)) {
         return error(
             ExplicitTypeLoc,
             typeComparisonErrorMessage(
@@ -7582,13 +7557,10 @@ int LLParser::parseCmpXchg(Instruction *&Inst, PerFunctionState &PFS) {
       parseOptionalCommaAlign(Alignment, AteExtraComma))
     return true;
 
-  if (SuccessOrdering == AtomicOrdering::Unordered ||
-      FailureOrdering == AtomicOrdering::Unordered)
-    return tokError("cmpxchg cannot be unordered");
-  if (FailureOrdering == AtomicOrdering::Release ||
-      FailureOrdering == AtomicOrdering::AcquireRelease)
-    return tokError(
-        "cmpxchg failure ordering cannot include release semantics");
+  if (!AtomicCmpXchgInst::isValidSuccessOrdering(SuccessOrdering))
+    return tokError("invalid cmpxchg success ordering");
+  if (!AtomicCmpXchgInst::isValidFailureOrdering(FailureOrdering))
+    return tokError("invalid cmpxchg failure ordering");
   if (!Ptr->getType()->isPointerTy())
     return error(PtrLoc, "cmpxchg operand must be a pointer");
   if (!cast<PointerType>(Ptr->getType())
@@ -9174,6 +9146,7 @@ bool LLParser::parseOptionalParamAccesses(
       return true;
     CallsNum += ParamAccess.Calls.size();
     assert(VContexts.size() == CallsNum);
+    (void)CallsNum;
     Params.emplace_back(std::move(ParamAccess));
   } while (EatIfPresent(lltok::comma));
 

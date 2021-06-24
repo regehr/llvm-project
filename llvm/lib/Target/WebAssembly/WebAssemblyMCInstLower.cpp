@@ -107,9 +107,8 @@ MCSymbol *WebAssemblyMCInstLower::GetExternalSymbolSymbol(
         strcmp(Name, "__stack_pointer") == 0 || strcmp(Name, "__tls_base") == 0;
     WasmSym->setType(wasm::WASM_SYMBOL_TYPE_GLOBAL);
     WasmSym->setGlobalType(wasm::WasmGlobalType{
-        uint8_t(Subtarget.hasAddr64() && strcmp(Name, "__table_base") != 0
-                    ? wasm::WASM_TYPE_I64
-                    : wasm::WASM_TYPE_I32),
+        uint8_t(Subtarget.hasAddr64() ? wasm::WASM_TYPE_I64
+                                      : wasm::WASM_TYPE_I32),
         Mutable});
     return WasmSym;
   }
@@ -117,11 +116,10 @@ MCSymbol *WebAssemblyMCInstLower::GetExternalSymbolSymbol(
   SmallVector<wasm::ValType, 4> Returns;
   SmallVector<wasm::ValType, 4> Params;
   if (strcmp(Name, "__cpp_exception") == 0) {
-    WasmSym->setType(wasm::WASM_SYMBOL_TYPE_EVENT);
+    WasmSym->setType(wasm::WASM_SYMBOL_TYPE_TAG);
     // We can't confirm its signature index for now because there can be
     // imported exceptions. Set it to be 0 for now.
-    WasmSym->setEventType(
-        {wasm::WASM_EVENT_ATTRIBUTE_EXCEPTION, /* SigIndex */ 0});
+    WasmSym->setTagType({wasm::WASM_TAG_ATTRIBUTE_EXCEPTION, /* SigIndex */ 0});
     // We may have multiple C++ compilation units to be linked together, each of
     // which defines the exception symbol. To resolve them, we declare them as
     // weak.
@@ -180,8 +178,8 @@ MCOperand WebAssemblyMCInstLower::lowerSymbolOperand(const MachineOperand &MO,
       report_fatal_error("Function addresses with offsets not supported");
     if (WasmSym->isGlobal())
       report_fatal_error("Global indexes with offsets not supported");
-    if (WasmSym->isEvent())
-      report_fatal_error("Event indexes with offsets not supported");
+    if (WasmSym->isTag())
+      report_fatal_error("Tag indexes with offsets not supported");
     if (WasmSym->isTable())
       report_fatal_error("Table indexes with offsets not supported");
 

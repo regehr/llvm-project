@@ -14,7 +14,6 @@
 #ifndef MLIR_DIALECT_STANDARDOPS_IR_OPS_H
 #define MLIR_DIALECT_STANDARDOPS_IR_OPS_H
 
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Dialect.h"
@@ -24,7 +23,6 @@
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Interfaces/VectorInterfaces.h"
-#include "mlir/Interfaces/ViewLikeInterface.h"
 
 // Pull in all enum type definitions and utility function declarations.
 #include "mlir/Dialect/StandardOps/IR/OpsEnums.h.inc"
@@ -35,18 +33,14 @@ class Builder;
 class FuncOp;
 class OpBuilder;
 class PatternRewriter;
-
-/// Return the list of Range (i.e. offset, size, stride). Each Range
-/// entry contains either the dynamic value or a ConstantIndexOp constructed
-/// with `b` at location `loc`.
-SmallVector<Range, 8> getOrCreateRanges(OffsetSizeAndStrideOpInterface op,
-                                        OpBuilder &b, Location loc);
+} // namespace mlir
 
 #define GET_OP_CLASSES
 #include "mlir/Dialect/StandardOps/IR/Ops.h.inc"
 
 #include "mlir/Dialect/StandardOps/IR/OpsDialect.h.inc"
 
+namespace mlir {
 /// This is a refinement of the "constant" op for the case where it is
 /// returning a float value of FloatType.
 ///
@@ -119,6 +113,15 @@ bool applyCmpPredicate(CmpIPredicate predicate, const APInt &lhs,
 /// comparison predicates.
 bool applyCmpPredicate(CmpFPredicate predicate, const APFloat &lhs,
                        const APFloat &rhs);
+
+/// If ofr is a constant integer, i.e., an IntegerAttr or a ConstantOp with an
+/// IntegerAttr, return the integer.
+llvm::Optional<int64_t> getConstantIntValue(OpFoldResult ofr);
+
+/// Return true if ofr and value are the same integer.
+/// Ignore integer bitwidth and type mismatch that come from the fact there is
+/// no IndexAttr and that IndexType has no bitwidth.
+bool isEqualConstantInt(OpFoldResult ofr, int64_t value);
 
 /// Return true if ofr1 and ofr2 are the same integer constant attribute values
 /// or the same SSA value.
