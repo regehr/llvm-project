@@ -10,7 +10,10 @@
 #define DIALECT_LINALG_TRANSFORMS_TRANSFORMS_H_
 
 #include "mlir/Dialect/Linalg/Utils/Utils.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/Utils.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/Dialect/Vector/VectorOps.h"
 #include "mlir/IR/Identifier.h"
 #include "mlir/IR/PatternMatch.h"
@@ -30,7 +33,7 @@ struct LinalgTilingOptions;
 
 /// Default function to control reshape folding. Skips folding unit dimension
 /// reshapes.
-bool skipUnitDimReshape(const OpResult &producer, const OpOperand &consumer);
+bool skipUnitDimReshape(const OpResult &producer, OpOperand &consumer);
 
 //===----------------------------------------------------------------------===//
 // Transformations exposed as function calls.
@@ -46,8 +49,11 @@ void populateConvVectorizationPatterns(
 /// parallel loops.
 void populateElementwiseToLinalgConversionPatterns(RewritePatternSet &patterns);
 
+/// Function type which is used to control when to stop fusion. It is expected
+/// that OpOperand is not modified in the callback. The OpOperand is not marked
+/// as const to allow callers to use non-const methods.
 using ControlElementwiseOpsFusionFn =
-    std::function<bool(const OpResult &producer, const OpOperand &consumer)>;
+    std::function<bool(const OpResult &producer, OpOperand &consumer)>;
 
 /// Patterns to fold an expanding (collapsing) tensor_reshape operation with its
 /// producer (consumer) generic operation by expanding the dimensionality of the
@@ -78,6 +84,12 @@ void populateLinalgBufferizePatterns(BufferizeTypeConverter &converter,
 /// tensors.
 void populateFoldUnitExtentDimsPatterns(RewritePatternSet &patterns);
 
+/// Patterns that are used to inline constant operands into linalg generic ops.
+void populateInlineConstantOperandsPatterns(RewritePatternSet &patterns);
+
+/// Pattern to convert TiledLoopOp to SCF loops.
+void populateTiledLoopToSCFPattern(RewritePatternSet &patterns);
+
 /// Options that control fusion of elementwise operations.
 struct LinalgElementwiseFusionOptions {
   /// Enable fusion of reshapes into the shape with elementwise operations. By
@@ -95,7 +107,7 @@ struct LinalgElementwiseFusionOptions {
   /// can be used to abort the fusion based on non-structural constraints. This
   /// is the hook for cost models to control the amount of fusion done.
   ControlElementwiseOpsFusionFn controlElementwiseOpsFusionFn =
-      [](const OpResult & /*producer */, const OpOperand & /*consumer */) {
+      [](const OpResult & /*producer */, OpOperand & /*consumer */) {
         return true;
       };
 
@@ -220,10 +232,9 @@ void interchangeGenericOp(PatternRewriter &rewriter, GenericOp genericOp,
 /// smallest constant value for the size of the buffer needed for each
 /// dimension. If that is not possible, contains the dynamic size of the
 /// subview. The call back should return the buffer to use.
-using AllocBufferCallbackFn =
-    std::function<Optional<Value>(OpBuilder &b, memref::SubViewOp subView,
-                                  ArrayRef<Value> boundingSubViewSize,
-                                  DataLayout &layout, OperationFolder *folder)>;
+using AllocBufferCallbackFn = std::function<Optional<Value>(
+    OpBuilder &b, memref::SubViewOp subView,
+    ArrayRef<Value> boundingSubViewSize, DataLayout &layout)>;
 
 /// Callback function type used to deallocate the buffers used to hold the
 /// promoted subview.
@@ -321,8 +332,7 @@ struct PromotionInfo {
 Optional<PromotionInfo>
 promoteSubviewAsNewBuffer(OpBuilder &b, Location loc, memref::SubViewOp subView,
                           AllocBufferCallbackFn allocationFn,
-                          DataLayout &layout,
-                          OperationFolder *folder = nullptr);
+                          DataLayout &layout);
 
 /// Promotes the `subViews` into a new buffer allocated at the insertion point
 /// `b`. Promotion occurs in 3 steps:
@@ -335,8 +345,7 @@ promoteSubviewAsNewBuffer(OpBuilder &b, Location loc, memref::SubViewOp subView,
 /// Returns the modified linalg op (the modification happens in place) as well
 /// as all the copy ops created.
 Optional<LinalgOp> promoteSubViews(OpBuilder &b, LinalgOp op,
-                                   LinalgPromotionOptions options,
-                                   OperationFolder *folder = nullptr);
+                                   LinalgPromotionOptions options);
 
 /// Emit a suitable vector form for a Linalg op with fully static shape.
 LogicalResult vectorizeLinalgOp(OpBuilder &builder, Operation *op,
@@ -487,6 +496,14 @@ struct LinalgTilingOptions {
   LinalgTilingOptions &
   setDistributionOptions(LinalgLoopDistributionOptions distributionOptions) {
     distribution = std::move(distributionOptions);
+    return *this;
+  }
+
+  /// Specification markers of how to distribute the `linalg.tiled_loop`.
+  SmallVector<StringRef, 2> distributionTypes = {};
+
+  LinalgTilingOptions &setDistributionTypes(ArrayRef<StringRef> types) {
+    distributionTypes.assign(types.begin(), types.end());
     return *this;
   }
 
@@ -849,18 +866,56 @@ void populateLinalgConvGeneralizationPatterns(
     RewritePatternSet &patterns,
     LinalgTransformationFilter filter = LinalgTransformationFilter());
 
+/// Linalg distribution patterns
+//
+/// Populates `patterns` with patterns to distribute linalg.tiled_loop.
+void populateLinalgDistributeTiledLoopPattern(
+    RewritePatternSet &patterns, const LinalgLoopDistributionOptions &opts,
+    const LinalgTransformationFilter &marker);
+
 //===----------------------------------------------------------------------===//
 // Op-specific patterns.
 //===----------------------------------------------------------------------===//
 
-/// PadTensorOp does not implement the LinalgStructuredOpInterface `LinalgOp`,
-/// it needs a specific pattern to vectorize.
-struct PadTensorOpVectorizationPattern : public OpRewritePattern<PadTensorOp> {
+/// PadTensorOp is not canonicalized away yet, so we provide a transformation to
+/// `linalg.generic`.
+struct PadTensorOpTransformationPattern : public OpRewritePattern<PadTensorOp> {
   using OpRewritePattern<PadTensorOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(PadTensorOp padOp,
                                 PatternRewriter &rewriter) const override;
 };
+
+using OptimizeCopyFn =
+    std::function<LogicalResult(PatternRewriter &, PadTensorOp, Value)>;
+
+/// Rewrite a PadTensorOp into a sequence of InitTensorOp, FillOp and
+/// InsertSliceOp. For now, only constant padding values are supported.
+/// `OptimizeCopyFn` can be used to customize copying step optimization.
+struct GeneralizePadTensorOpPattern : public OpRewritePattern<PadTensorOp> {
+  GeneralizePadTensorOpPattern(MLIRContext *context,
+                               OptimizeCopyFn optimizeCopyFn = nullptr,
+                               PatternBenefit benefit = 1)
+      : OpRewritePattern<PadTensorOp>(context, benefit),
+        optimizeCopyFn(optimizeCopyFn) {}
+  LogicalResult matchAndRewrite(PadTensorOp padOp,
+                                PatternRewriter &rewriter) const override;
+
+protected:
+  OptimizeCopyFn optimizeCopyFn;
+  Value createFillOrGenerateOp(PatternRewriter &rewriter, PadTensorOp padOp,
+                               Value dest,
+                               const SmallVector<Value> &dynSizes) const;
+};
+
+/// Populates `patterns` with patterns that vectorize linalg.pad_tensor.
+/// These patterns are meant to apply in a complementary fashion. Benefits
+/// are used to encode a certain ordering of pattern application. To avoid
+/// scattering magic constants throughout the code base, the patterns must be
+/// added with this function. `baseBenefit` can be used to offset the benefit
+/// of all PadTensorOp vectorization patterns by a certain value.
+void populatePadTensorOpVectorizationPatterns(
+    RewritePatternSet &patterns, PatternBenefit baseBenefit = 1);
 
 /// Match and rewrite for the pattern:
 /// ```
@@ -1048,6 +1103,15 @@ LogicalResult applyStagedPatterns(
     Operation *op, ArrayRef<FrozenRewritePatternSet> stage1Patterns,
     const FrozenRewritePatternSet &stage2Patterns,
     function_ref<LogicalResult(Operation *)> stage3Lambda = nullptr);
+
+/// Rewrite extract_slice(pad_tensor(x)) into pad_tensor(extract_slice(x)).
+struct ExtractSliceOfPadTensorSwapPattern
+    : public OpRewritePattern<tensor::ExtractSliceOp> {
+  using OpRewritePattern<tensor::ExtractSliceOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(tensor::ExtractSliceOp sliceOp,
+                                PatternRewriter &rewriter) const override;
+};
 
 } // namespace linalg
 } // namespace mlir

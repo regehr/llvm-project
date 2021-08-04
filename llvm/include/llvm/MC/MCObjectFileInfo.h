@@ -255,6 +255,7 @@ public:
   MCSection *getDataSection() const { return DataSection; }
   MCSection *getBSSSection() const { return BSSSection; }
   MCSection *getReadOnlySection() const { return ReadOnlySection; }
+  MCSection *getLSDASection() const { return LSDASection; }
   MCSection *getCompactUnwindSection() const { return CompactUnwindSection; }
   MCSection *getDwarfAbbrevSection() const { return DwarfAbbrevSection; }
   MCSection *getDwarfInfoSection() const { return DwarfInfoSection; }
@@ -425,6 +426,7 @@ private:
 
   void initMachOMCObjectFileInfo(const Triple &T);
   void initELFMCObjectFileInfo(const Triple &T, bool Large);
+  void initGOFFMCObjectFileInfo(const Triple &T);
   void initCOFFMCObjectFileInfo(const Triple &T);
   void initWasmMCObjectFileInfo(const Triple &T);
   void initXCOFFMCObjectFileInfo(const Triple &T);

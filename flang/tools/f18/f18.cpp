@@ -93,9 +93,10 @@ struct DriverOptions {
   bool warningsAreErrors{false}; // -Werror
   bool byteswapio{false}; // -byteswapio
   Fortran::parser::Encoding encoding{Fortran::parser::Encoding::UTF_8};
+  bool lineDirectives{true}; // -P disables
   bool syntaxOnly{false};
   bool dumpProvenance{false};
-  bool dumpCookedChars{false};
+  bool noReformat{false}; // -E -fno-reformat
   bool dumpUnparse{false};
   bool dumpUnparseWithSymbols{false};
   bool dumpParseTree{false};
@@ -105,7 +106,7 @@ struct DriverOptions {
   bool debugModuleWriter{false};
   bool defaultReal8{false};
   bool measureTree{false};
-  bool unparseTypedExprsToF18_FC{false};
+  bool useAnalyzedObjectsForUnparse{true};
   std::vector<std::string> F18_FCArgs;
   const char *prefix{nullptr};
   bool getDefinition{false};
@@ -221,9 +222,13 @@ std::string CompileFortran(std::string path, Fortran::parser::Options options,
     parsing.DumpProvenance(llvm::outs());
     return {};
   }
-  if (driver.dumpCookedChars) {
+  if (options.prescanAndReformat) {
     parsing.messages().Emit(llvm::errs(), allCookedSources);
-    parsing.DumpCookedChars(llvm::outs());
+    if (driver.noReformat) {
+      parsing.DumpCookedChars(llvm::outs());
+    } else {
+      parsing.EmitPreprocessedSource(llvm::outs(), driver.lineDirectives);
+    }
     return {};
   }
   parsing.Parse(llvm::outs());
@@ -253,8 +258,8 @@ std::string CompileFortran(std::string path, Fortran::parser::Options options,
   if (!driver.debugNoSemantics || driver.dumpSymbols ||
       driver.dumpUnparseWithSymbols || driver.getDefinition ||
       driver.getSymbolsSources) {
-    Fortran::semantics::Semantics semantics{semanticsContext, parseTree,
-        parsing.cooked().AsCharBlock(), driver.debugModuleWriter};
+    Fortran::semantics::Semantics semantics{
+        semanticsContext, parseTree, driver.debugModuleWriter};
     semantics.Perform();
     Fortran::semantics::RuntimeDerivedTypeTables tables;
     if (!semantics.AnyFatalError()) {
@@ -319,10 +324,26 @@ std::string CompileFortran(std::string path, Fortran::parser::Options options,
     Fortran::parser::DumpTree(llvm::outs(), parseTree, &asFortran);
   }
   if (driver.dumpUnparse) {
-    Unparse(llvm::outs(), parseTree, driver.encoding, true /*capitalize*/,
+    // Prepare the output stream
+    std::unique_ptr<llvm::raw_fd_ostream> os;
+    std::string outputFile = "-";
+    if (!driver.outputPath.empty()) {
+      outputFile = driver.outputPath;
+    }
+
+    std::error_code EC;
+    os.reset(new llvm::raw_fd_ostream(
+        outputFile, EC, llvm::sys::fs::OF_TextWithCRLF));
+    if (EC) {
+      llvm::errs() << EC.message() << "\n";
+      std::exit(EXIT_FAILURE);
+    }
+
+    Unparse(*os, parseTree, driver.encoding, true /*capitalize*/,
         options.features.IsEnabled(
             Fortran::common::LanguageFeature::BackslashEscapes),
-        nullptr /* action before each statement */, &asFortran);
+        nullptr /* action before each statement */,
+        driver.useAnalyzedObjectsForUnparse ? &asFortran : nullptr);
     return {};
   }
   if (driver.dumpPreFirTree) {
@@ -353,7 +374,7 @@ std::string CompileFortran(std::string path, Fortran::parser::Options options,
         options.features.IsEnabled(
             Fortran::common::LanguageFeature::BackslashEscapes),
         nullptr /* action before each statement */,
-        driver.unparseTypedExprsToF18_FC ? &asFortran : nullptr);
+        driver.useAnalyzedObjectsForUnparse ? &asFortran : nullptr);
   }
 
   RunOtherCompiler(driver, tmpSourcePath.data(), relo.data());
@@ -455,7 +476,7 @@ int main(int argc, char *const argv[]) {
     std::string suffix{arg.substr(dot + 1)};
     std::string prefix{arg.substr(0, 2)};
     args.pop_front();
-    if (arg.empty()) {
+    if (arg.empty() || arg == "-Xflang") {
     } else if (arg.at(0) != '-') {
       anyFiles = true;
       if (dot == std::string::npos) {
@@ -496,7 +517,8 @@ int main(int argc, char *const argv[]) {
     } else if (arg == "-Munlimited" || arg == "-ffree-line-length-none" ||
         arg == "-ffree-line-length-0" || arg == "-ffixed-line-length-none" ||
         arg == "-ffixed-line-length-0") {
-      // For reparsing f18's -E output of fixed-form cooked character stream
+      // For reparsing f18's -E -fno-reformat output of fixed-form
+      // cooked character stream
       options.fixedFormColumns = 1000000;
     } else if (arg == "-Mbackslash") {
       options.features.Enable(
@@ -520,7 +542,11 @@ int main(int argc, char *const argv[]) {
     } else if (arg == "-ed") {
       options.features.Enable(Fortran::common::LanguageFeature::OldDebugLines);
     } else if (arg == "-E") {
-      driver.dumpCookedChars = true;
+      options.prescanAndReformat = true;
+    } else if (arg == "-P") {
+      driver.lineDirectives = false;
+    } else if (arg == "-fno-reformat") {
+      driver.noReformat = true;
     } else if (arg == "-fbackslash" || arg == "-fno-backslash") {
       options.features.Enable(
           Fortran::common::LanguageFeature::BackslashEscapes,
@@ -578,8 +604,8 @@ int main(int argc, char *const argv[]) {
     } else if (arg == "-funparse-with-symbols" ||
         arg == "-fdebug-unparse-with-symbols") {
       driver.dumpUnparseWithSymbols = true;
-    } else if (arg == "-funparse-typed-exprs-to-f18-fc") {
-      driver.unparseTypedExprsToF18_FC = true;
+    } else if (arg == "-fno-analyzed-objects-for-unparse") {
+      driver.useAnalyzedObjectsForUnparse = false;
     } else if (arg == "-fparse-only" || arg == "-fsyntax-only") {
       driver.syntaxOnly = true;
     } else if (arg == "-c") {

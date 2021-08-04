@@ -933,7 +933,8 @@ Value *LibCallSimplifier::optimizeMemChr(CallInst *CI, IRBuilderBase &B) {
 
     // Finally merge both checks and cast to pointer type. The inttoptr
     // implicitly zexts the i1 to intptr type.
-    return B.CreateIntToPtr(B.CreateAnd(Bounds, Bits, "memchr"), CI->getType());
+    return B.CreateIntToPtr(B.CreateLogicalAnd(Bounds, Bits, "memchr"),
+                            CI->getType());
   }
 
   // Check if all arguments are constants.  If so, we can constant fold.
@@ -1424,17 +1425,18 @@ static Value *getPow(Value *InnerChain[33], unsigned Exp, IRBuilderBase &B) {
   return InnerChain[Exp];
 }
 
-// Return a properly extended 32-bit integer if the operation is an itofp.
-static Value *getIntToFPVal(Value *I2F, IRBuilderBase &B) {
+// Return a properly extended integer (DstWidth bits wide) if the operation is
+// an itofp.
+static Value *getIntToFPVal(Value *I2F, IRBuilderBase &B, unsigned DstWidth) {
   if (isa<SIToFPInst>(I2F) || isa<UIToFPInst>(I2F)) {
     Value *Op = cast<Instruction>(I2F)->getOperand(0);
-    // Make sure that the exponent fits inside an int32_t,
+    // Make sure that the exponent fits inside an "int" of size DstWidth,
     // thus avoiding any range issues that FP has not.
     unsigned BitWidth = Op->getType()->getPrimitiveSizeInBits();
-    if (BitWidth < 32 ||
-        (BitWidth == 32 && isa<SIToFPInst>(I2F)))
-      return isa<SIToFPInst>(I2F) ? B.CreateSExt(Op, B.getInt32Ty())
-                                  : B.CreateZExt(Op, B.getInt32Ty());
+    if (BitWidth < DstWidth ||
+        (BitWidth == DstWidth && isa<SIToFPInst>(I2F)))
+      return isa<SIToFPInst>(I2F) ? B.CreateSExt(Op, B.getIntNTy(DstWidth))
+                                  : B.CreateZExt(Op, B.getIntNTy(DstWidth));
   }
 
   return nullptr;
@@ -1524,7 +1526,7 @@ Value *LibCallSimplifier::replacePowWithExp(CallInst *Pow, IRBuilderBase &B) {
   if (match(Base, m_SpecificFP(2.0)) &&
       (isa<SIToFPInst>(Expo) || isa<UIToFPInst>(Expo)) &&
       hasFloatFn(TLI, Ty, LibFunc_ldexp, LibFunc_ldexpf, LibFunc_ldexpl)) {
-    if (Value *ExpoI = getIntToFPVal(Expo, B))
+    if (Value *ExpoI = getIntToFPVal(Expo, B, TLI->getIntSize()))
       return emitBinaryFloatFnCall(ConstantFP::get(Ty, 1.0), ExpoI, TLI,
                                    LibFunc_ldexp, LibFunc_ldexpf, LibFunc_ldexpl,
                                    B, Attrs);
@@ -1663,7 +1665,8 @@ Value *LibCallSimplifier::replacePowWithSqrt(CallInst *Pow, IRBuilderBase &B) {
 static Value *createPowWithIntegerExponent(Value *Base, Value *Expo, Module *M,
                                            IRBuilderBase &B) {
   Value *Args[] = {Base, Expo};
-  Function *F = Intrinsic::getDeclaration(M, Intrinsic::powi, Base->getType());
+  Type *Types[] = {Base->getType(), Expo->getType()};
+  Function *F = Intrinsic::getDeclaration(M, Intrinsic::powi, Types);
   return B.CreateCall(F, Args);
 }
 
@@ -1764,19 +1767,19 @@ Value *LibCallSimplifier::optimizePow(CallInst *Pow, IRBuilderBase &B) {
       return FMul;
     }
 
-    APSInt IntExpo(32, /*isUnsigned=*/false);
+    APSInt IntExpo(TLI->getIntSize(), /*isUnsigned=*/false);
     // powf(x, n) -> powi(x, n) if n is a constant signed integer value
     if (ExpoF->isInteger() &&
         ExpoF->convertToInteger(IntExpo, APFloat::rmTowardZero, &Ignored) ==
             APFloat::opOK) {
       return createPowWithIntegerExponent(
-          Base, ConstantInt::get(B.getInt32Ty(), IntExpo), M, B);
+          Base, ConstantInt::get(B.getIntNTy(TLI->getIntSize()), IntExpo), M, B);
     }
   }
 
   // powf(x, itofp(y)) -> powi(x, y)
   if (AllowApprox && (isa<SIToFPInst>(Expo) || isa<UIToFPInst>(Expo))) {
-    if (Value *ExpoI = getIntToFPVal(Expo, B))
+    if (Value *ExpoI = getIntToFPVal(Expo, B, TLI->getIntSize()))
       return createPowWithIntegerExponent(Base, ExpoI, M, B);
   }
 
@@ -1803,11 +1806,11 @@ Value *LibCallSimplifier::optimizeExp2(CallInst *CI, IRBuilderBase &B) {
   Type *Ty = CI->getType();
   Value *Op = CI->getArgOperand(0);
 
-  // Turn exp2(sitofp(x)) -> ldexp(1.0, sext(x))  if sizeof(x) <= 32
-  // Turn exp2(uitofp(x)) -> ldexp(1.0, zext(x))  if sizeof(x) < 32
+  // Turn exp2(sitofp(x)) -> ldexp(1.0, sext(x))  if sizeof(x) <= IntSize
+  // Turn exp2(uitofp(x)) -> ldexp(1.0, zext(x))  if sizeof(x) < IntSize
   if ((isa<SIToFPInst>(Op) || isa<UIToFPInst>(Op)) &&
       hasFloatFn(TLI, Ty, LibFunc_ldexp, LibFunc_ldexpf, LibFunc_ldexpl)) {
-    if (Value *Exp = getIntToFPVal(Op, B))
+    if (Value *Exp = getIntToFPVal(Op, B, TLI->getIntSize()))
       return emitBinaryFloatFnCall(ConstantFP::get(Ty, 1.0), Exp, TLI,
                                    LibFunc_ldexp, LibFunc_ldexpf, LibFunc_ldexpl,
                                    B, Attrs);
@@ -2465,6 +2468,7 @@ Value *LibCallSimplifier::optimizeSPrintFString(CallInst *CI,
     return nullptr;
 
   // If we just have a format string (nothing else crazy) transform it.
+  Value *Dest = CI->getArgOperand(0);
   if (CI->getNumArgOperands() == 2) {
     // Make sure there's no % in the constant array.  We could try to handle
     // %% -> % in the future if we cared.
@@ -2473,7 +2477,7 @@ Value *LibCallSimplifier::optimizeSPrintFString(CallInst *CI,
 
     // sprintf(str, fmt) -> llvm.memcpy(align 1 str, align 1 fmt, strlen(fmt)+1)
     B.CreateMemCpy(
-        CI->getArgOperand(0), Align(1), CI->getArgOperand(1), Align(1),
+        Dest, Align(1), CI->getArgOperand(1), Align(1),
         ConstantInt::get(DL.getIntPtrType(CI->getContext()),
                          FormatStr.size() + 1)); // Copy the null byte.
     return ConstantInt::get(CI->getType(), FormatStr.size());
@@ -2491,7 +2495,7 @@ Value *LibCallSimplifier::optimizeSPrintFString(CallInst *CI,
     if (!CI->getArgOperand(2)->getType()->isIntegerTy())
       return nullptr;
     Value *V = B.CreateTrunc(CI->getArgOperand(2), B.getInt8Ty(), "char");
-    Value *Ptr = castToCStr(CI->getArgOperand(0), B);
+    Value *Ptr = castToCStr(Dest, B);
     B.CreateStore(V, Ptr);
     Ptr = B.CreateGEP(B.getInt8Ty(), Ptr, B.getInt32(1), "nul");
     B.CreateStore(B.getInt8(0), Ptr);
@@ -2507,19 +2511,20 @@ Value *LibCallSimplifier::optimizeSPrintFString(CallInst *CI,
 
     if (CI->use_empty())
       // sprintf(dest, "%s", str) -> strcpy(dest, str)
-      return emitStrCpy(CI->getArgOperand(0), CI->getArgOperand(2), B, TLI);
+      return emitStrCpy(Dest, CI->getArgOperand(2), B, TLI);
 
     uint64_t SrcLen = GetStringLength(CI->getArgOperand(2));
     if (SrcLen) {
       B.CreateMemCpy(
-          CI->getArgOperand(0), Align(1), CI->getArgOperand(2), Align(1),
+          Dest, Align(1), CI->getArgOperand(2), Align(1),
           ConstantInt::get(DL.getIntPtrType(CI->getContext()), SrcLen));
       // Returns total number of characters written without null-character.
       return ConstantInt::get(CI->getType(), SrcLen - 1);
-    } else if (Value *V = emitStpCpy(CI->getArgOperand(0), CI->getArgOperand(2),
-                                     B, TLI)) {
+    } else if (Value *V = emitStpCpy(Dest, CI->getArgOperand(2), B, TLI)) {
       // sprintf(dest, "%s", str) -> stpcpy(dest, str) - dest
-      Value *PtrDiff = B.CreatePtrDiff(V, CI->getArgOperand(0));
+      // Handle mismatched pointer types (goes away with typeless pointers?).
+      V = B.CreatePointerCast(V, Dest->getType());
+      Value *PtrDiff = B.CreatePtrDiff(V, Dest);
       return B.CreateIntCast(PtrDiff, CI->getType(), false);
     }
 
@@ -2534,8 +2539,7 @@ Value *LibCallSimplifier::optimizeSPrintFString(CallInst *CI,
       return nullptr;
     Value *IncLen =
         B.CreateAdd(Len, ConstantInt::get(Len->getType(), 1), "leninc");
-    B.CreateMemCpy(CI->getArgOperand(0), Align(1), CI->getArgOperand(2),
-                   Align(1), IncLen);
+    B.CreateMemCpy(Dest, Align(1), CI->getArgOperand(2), Align(1), IncLen);
 
     // The sprintf result is the unincremented number of bytes in the string.
     return B.CreateIntCast(Len, CI->getType(), false);
