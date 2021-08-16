@@ -1063,7 +1063,7 @@ private:
         // Forward parameter attributes from the callback to the callee.
         for (unsigned U = CallbackFirstArgOperand, E = CI->getNumArgOperands();
              U < E; ++U)
-          for (const Attribute &A : CI->getAttributes().getParamAttributes(U))
+          for (const Attribute &A : CI->getAttributes().getParamAttrs(U))
             NewCI->addParamAttr(
                 U - (CallbackFirstArgOperand - CallbackCalleeOperand), A);
 
@@ -2834,10 +2834,6 @@ struct AAKernelInfoFunction : AAKernelInfo {
     // to avoid other parts using the current constant value for simpliication.
     auto &OMPInfoCache = static_cast<OMPInformationCache &>(A.getInfoCache());
 
-    // If we have disabled SPMD-ization, stop
-    if (DisableOpenMPOptSPMDization)
-      SPMDCompatibilityTracker.indicatePessimisticFixpoint();
-
     Function *Fn = getAnchorScope();
     if (!OMPInfoCache.Kernels.count(Fn))
       return;
@@ -2976,6 +2972,9 @@ struct AAKernelInfoFunction : AAKernelInfo {
         dyn_cast<ConstantInt>(KernelInitCB->getArgOperand(InitIsSPMDArgNo));
     if (IsSPMDArg && !IsSPMDArg->isZero())
       SPMDCompatibilityTracker.indicateOptimisticFixpoint();
+    // This is a generic region but SPMDization is disabled so stop tracking.
+    else if (DisableOpenMPOptSPMDization)
+      SPMDCompatibilityTracker.indicatePessimisticFixpoint();
   }
 
   /// Modify the IR based on the KernelInfoState as the fixpoint iteration is

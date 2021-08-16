@@ -957,6 +957,8 @@ define i8 @umin(i8 %x, i8 %y, i8 %z) {
   ret i8 %m3
 }
 
+; negative test - too many uses
+
 define i8 @smax_uses(i8 %x, i8 %y, i8 %z) {
 ; CHECK-LABEL: @smax_uses(
 ; CHECK-NEXT:    [[M1:%.*]] = call i8 @llvm.smax.i8(i8 [[X:%.*]], i8 [[Y:%.*]])
@@ -970,6 +972,21 @@ define i8 @smax_uses(i8 %x, i8 %y, i8 %z) {
   call void @use(i8 %m1)
   %m2 = call i8 @llvm.smax.i8(i8 %x, i8 %z)
   call void @use(i8 %m2)
+  %m3 = call i8 @llvm.smax.i8(i8 %m1, i8 %m2)
+  ret i8 %m3
+}
+
+; negative test - must have common operand
+
+define i8 @smax_no_common_op(i8 %x, i8 %y, i8 %z, i8 %w) {
+; CHECK-LABEL: @smax_no_common_op(
+; CHECK-NEXT:    [[M1:%.*]] = call i8 @llvm.smax.i8(i8 [[X:%.*]], i8 [[Y:%.*]])
+; CHECK-NEXT:    [[M2:%.*]] = call i8 @llvm.smax.i8(i8 [[W:%.*]], i8 [[Z:%.*]])
+; CHECK-NEXT:    [[M3:%.*]] = call i8 @llvm.smax.i8(i8 [[M1]], i8 [[M2]])
+; CHECK-NEXT:    ret i8 [[M3]]
+;
+  %m1 = call i8 @llvm.smax.i8(i8 %x, i8 %y)
+  %m2 = call i8 @llvm.smax.i8(i8 %w, i8 %z)
   %m3 = call i8 @llvm.smax.i8(i8 %m1, i8 %m2)
   ret i8 %m3
 }
