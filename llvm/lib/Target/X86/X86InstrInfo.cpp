@@ -5177,6 +5177,26 @@ static bool hasUndefRegUpdate(unsigned Opcode, unsigned OpNum,
   case X86::VCVTUSI642SDZrr_Int:
   case X86::VCVTUSI642SDZrrb_Int:
   case X86::VCVTUSI642SDZrm_Int:
+  case X86::VCVTSI2SHZrr:
+  case X86::VCVTSI2SHZrm:
+  case X86::VCVTSI2SHZrr_Int:
+  case X86::VCVTSI2SHZrrb_Int:
+  case X86::VCVTSI2SHZrm_Int:
+  case X86::VCVTSI642SHZrr:
+  case X86::VCVTSI642SHZrm:
+  case X86::VCVTSI642SHZrr_Int:
+  case X86::VCVTSI642SHZrrb_Int:
+  case X86::VCVTSI642SHZrm_Int:
+  case X86::VCVTUSI2SHZrr:
+  case X86::VCVTUSI2SHZrm:
+  case X86::VCVTUSI2SHZrr_Int:
+  case X86::VCVTUSI2SHZrrb_Int:
+  case X86::VCVTUSI2SHZrm_Int:
+  case X86::VCVTUSI642SHZrr:
+  case X86::VCVTUSI642SHZrm:
+  case X86::VCVTUSI642SHZrr_Int:
+  case X86::VCVTUSI642SHZrrb_Int:
+  case X86::VCVTUSI642SHZrm_Int:
     // Load folding won't effect the undef register update since the input is
     // a GPR.
     return OpNum == 1 && !ForLoadFold;
@@ -5249,6 +5269,29 @@ static bool hasUndefRegUpdate(unsigned Opcode, unsigned OpNum,
   case X86::VRCP14SDZrm:
   case X86::VRCP14SSZrr:
   case X86::VRCP14SSZrm:
+  case X86::VRCPSHZrr:
+  case X86::VRCPSHZrm:
+  case X86::VRSQRTSHZrr:
+  case X86::VRSQRTSHZrm:
+  case X86::VREDUCESHZrmi:
+  case X86::VREDUCESHZrri:
+  case X86::VREDUCESHZrrib:
+  case X86::VGETEXPSHZr:
+  case X86::VGETEXPSHZrb:
+  case X86::VGETEXPSHZm:
+  case X86::VGETMANTSHZrri:
+  case X86::VGETMANTSHZrrib:
+  case X86::VGETMANTSHZrmi:
+  case X86::VRNDSCALESHZr:
+  case X86::VRNDSCALESHZr_Int:
+  case X86::VRNDSCALESHZrb_Int:
+  case X86::VRNDSCALESHZm:
+  case X86::VRNDSCALESHZm_Int:
+  case X86::VSQRTSHZr:
+  case X86::VSQRTSHZr_Int:
+  case X86::VSQRTSHZrb_Int:
+  case X86::VSQRTSHZm:
+  case X86::VSQRTSHZm_Int:
   case X86::VRCP28SDZr:
   case X86::VRCP28SDZrb:
   case X86::VRCP28SDZm:
@@ -5278,6 +5321,26 @@ static bool hasUndefRegUpdate(unsigned Opcode, unsigned OpNum,
   case X86::VSQRTSDZrb_Int:
   case X86::VSQRTSDZm:
   case X86::VSQRTSDZm_Int:
+  case X86::VCVTSD2SHZrr:
+  case X86::VCVTSD2SHZrr_Int:
+  case X86::VCVTSD2SHZrrb_Int:
+  case X86::VCVTSD2SHZrm:
+  case X86::VCVTSD2SHZrm_Int:
+  case X86::VCVTSS2SHZrr:
+  case X86::VCVTSS2SHZrr_Int:
+  case X86::VCVTSS2SHZrrb_Int:
+  case X86::VCVTSS2SHZrm:
+  case X86::VCVTSS2SHZrm_Int:
+  case X86::VCVTSH2SDZrr:
+  case X86::VCVTSH2SDZrr_Int:
+  case X86::VCVTSH2SDZrrb_Int:
+  case X86::VCVTSH2SDZrm:
+  case X86::VCVTSH2SDZrm_Int:
+  case X86::VCVTSH2SSZrr:
+  case X86::VCVTSH2SSZrr_Int:
+  case X86::VCVTSH2SSZrrb_Int:
+  case X86::VCVTSH2SSZrm:
+  case X86::VCVTSH2SSZrm_Int:
     return OpNum == 1;
   case X86::VMOVSSZrrk:
   case X86::VMOVSDZrrk:
