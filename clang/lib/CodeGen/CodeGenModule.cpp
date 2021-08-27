@@ -130,8 +130,9 @@ CodeGenModule::CodeGenModule(ASTContext &C, const HeaderSearchOptions &HSO,
     C.getTargetInfo().getMaxPointerWidth());
   Int8PtrTy = Int8Ty->getPointerTo(0);
   Int8PtrPtrTy = Int8PtrTy->getPointerTo(0);
-  AllocaInt8PtrTy = Int8Ty->getPointerTo(
-      M.getDataLayout().getAllocaAddrSpace());
+  const llvm::DataLayout &DL = M.getDataLayout();
+  AllocaInt8PtrTy = Int8Ty->getPointerTo(DL.getAllocaAddrSpace());
+  GlobalsInt8PtrTy = Int8Ty->getPointerTo(DL.getDefaultGlobalsAddressSpace());
   ASTAllocaAddressSpace = getTargetCodeGenInfo().getASTAllocaAddressSpace();
 
   RuntimeCC = getTargetCodeGenInfo().getABIInfo().getRuntimeCC();
@@ -2136,6 +2137,9 @@ void CodeGenModule::SetFunctionAttributes(GlobalDecl GD, llvm::Function *F,
   else if (const auto *SA = FD->getAttr<SectionAttr>())
      F->setSection(SA->getName());
 
+  if (FD->hasAttr<ErrorAttr>())
+    F->addFnAttr("dontcall");
+
   // If we plan on emitting this inline builtin, we can't treat it as a builtin.
   if (FD->isInlineBuiltinDeclaration()) {
     const FunctionDecl *FDBody;
@@ -2529,7 +2533,7 @@ llvm::Constant *CodeGenModule::EmitAnnotationLineNo(SourceLocation L) {
 llvm::Constant *CodeGenModule::EmitAnnotationArgs(const AnnotateAttr *Attr) {
   ArrayRef<Expr *> Exprs = {Attr->args_begin(), Attr->args_size()};
   if (Exprs.empty())
-    return llvm::ConstantPointerNull::get(Int8PtrTy);
+    return llvm::ConstantPointerNull::get(GlobalsInt8PtrTy);
 
   llvm::FoldingSetNodeID ID;
   for (Expr *E : Exprs) {
@@ -2553,7 +2557,7 @@ llvm::Constant *CodeGenModule::EmitAnnotationArgs(const AnnotateAttr *Attr) {
                                       ".args");
   GV->setSection(AnnotationSection);
   GV->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
-  auto *Bitcasted = llvm::ConstantExpr::getBitCast(GV, Int8PtrTy);
+  auto *Bitcasted = llvm::ConstantExpr::getBitCast(GV, GlobalsInt8PtrTy);
 
   Lookup = Bitcasted;
   return Bitcasted;
@@ -2568,17 +2572,19 @@ llvm::Constant *CodeGenModule::EmitAnnotateAttr(llvm::GlobalValue *GV,
                  *LineNoCst = EmitAnnotationLineNo(L),
                  *Args = EmitAnnotationArgs(AA);
 
-  llvm::Constant *ASZeroGV = GV;
-  if (GV->getAddressSpace() != 0) {
-    ASZeroGV = llvm::ConstantExpr::getAddrSpaceCast(
-                   GV, GV->getValueType()->getPointerTo(0));
+  llvm::Constant *GVInGlobalsAS = GV;
+  if (GV->getAddressSpace() !=
+      getDataLayout().getDefaultGlobalsAddressSpace()) {
+    GVInGlobalsAS = llvm::ConstantExpr::getAddrSpaceCast(
+        GV, GV->getValueType()->getPointerTo(
+                getDataLayout().getDefaultGlobalsAddressSpace()));
   }
 
   // Create the ConstantStruct for the global annotation.
   llvm::Constant *Fields[] = {
-      llvm::ConstantExpr::getBitCast(ASZeroGV, Int8PtrTy),
-      llvm::ConstantExpr::getBitCast(AnnoGV, Int8PtrTy),
-      llvm::ConstantExpr::getBitCast(UnitGV, Int8PtrTy),
+      llvm::ConstantExpr::getBitCast(GVInGlobalsAS, GlobalsInt8PtrTy),
+      llvm::ConstantExpr::getBitCast(AnnoGV, GlobalsInt8PtrTy),
+      llvm::ConstantExpr::getBitCast(UnitGV, GlobalsInt8PtrTy),
       LineNoCst,
       Args,
   };
@@ -2851,7 +2857,8 @@ ConstantAddress CodeGenModule::GetWeakRefReference(const ValueDecl *VD) {
                                       GlobalDecl(cast<FunctionDecl>(VD)),
                                       /*ForVTable=*/false);
   else
-    Aliasee = GetOrCreateLLVMGlobal(AA->getAliasee(), DeclTy, 0, nullptr);
+    Aliasee = GetOrCreateLLVMGlobal(AA->getAliasee(), DeclTy, LangAS::Default,
+                                    nullptr);
 
   auto *F = cast<llvm::GlobalValue>(Aliasee);
   F->setLinkage(llvm::Function::ExternalWeakLinkage);
@@ -3824,10 +3831,11 @@ bool CodeGenModule::isTypeConstant(QualType Ty, bool ExcludeCtor) {
 /// mangled name but some other type.
 llvm::Constant *
 CodeGenModule::GetOrCreateLLVMGlobal(StringRef MangledName, llvm::Type *Ty,
-                                     unsigned AddrSpace, const VarDecl *D,
+                                     LangAS AddrSpace, const VarDecl *D,
                                      ForDefinition_t IsForDefinition) {
   // Lookup the entry, lazily creating it if necessary.
   llvm::GlobalValue *Entry = GetGlobalValue(MangledName);
+  unsigned TargetAS = getContext().getTargetAddressSpace(AddrSpace);
   if (Entry) {
     if (WeakRefReferences.erase(Entry)) {
       if (D && !D->hasAttr<WeakAttr>())
@@ -3841,7 +3849,7 @@ CodeGenModule::GetOrCreateLLVMGlobal(StringRef MangledName, llvm::Type *Ty,
     if (LangOpts.OpenMP && !LangOpts.OpenMPSimd && D)
       getOpenMPRuntime().registerTargetGlobalVariable(D, Entry);
 
-    if (Entry->getValueType() == Ty && Entry->getAddressSpace() == AddrSpace)
+    if (Entry->getValueType() == Ty && Entry->getAddressSpace() == TargetAS)
       return Entry;
 
     // If there are two attempts to define the same mangled name, issue an
@@ -3865,24 +3873,23 @@ CodeGenModule::GetOrCreateLLVMGlobal(StringRef MangledName, llvm::Type *Ty,
     }
 
     // Make sure the result is of the correct type.
-    if (Entry->getType()->getAddressSpace() != AddrSpace) {
+    if (Entry->getType()->getAddressSpace() != TargetAS) {
       return llvm::ConstantExpr::getAddrSpaceCast(Entry,
-                                                  Ty->getPointerTo(AddrSpace));
+                                                  Ty->getPointerTo(TargetAS));
     }
 
     // (If global is requested for a definition, we always need to create a new
     // global, not just return a bitcast.)
     if (!IsForDefinition)
-      return llvm::ConstantExpr::getBitCast(Entry, Ty->getPointerTo(AddrSpace));
+      return llvm::ConstantExpr::getBitCast(Entry, Ty->getPointerTo(TargetAS));
   }
 
   auto DAddrSpace = GetGlobalVarAddressSpace(D);
-  auto TargetAddrSpace = getContext().getTargetAddressSpace(DAddrSpace);
 
   auto *GV = new llvm::GlobalVariable(
       getModule(), Ty, false, llvm::GlobalValue::ExternalLinkage, nullptr,
       MangledName, nullptr, llvm::GlobalVariable::NotThreadLocal,
-      TargetAddrSpace);
+      getContext().getTargetAddressSpace(DAddrSpace));
 
   // If we already created a global with the same mangled name (but different
   // type) before, take its name and remove it from its parent.
@@ -4005,10 +4012,10 @@ CodeGenModule::GetOrCreateLLVMGlobal(StringRef MangledName, llvm::Type *Ty,
   LangAS ExpectedAS =
       D ? D->getType().getAddressSpace()
         : (LangOpts.OpenCL ? LangAS::opencl_global : LangAS::Default);
-  assert(getContext().getTargetAddressSpace(ExpectedAS) == AddrSpace);
+  assert(getContext().getTargetAddressSpace(ExpectedAS) == TargetAS);
   if (DAddrSpace != ExpectedAS) {
     return getTargetCodeGenInfo().performAddrSpaceCast(
-        *this, GV, DAddrSpace, ExpectedAS, Ty->getPointerTo(AddrSpace));
+        *this, GV, DAddrSpace, ExpectedAS, Ty->getPointerTo(TargetAS));
   }
 
   return GV;
@@ -4098,8 +4105,7 @@ llvm::Constant *CodeGenModule::GetAddrOfGlobalVar(const VarDecl *D,
     Ty = getTypes().ConvertTypeForMem(ASTTy);
 
   StringRef MangledName = getMangledName(D);
-  return GetOrCreateLLVMGlobal(MangledName, Ty,
-                               getContext().getTargetAddressSpace(ASTTy), D,
+  return GetOrCreateLLVMGlobal(MangledName, Ty, ASTTy.getAddressSpace(), D,
                                IsForDefinition);
 }
 
@@ -4108,10 +4114,8 @@ llvm::Constant *CodeGenModule::GetAddrOfGlobalVar(const VarDecl *D,
 llvm::Constant *
 CodeGenModule::CreateRuntimeVariable(llvm::Type *Ty,
                                      StringRef Name) {
-  auto AddrSpace =
-      getContext().getLangOpts().OpenCL
-          ? getContext().getTargetAddressSpace(LangAS::opencl_global)
-          : 0;
+  LangAS AddrSpace = getContext().getLangOpts().OpenCL ? LangAS::opencl_global
+                                                       : LangAS::Default;
   auto *Ret = GetOrCreateLLVMGlobal(Name, Ty, AddrSpace, nullptr);
   setDSOLocal(cast<llvm::GlobalValue>(Ret->stripPointerCasts()));
   return Ret;
@@ -4150,16 +4154,15 @@ CharUnits CodeGenModule::GetTargetTypeStoreSize(llvm::Type *Ty) const {
 }
 
 LangAS CodeGenModule::GetGlobalVarAddressSpace(const VarDecl *D) {
-  LangAS AddrSpace = LangAS::Default;
   if (LangOpts.OpenCL) {
-    AddrSpace = D ? D->getType().getAddressSpace() : LangAS::opencl_global;
-    assert(AddrSpace == LangAS::opencl_global ||
-           AddrSpace == LangAS::opencl_global_device ||
-           AddrSpace == LangAS::opencl_global_host ||
-           AddrSpace == LangAS::opencl_constant ||
-           AddrSpace == LangAS::opencl_local ||
-           AddrSpace >= LangAS::FirstTargetAddressSpace);
-    return AddrSpace;
+    LangAS AS = D ? D->getType().getAddressSpace() : LangAS::opencl_global;
+    assert(AS == LangAS::opencl_global ||
+           AS == LangAS::opencl_global_device ||
+           AS == LangAS::opencl_global_host ||
+           AS == LangAS::opencl_constant ||
+           AS == LangAS::opencl_local ||
+           AS >= LangAS::FirstTargetAddressSpace);
+    return AS;
   }
 
   if (LangOpts.SYCLIsDevice &&
@@ -4528,8 +4531,8 @@ void CodeGenModule::EmitExternalVarDeclaration(const VarDecl *D) {
     if (getCodeGenOpts().hasReducedDebugInfo()) {
       QualType ASTTy = D->getType();
       llvm::Type *Ty = getTypes().ConvertTypeForMem(D->getType());
-      llvm::Constant *GV = GetOrCreateLLVMGlobal(
-          D->getName(), Ty, getContext().getTargetAddressSpace(ASTTy), D);
+      llvm::Constant *GV =
+          GetOrCreateLLVMGlobal(D->getName(), Ty, ASTTy.getAddressSpace(), D);
       DI->EmitExternalVariable(
           cast<llvm::GlobalVariable>(GV->stripPointerCasts()), D);
     }
@@ -4901,7 +4904,7 @@ void CodeGenModule::EmitAliasDefinition(GlobalDecl GD) {
                                       /*ForVTable=*/false);
     LT = getFunctionLinkage(GD);
   } else {
-    Aliasee = GetOrCreateLLVMGlobal(AA->getAliasee(), DeclTy, 0,
+    Aliasee = GetOrCreateLLVMGlobal(AA->getAliasee(), DeclTy, LangAS::Default,
                                     /*D=*/nullptr);
     if (const auto *VD = dyn_cast<VarDecl>(GD.getDecl()))
       LT = getLLVMLinkageVarDefinition(VD, D->getType().isConstQualified());
@@ -6447,5 +6450,5 @@ bool CodeGenModule::stopAutoInit() {
 
 void CodeGenModule::printPostfixForExternalizedStaticVar(
     llvm::raw_ostream &OS) const {
-  OS << ".static." << getContext().getCUIDHash();
+  OS << "__static__" << getContext().getCUIDHash();
 }

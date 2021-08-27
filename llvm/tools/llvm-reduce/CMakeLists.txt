@@ -35,7 +35,7 @@ add_llvm_tool(llvm-reduce
   deltas/ReduceUsingPasses.cpp
   deltas/ReduceInstsToArguments.cpp
   deltas/ReduceMetadata.cpp
-  deltas/ReduceModuleInlineAsm.cpp
+  deltas/ReduceModuleData.cpp
   deltas/ReduceOperandBundles.cpp
   deltas/ReduceSpecialGlobals.cpp
   llvm-reduce.cpp

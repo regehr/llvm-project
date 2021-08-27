@@ -739,24 +739,25 @@ void llvm::breakLoopBackedge(Loop *L, DominatorTree &DT, ScalarEvolution &SE,
 
         IRBuilder<> Builder(BI);
         auto *NewBI = Builder.CreateBr(ExitBB);
-        // Transfer the metadata to the new branch instruction.
-        NewBI->copyMetadata(*BI, {LLVMContext::MD_loop, LLVMContext::MD_dbg,
+        // Transfer the metadata to the new branch instruction (minus the
+        // loop info since this is no longer a loop)
+        NewBI->copyMetadata(*BI, {LLVMContext::MD_dbg,
                                   LLVMContext::MD_annotation});
 
         BI->eraseFromParent();
         DTU.applyUpdates({{DominatorTree::Delete, Latch, Header}});
         return;
       }
-
-      // General case.  By splitting the backedge, and then explicitly making it
-      // unreachable we gracefully handle corner cases such as switch and invoke
-      // termiantors.
-      auto *BackedgeBB = SplitEdge(Latch, Header, &DT, &LI, MSSAU.get());
-
-      DomTreeUpdater DTU(&DT, DomTreeUpdater::UpdateStrategy::Eager);
-      (void)changeToUnreachable(BackedgeBB->getTerminator(),
-                                /*PreserveLCSSA*/ true, &DTU, MSSAU.get());
     }
+
+    // General case.  By splitting the backedge, and then explicitly making it
+    // unreachable we gracefully handle corner cases such as switch and invoke
+    // termiantors.
+    auto *BackedgeBB = SplitEdge(Latch, Header, &DT, &LI, MSSAU.get());
+
+    DomTreeUpdater DTU(&DT, DomTreeUpdater::UpdateStrategy::Eager);
+    (void)changeToUnreachable(BackedgeBB->getTerminator(),
+                              /*PreserveLCSSA*/ true, &DTU, MSSAU.get());
   }();
 
   // Erase (and destroy) this loop instance.  Handles relinking sub-loops

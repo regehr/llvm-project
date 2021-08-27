@@ -18,6 +18,12 @@ if (NOT LIBOMPTARGET_BUILD_AMDGCN_BCLIB)
   return()
 endif()
 
+if (NOT LIBOMPTARGET_LLVM_INCLUDE_DIRS)
+  libomptarget_say("Not building AMDGCN device RTL: Missing definition for LIBOMPTARGET_LLVM_INCLUDE_DIRS")
+  return()
+endif()
+
+
 # Copied from nvptx CMakeLists
 if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "x86_64")
   set(aux_triple x86_64-unknown-linux-gnu)
@@ -37,12 +43,15 @@ if (LLVM_DIR)
     NO_DEFAULT_PATH)
   find_program(OPT_TOOL opt PATHS ${LLVM_TOOLS_BINARY_DIR} NO_DEFAULT_PATH)
   libomptarget_say("Building AMDGCN device RTL. Using clang: ${CLANG_TOOL}")
-else()
+elseif (LLVM_TOOL_CLANG_BUILD AND NOT CMAKE_CROSSCOMPILING AND NOT OPENMP_STANDALONE_BUILD)
   # LLVM in-tree builds may use CMake target names to discover the tools.
   set(CLANG_TOOL $<TARGET_FILE:clang>)
   set(LINK_TOOL $<TARGET_FILE:llvm-link>)
   set(OPT_TOOL $<TARGET_FILE:opt>)
   libomptarget_say("Building AMDGCN device RTL. Using clang from in-tree build")
+else()
+  libomptarget_say("Not building AMDGCN device RTL. No appropriate clang found")
+  return()
 endif()
 
 project(omptarget-amdgcn)
@@ -98,10 +107,14 @@ else()
 endif()
 
 # create libraries
-set(mcpus gfx700 gfx701 gfx801 gfx803 gfx900 gfx902 gfx906 gfx908)
+set(mcpus gfx700 gfx701 gfx801 gfx803 gfx900 gfx902 gfx906 gfx908 gfx1010 gfx1030 gfx1031)
 if (DEFINED LIBOMPTARGET_AMDGCN_GFXLIST)
   set(mcpus ${LIBOMPTARGET_AMDGCN_GFXLIST})
 endif()
+
+# Prepend -I to each list element
+set (LIBOMPTARGET_LLVM_INCLUDE_DIRS_AMDGCN "${LIBOMPTARGET_LLVM_INCLUDE_DIRS}")
+list(TRANSFORM LIBOMPTARGET_LLVM_INCLUDE_DIRS_AMDGCN PREPEND "-I")
 
 macro(add_cuda_bc_library)
   set(cu_cmd ${CLANG_TOOL}
@@ -123,7 +136,8 @@ macro(add_cuda_bc_library)
     ${CUDA_DEBUG}
     -I${CMAKE_CURRENT_SOURCE_DIR}/src
     -I${devicertl_base_directory}/common/include
-    -I${devicertl_base_directory})
+    -I${devicertl_base_directory}
+    ${LIBOMPTARGET_LLVM_INCLUDE_DIRS_AMDGCN})
 
   set(bc1_files)
 
