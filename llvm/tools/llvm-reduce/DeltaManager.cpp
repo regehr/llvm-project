@@ -30,6 +30,7 @@
 #include "deltas/ReduceMetadata.h"
 #include "deltas/ReduceModuleData.h"
 #include "deltas/ReduceOperandBundles.h"
+#include "deltas/ReduceOperands.h"
 #include "deltas/ReduceSpecialGlobals.h"
 #include "llvm/Support/CommandLine.h"
 
