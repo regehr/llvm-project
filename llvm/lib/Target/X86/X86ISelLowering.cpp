@@ -25212,8 +25212,8 @@ X86TargetLowering::LowerDYNAMIC_STACKALLOC(SDValue Op,
                                 DAG.getRegister(Vreg, SPTy));
   } else {
     SDVTList NodeTys = DAG.getVTList(MVT::Other, MVT::Glue);
-    Chain = DAG.getNode(X86ISD::WIN_ALLOCA, dl, NodeTys, Chain, Size);
-    MF.getInfo<X86MachineFunctionInfo>()->setHasWinAlloca(true);
+    Chain = DAG.getNode(X86ISD::DYN_ALLOCA, dl, NodeTys, Chain, Size);
+    MF.getInfo<X86MachineFunctionInfo>()->setHasDynAlloca(true);
 
     const X86RegisterInfo *RegInfo = Subtarget.getRegisterInfo();
     Register SPReg = RegInfo->getStackRegister();
@@ -26067,16 +26067,16 @@ SDValue X86TargetLowering::LowerINTRINSIC_WO_CHAIN(SDValue Op,
       // Swap Src1 and Src2 in the node creation
       return DAG.getNode(IntrData->Opc0, dl, VT,Src2, Src1);
     }
-    case FMA_OP_MASKZ:
-    case FMA_OP_MASK: {
+    case CFMA_OP_MASKZ:
+    case CFMA_OP_MASK: {
       SDValue Src1 = Op.getOperand(1);
       SDValue Src2 = Op.getOperand(2);
       SDValue Src3 = Op.getOperand(3);
       SDValue Mask = Op.getOperand(4);
       MVT VT = Op.getSimpleValueType();
 
-      SDValue PassThru = Src1;
-      if (IntrData->Type == FMA_OP_MASKZ)
+      SDValue PassThru = Src3;
+      if (IntrData->Type == CFMA_OP_MASKZ)
         PassThru = getZeroVector(VT, Subtarget, DAG, dl);
 
       // We add rounding mode to the Node when
@@ -27010,6 +27010,12 @@ static SDValue LowerINTRINSIC_W_CHAIN(SDValue Op, const X86Subtarget &Subtarget,
                          Op.getOperand(0), Op.getOperand(2),
                          DAG.getConstant(0, dl, MVT::i32),
                          DAG.getConstant(0, dl, MVT::i32));
+    }
+    case llvm::Intrinsic::asan_check_memaccess: {
+      // Mark this as adjustsStack because it will be lowered to a call.
+      DAG.getMachineFunction().getFrameInfo().setAdjustsStack(true);
+      // Don't do anything here, we will expand these intrinsics out later.
+      return Op;
     }
     case llvm::Intrinsic::x86_flags_read_u32:
     case llvm::Intrinsic::x86_flags_read_u64:
@@ -32343,7 +32349,7 @@ const char *X86TargetLowering::getTargetNodeName(unsigned Opcode) const {
   NODE_NAME_CASE(VASTART_SAVE_XMM_REGS)
   NODE_NAME_CASE(VAARG_64)
   NODE_NAME_CASE(VAARG_X32)
-  NODE_NAME_CASE(WIN_ALLOCA)
+  NODE_NAME_CASE(DYN_ALLOCA)
   NODE_NAME_CASE(MEMBARRIER)
   NODE_NAME_CASE(MFENCE)
   NODE_NAME_CASE(SEG_ALLOCA)
@@ -40381,7 +40387,8 @@ bool X86TargetLowering::SimplifyDemandedBitsForTargetNode(
     // Don't attempt this on AVX512 as it might affect broadcast folding.
     // TODO: Should we attempt this for i32/i16 splats? They tend to be slower.
     if ((BitWidth == 64) && SrcVT.isScalarInteger() && !Subtarget.hasAVX512() &&
-        OriginalDemandedBits.countLeadingZeros() >= (BitWidth / 2)) {
+        OriginalDemandedBits.countLeadingZeros() >= (BitWidth / 2) &&
+        Src->hasOneUse()) {
       MVT NewSrcVT = MVT::getIntegerVT(BitWidth / 2);
       SDValue NewSrc =
           TLO.DAG.getNode(ISD::TRUNCATE, SDLoc(Src), NewSrcVT, Src);
@@ -44251,10 +44258,32 @@ static SDValue combineMulToPMADDWD(SDNode *N, SelectionDAG &DAG,
   if (DAG.ComputeNumSignBits(N1) < 17 || DAG.ComputeNumSignBits(N0) < 17)
     return SDValue();
 
-  // At least one of the elements must be zero in the upper 17 bits.
-  APInt Mask17 = APInt::getHighBitsSet(32, 17);
-  if (!DAG.MaskedValueIsZero(N1, Mask17) && !DAG.MaskedValueIsZero(N0, Mask17))
+  // At least one of the elements must be zero in the upper 17 bits, or can be
+  // safely made zero without altering the final result.
+  auto GetZeroableOp = [&](SDValue Op) {
+    APInt Mask17 = APInt::getHighBitsSet(32, 17);
+    if (DAG.MaskedValueIsZero(Op, Mask17))
+      return Op;
+    // Mask off upper 16-bits of sign-extended constants.
+    if (ISD::isBuildVectorOfConstantSDNodes(Op.getNode()))
+      return DAG.getNode(ISD::AND, SDLoc(N), VT, Op,
+                         DAG.getConstant(0xFFFF, SDLoc(N), VT));
+    // Convert sext(vXi16) to zext(vXi16).
+    // TODO: Handle sext from smaller types as well?
+    if (Op.getOpcode() == ISD::SIGN_EXTEND && VT.getSizeInBits() <= 128 &&
+        N->isOnlyUserOf(Op.getNode())) {
+      SDValue Src = Op.getOperand(0);
+      if (Src.getScalarValueSizeInBits() == 16)
+        return DAG.getNode(ISD::ZERO_EXTEND, SDLoc(N), VT, Src);
+    }
     return SDValue();
+  };
+  SDValue ZeroN0 = GetZeroableOp(N0);
+  SDValue ZeroN1 = GetZeroableOp(N1);
+  if (!ZeroN0 && !ZeroN1)
+    return SDValue();
+  N0 = ZeroN0 ? ZeroN0 : N0;
+  N1 = ZeroN1 ? ZeroN1 : N1;
 
   // Use SplitOpsAndApply to handle AVX splitting.
   auto PMADDWDBuilder = [](SelectionDAG &DAG, const SDLoc &DL,
@@ -44467,9 +44496,7 @@ static SDValue combineShiftToPMULH(SDNode *N, SelectionDAG &DAG,
            "SRL or SRA node is required here!");
   SDLoc DL(N);
 
-  // Only do this with SSE4.1. On earlier targets reduceVMULWidth will expand
-  // the multiply.
-  if (!Subtarget.hasSSE41())
+  if (!Subtarget.hasSSE2())
     return SDValue();
 
   // The operation feeding into the shift must be a multiply.
@@ -45442,17 +45469,19 @@ static unsigned convertIntLogicToFPLogicOpcode(unsigned Opcode) {
   return FPOpcode;
 }
 
-/// If both input operands of a logic op are being cast from floating point
-/// types, try to convert this into a floating point logic node to avoid
-/// unnecessary moves from SSE to integer registers.
+/// If both input operands of a logic op are being cast from floating-point
+/// types or FP compares, try to convert this into a floating-point logic node
+/// to avoid unnecessary moves from SSE to integer registers.
 static SDValue convertIntLogicToFPLogic(SDNode *N, SelectionDAG &DAG,
+                                        TargetLowering::DAGCombinerInfo &DCI,
                                         const X86Subtarget &Subtarget) {
   EVT VT = N->getValueType(0);
   SDValue N0 = N->getOperand(0);
   SDValue N1 = N->getOperand(1);
   SDLoc DL(N);
 
-  if (N0.getOpcode() != ISD::BITCAST || N1.getOpcode() != ISD::BITCAST)
+  if (!((N0.getOpcode() == ISD::BITCAST && N1.getOpcode() == ISD::BITCAST) ||
+        (N0.getOpcode() == ISD::SETCC && N1.getOpcode() == ISD::SETCC)))
     return SDValue();
 
   SDValue N00 = N0.getOperand(0);
@@ -45466,9 +45495,39 @@ static SDValue convertIntLogicToFPLogic(SDNode *N, SelectionDAG &DAG,
                               (Subtarget.hasFP16() && N00Type == MVT::f16)))
     return SDValue();
 
-  unsigned FPOpcode = convertIntLogicToFPLogicOpcode(N->getOpcode());
-  SDValue FPLogic = DAG.getNode(FPOpcode, DL, N00Type, N00, N10);
-  return DAG.getBitcast(VT, FPLogic);
+  if (N0.getOpcode() == ISD::BITCAST && !DCI.isBeforeLegalizeOps()) {
+    unsigned FPOpcode = convertIntLogicToFPLogicOpcode(N->getOpcode());
+    SDValue FPLogic = DAG.getNode(FPOpcode, DL, N00Type, N00, N10);
+    return DAG.getBitcast(VT, FPLogic);
+  }
+
+  // The vector ISA for FP predicates is incomplete before AVX, so converting
+  // COMIS* to CMPS* may not be a win before AVX.
+  // TODO: Check types/predicates to see if they are available with SSE/SSE2.
+  if (!Subtarget.hasAVX() || VT != MVT::i1 || N0.getOpcode() != ISD::SETCC ||
+      !N0.hasOneUse() || !N1.hasOneUse())
+    return SDValue();
+
+  // Convert scalar FP compares and logic to vector compares (COMIS* to CMPS*)
+  // and vector logic:
+  // logic (setcc N00, N01), (setcc N10, N11) -->
+  // extelt (logic (setcc (s2v N00), (s2v N01)), setcc (s2v N10), (s2v N11))), 0
+  unsigned NumElts = 128 / N00Type.getSizeInBits();
+  EVT VecVT = EVT::getVectorVT(*DAG.getContext(), N00Type, NumElts);
+  EVT BoolVecVT = EVT::getVectorVT(*DAG.getContext(), MVT::i1, NumElts);
+  SDValue ZeroIndex = DAG.getVectorIdxConstant(0, DL);
+  SDValue N01 = N0.getOperand(1);
+  SDValue N11 = N1.getOperand(1);
+  SDValue Vec00 = DAG.getNode(ISD::SCALAR_TO_VECTOR, DL, VecVT, N00);
+  SDValue Vec01 = DAG.getNode(ISD::SCALAR_TO_VECTOR, DL, VecVT, N01);
+  SDValue Vec10 = DAG.getNode(ISD::SCALAR_TO_VECTOR, DL, VecVT, N10);
+  SDValue Vec11 = DAG.getNode(ISD::SCALAR_TO_VECTOR, DL, VecVT, N11);
+  SDValue Setcc0 = DAG.getSetCC(DL, BoolVecVT, Vec00, Vec01,
+                                cast<CondCodeSDNode>(N0.getOperand(2))->get());
+  SDValue Setcc1 = DAG.getSetCC(DL, BoolVecVT, Vec10, Vec11,
+                                cast<CondCodeSDNode>(N1.getOperand(2))->get());
+  SDValue Logic = DAG.getNode(N->getOpcode(), DL, BoolVecVT, Setcc0, Setcc1);
+  return DAG.getNode(ISD::EXTRACT_VECTOR_ELT, DL, VT, Logic, ZeroIndex);
 }
 
 // Attempt to fold BITOP(MOVMSK(X),MOVMSK(Y)) -> MOVMSK(BITOP(X,Y))
@@ -45780,14 +45839,14 @@ static SDValue combineAnd(SDNode *N, SelectionDAG &DAG,
   if (SDValue R = combineBitOpWithMOVMSK(N, DAG))
     return R;
 
+  if (SDValue FPLogic = convertIntLogicToFPLogic(N, DAG, DCI, Subtarget))
+    return FPLogic;
+
   if (DCI.isBeforeLegalizeOps())
     return SDValue();
 
   if (SDValue R = combineCompareEqual(N, DAG, DCI, Subtarget))
     return R;
-
-  if (SDValue FPLogic = convertIntLogicToFPLogic(N, DAG, Subtarget))
-    return FPLogic;
 
   if (SDValue R = combineANDXORWithAllOnesIntoANDNP(N, DAG))
     return R;
@@ -46146,14 +46205,14 @@ static SDValue combineOr(SDNode *N, SelectionDAG &DAG,
   if (SDValue R = combineBitOpWithMOVMSK(N, DAG))
     return R;
 
+  if (SDValue FPLogic = convertIntLogicToFPLogic(N, DAG, DCI, Subtarget))
+    return FPLogic;
+
   if (DCI.isBeforeLegalizeOps())
     return SDValue();
 
   if (SDValue R = combineCompareEqual(N, DAG, DCI, Subtarget))
     return R;
-
-  if (SDValue FPLogic = convertIntLogicToFPLogic(N, DAG, Subtarget))
-    return FPLogic;
 
   if (SDValue R = canonicalizeBitSelect(N, DAG, Subtarget))
     return R;
@@ -47655,22 +47714,37 @@ static SDValue combineFMulcFCMulc(SDNode *N, SelectionDAG &DAG,
   return Res;
 }
 
-//  Try to combine the following nodes
-//  t21: v16f32 = X86ISD::VFMULC/VFCMULC t7, t8
-//  t15: v32f16 = bitcast t21
-//  t16: v32f16 = fadd nnan ninf nsz arcp contract afn reassoc t15, t2
-//  into X86ISD::VFMADDC/VFCMADDC if possible:
-//  t22: v16f32 = bitcast t2
-//  t23: v16f32 = nnan ninf nsz arcp contract afn reassoc
-//                X86ISD::VFMADDC/VFCMADDC t7, t8, t22
-//  t24: v32f16 = bitcast t23
+//  Try to combine the following nodes:
+//  FADD(A, FMA(B, C, 0)) and FADD(A, FMUL(B, C)) to FMA(B, C, A)
 static SDValue combineFaddCFmul(SDNode *N, SelectionDAG &DAG,
                                 const X86Subtarget &Subtarget) {
-  auto AllowContract = [&DAG](SDNode *N) {
+  auto AllowContract = [&DAG](const SDNodeFlags &Flags) {
     return DAG.getTarget().Options.AllowFPOpFusion == FPOpFusion::Fast ||
-           N->getFlags().hasAllowContract();
+           Flags.hasAllowContract();
   };
-  if (N->getOpcode() != ISD::FADD || !Subtarget.hasFP16() || !AllowContract(N))
+
+  auto HasNoSignedZero = [&DAG](const SDNodeFlags &Flags) {
+    return DAG.getTarget().Options.NoSignedZerosFPMath ||
+           Flags.hasNoSignedZeros();
+  };
+  auto IsVectorAllNegativeZero = [](const SDNode *N) {
+    if (N->getOpcode() != X86ISD::VBROADCAST_LOAD)
+      return false;
+    assert(N->getSimpleValueType(0).getScalarType() == MVT::f32 &&
+           "Unexpected vector type!");
+    if (ConstantPoolSDNode *CP =
+            dyn_cast<ConstantPoolSDNode>(N->getOperand(1)->getOperand(0))) {
+      APInt AI = APInt(32, 0x80008000, true);
+      if (const auto *CI = dyn_cast<ConstantInt>(CP->getConstVal()))
+        return CI->getValue() == AI;
+      if (const auto *CF = dyn_cast<ConstantFP>(CP->getConstVal()))
+        return CF->getValue() == APFloat(APFloat::IEEEsingle(), AI);
+    }
+    return false;
+  };
+
+  if (N->getOpcode() != ISD::FADD || !Subtarget.hasFP16() ||
+      !AllowContract(N->getFlags()))
     return SDValue();
 
   EVT VT = N->getValueType(0);
@@ -47679,16 +47753,33 @@ static SDValue combineFaddCFmul(SDNode *N, SelectionDAG &DAG,
 
   SDValue LHS = N->getOperand(0);
   SDValue RHS = N->getOperand(1);
-  SDValue CFmul, FAddOp1;
-  auto GetCFmulFrom = [&CFmul, &AllowContract](SDValue N) -> bool {
+  bool IsConj;
+  SDValue FAddOp1, MulOp0, MulOp1;
+  auto GetCFmulFrom = [&MulOp0, &MulOp1, &IsConj, &AllowContract,
+                       &IsVectorAllNegativeZero,
+                       &HasNoSignedZero](SDValue N) -> bool {
     if (!N.hasOneUse() || N.getOpcode() != ISD::BITCAST)
-        return false;
+      return false;
     SDValue Op0 = N.getOperand(0);
     unsigned Opcode = Op0.getOpcode();
-    if (Op0.hasOneUse() && AllowContract(Op0.getNode()) &&
-        (Opcode == X86ISD::VFMULC || Opcode == X86ISD::VFCMULC))
-      CFmul = Op0;
-    return !!CFmul;
+    if (Op0.hasOneUse() && AllowContract(Op0->getFlags())) {
+      if ((Opcode == X86ISD::VFMULC || Opcode == X86ISD::VFCMULC)) {
+        MulOp0 = Op0.getOperand(0);
+        MulOp1 = Op0.getOperand(1);
+        IsConj = Opcode == X86ISD::VFCMULC;
+        return true;
+      }
+      if ((Opcode == X86ISD::VFMADDC || Opcode == X86ISD::VFCMADDC) &&
+          ((ISD::isBuildVectorAllZeros(Op0->getOperand(2).getNode()) &&
+            HasNoSignedZero(Op0->getFlags())) ||
+           IsVectorAllNegativeZero(Op0->getOperand(2).getNode()))) {
+        MulOp0 = Op0.getOperand(0);
+        MulOp1 = Op0.getOperand(1);
+        IsConj = Opcode == X86ISD::VFCMADDC;
+        return true;
+      }
+    }
+    return false;
   };
 
   if (GetCFmulFrom(LHS))
@@ -47699,14 +47790,12 @@ static SDValue combineFaddCFmul(SDNode *N, SelectionDAG &DAG,
     return SDValue();
 
   MVT CVT = MVT::getVectorVT(MVT::f32, VT.getVectorNumElements() / 2);
-  assert(CFmul->getValueType(0) == CVT && "Complex type mismatch");
   FAddOp1 = DAG.getBitcast(CVT, FAddOp1);
-  unsigned newOp = CFmul.getOpcode() == X86ISD::VFMULC ? X86ISD::VFMADDC
-                                                       : X86ISD::VFCMADDC;
+  unsigned NewOp = IsConj ? X86ISD::VFCMADDC : X86ISD::VFMADDC;
   // FIXME: How do we handle when fast math flags of FADD are different from
   // CFMUL's?
-  CFmul = DAG.getNode(newOp, SDLoc(N), CVT, FAddOp1, CFmul.getOperand(0),
-                      CFmul.getOperand(1), N->getFlags());
+  SDValue CFmul =
+      DAG.getNode(NewOp, SDLoc(N), CVT, FAddOp1, MulOp0, MulOp1, N->getFlags());
   return DAG.getBitcast(VT, CFmul);
 }
 
@@ -48527,6 +48616,9 @@ static SDValue combineXor(SDNode *N, SelectionDAG &DAG,
   if (SDValue R = combineBitOpWithMOVMSK(N, DAG))
     return R;
 
+  if (SDValue FPLogic = convertIntLogicToFPLogic(N, DAG, DCI, Subtarget))
+    return FPLogic;
+
   if (DCI.isBeforeLegalizeOps())
     return SDValue();
 
@@ -48574,9 +48666,6 @@ static SDValue combineXor(SDNode *N, SelectionDAG &DAG,
                          DAG.getNode(ISD::XOR, DL, VT, RHS, N1));
     }
   }
-
-  if (SDValue FPLogic = convertIntLogicToFPLogic(N, DAG, Subtarget))
-    return FPLogic;
 
   return combineFneg(N, DAG, DCI, Subtarget);
 }

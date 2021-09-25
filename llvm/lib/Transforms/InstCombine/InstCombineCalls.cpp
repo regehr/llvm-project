@@ -67,7 +67,6 @@
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/InstCombine/InstCombineWorklist.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
 #include "llvm/Transforms/Utils/AssumeBundleBuilder.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -79,10 +78,11 @@
 #include <utility>
 #include <vector>
 
+#define DEBUG_TYPE "instcombine"
+#include "llvm/Transforms/Utils/InstructionWorklist.h"
+
 using namespace llvm;
 using namespace PatternMatch;
-
-#define DEBUG_TYPE "instcombine"
 
 STATISTIC(NumSimplified, "Number of library calls simplified");
 
@@ -2057,6 +2057,46 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
 
       Value *Shuffle = Builder.CreateShuffleVector(Vec, Mask);
       return replaceInstUsesWith(CI, Shuffle);
+    }
+    break;
+  }
+  case Intrinsic::experimental_vector_reverse: {
+    Value *BO0, *BO1, *X, *Y;
+    Value *Vec = II->getArgOperand(0);
+    if (match(Vec, m_OneUse(m_BinOp(m_Value(BO0), m_Value(BO1))))) {
+      auto *OldBinOp = cast<BinaryOperator>(Vec);
+      if (match(BO0, m_Intrinsic<Intrinsic::experimental_vector_reverse>(
+                         m_Value(X)))) {
+        // rev(binop rev(X), rev(Y)) --> binop X, Y
+        if (match(BO1, m_Intrinsic<Intrinsic::experimental_vector_reverse>(
+                           m_Value(Y))))
+          return replaceInstUsesWith(CI,
+                                     BinaryOperator::CreateWithCopiedFlags(
+                                         OldBinOp->getOpcode(), X, Y, OldBinOp,
+                                         OldBinOp->getName(), II));
+        // rev(binop rev(X), BO1Splat) --> binop X, BO1Splat
+        if (isSplatValue(BO1))
+          return replaceInstUsesWith(CI,
+                                     BinaryOperator::CreateWithCopiedFlags(
+                                         OldBinOp->getOpcode(), X, BO1,
+                                         OldBinOp, OldBinOp->getName(), II));
+      }
+      // rev(binop BO0Splat, rev(Y)) --> binop BO0Splat, Y
+      if (match(BO1, m_Intrinsic<Intrinsic::experimental_vector_reverse>(
+                         m_Value(Y))) &&
+          isSplatValue(BO0))
+        return replaceInstUsesWith(CI, BinaryOperator::CreateWithCopiedFlags(
+                                           OldBinOp->getOpcode(), BO0, Y,
+                                           OldBinOp, OldBinOp->getName(), II));
+    }
+    // rev(unop rev(X)) --> unop X
+    if (match(Vec, m_OneUse(m_UnOp(
+                       m_Intrinsic<Intrinsic::experimental_vector_reverse>(
+                           m_Value(X)))))) {
+      auto *OldUnOp = cast<UnaryOperator>(Vec);
+      auto *NewUnOp = UnaryOperator::CreateWithCopiedFlags(
+          OldUnOp->getOpcode(), X, OldUnOp, OldUnOp->getName(), II);
+      return replaceInstUsesWith(CI, NewUnOp);
     }
     break;
   }

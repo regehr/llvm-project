@@ -14,6 +14,8 @@
 #ifndef LLVM_CODEGEN_GLOBALISEL_UTILS_H
 #define LLVM_CODEGEN_GLOBALISEL_UTILS_H
 
+#include "GISelWorkList.h"
+#include "LostDebugLocObserver.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/Register.h"
@@ -355,15 +357,23 @@ Optional<int> getSplatIndex(MachineInstr &MI);
 Optional<int64_t> getBuildVectorConstantSplat(const MachineInstr &MI,
                                               const MachineRegisterInfo &MRI);
 
+/// Returns a floating point scalar constant of a build vector splat if it
+/// exists. When \p AllowUndef == true some elements can be undef but not all.
+Optional<FPValueAndVReg> getFConstantSplat(Register VReg,
+                                           const MachineRegisterInfo &MRI,
+                                           bool AllowUndef = true);
+
 /// Return true if the specified instruction is a G_BUILD_VECTOR or
 /// G_BUILD_VECTOR_TRUNC where all of the elements are 0 or undef.
 bool isBuildVectorAllZeros(const MachineInstr &MI,
-                           const MachineRegisterInfo &MRI);
+                           const MachineRegisterInfo &MRI,
+                           bool AllowUndef = false);
 
 /// Return true if the specified instruction is a G_BUILD_VECTOR or
 /// G_BUILD_VECTOR_TRUNC where all of the elements are ~0 or undef.
 bool isBuildVectorAllOnes(const MachineInstr &MI,
-                          const MachineRegisterInfo &MRI);
+                          const MachineRegisterInfo &MRI,
+                          bool AllowUndef = false);
 
 /// \returns a value when \p MI is a vector splat. The splat can be either a
 /// Register or a constant.
@@ -406,6 +416,15 @@ int64_t getICmpTrueVal(const TargetLowering &TLI, bool IsVector, bool IsFP);
 /// Returns true if the given block should be optimized for size.
 bool shouldOptForSize(const MachineBasicBlock &MBB, ProfileSummaryInfo *PSI,
                       BlockFrequencyInfo *BFI);
+
+using SmallInstListTy = GISelWorkList<4>;
+void saveUsesAndErase(MachineInstr &MI, MachineRegisterInfo &MRI,
+                      LostDebugLocObserver *LocObserver,
+                      SmallInstListTy &DeadInstChain);
+void eraseInstrs(ArrayRef<MachineInstr *> DeadInstrs, MachineRegisterInfo &MRI,
+                 LostDebugLocObserver *LocObserver = nullptr);
+void eraseInstr(MachineInstr &MI, MachineRegisterInfo &MRI,
+                LostDebugLocObserver *LocObserver = nullptr);
 
 } // End namespace llvm.
 #endif

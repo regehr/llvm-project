@@ -824,6 +824,8 @@ static unsigned selectLoadStoreUIOp(unsigned GenericOpc, unsigned RegBankID,
       return isStore ? AArch64::STRSui : AArch64::LDRSui;
     case 64:
       return isStore ? AArch64::STRDui : AArch64::LDRDui;
+    case 128:
+      return isStore ? AArch64::STRQui : AArch64::LDRQui;
     }
     break;
   }
@@ -4883,6 +4885,9 @@ bool AArch64InstructionSelector::selectUSMovFromExtend(
   const Register DefReg = MI.getOperand(0).getReg();
   const LLT DstTy = MRI.getType(DefReg);
   unsigned DstSize = DstTy.getSizeInBits();
+
+  if (DstSize != 32 && DstSize != 64)
+    return false;
 
   MachineInstr *Extract = getOpcodeDef(TargetOpcode::G_EXTRACT_VECTOR_ELT,
                                        MI.getOperand(1).getReg(), MRI);

@@ -426,6 +426,11 @@ public:
   /// O(VC) time.
   void removeRedundantConstraints();
 
+  /// Merge local ids of `this` and `other`. This is done by appending local ids
+  /// of `other` to `this` and inserting local ids of `this` to `other` at start
+  /// of its local ids.
+  void mergeLocalIds(FlatAffineConstraints &other);
+
   /// Removes all equalities and inequalities.
   void clearConstraints();
 
@@ -474,6 +479,14 @@ protected:
   inline LogicalResult gaussianEliminateId(unsigned position) {
     return success(gaussianEliminateIds(position, position + 1) == 1);
   }
+
+  /// Removes local variables using equalities. Each equality is checked if it
+  /// can be reduced to the form: `e = affine-expr`, where `e` is a local
+  /// variable and `affine-expr` is an affine expression not containing `e`.
+  /// If an equality satisfies this form, the local variable is replaced in
+  /// each constraint and then removed. The equality used to replace this local
+  /// variable is also removed.
+  void removeRedundantLocalVars();
 
   /// Eliminates identifiers from equality and inequality constraints
   /// in column range [posStart, posLimit).
@@ -840,6 +853,11 @@ public:
     for (unsigned i = start; i < end; ++i)
       setValue(i, values[i - start]);
   }
+
+  /// Merge and align symbols of `this` and `other` such that both get union of
+  /// of symbols that are unique. Symbols with Value as `None` are considered
+  /// to be inequal to all other symbols.
+  void mergeSymbolIds(FlatAffineValueConstraints &other);
 
 protected:
   /// Returns false if the fields corresponding to various identifier counts, or

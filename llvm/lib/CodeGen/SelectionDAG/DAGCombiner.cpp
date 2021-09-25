@@ -615,7 +615,7 @@ namespace {
                           SmallVectorImpl<SDValue> &Aliases);
 
     /// Return true if there is any possibility that the two addresses overlap.
-    bool isAlias(SDNode *Op0, SDNode *Op1) const;
+    bool mayAlias(SDNode *Op0, SDNode *Op1) const;
 
     /// Walk up chain skipping non-aliasing memory nodes, looking for a better
     /// chain (aliasing node.)
@@ -8521,22 +8521,20 @@ static SDValue combineShiftToMULH(SDNode *N, SelectionDAG &DAG,
   if ((!(IsSignExt || IsZeroExt)) || LeftOp.getOpcode() != RightOp.getOpcode())
     return SDValue();
 
-  EVT WideVT1 = LeftOp.getValueType();
-  EVT WideVT2 = RightOp.getValueType();
-  (void)WideVT2;
+  EVT WideVT = LeftOp.getValueType();
   // Proceed with the transformation if the wide types match.
-  assert((WideVT1 == WideVT2) &&
+  assert((WideVT == RightOp.getValueType()) &&
          "Cannot have a multiply node with two different operand types.");
 
   EVT NarrowVT = LeftOp.getOperand(0).getValueType();
   // Check that the two extend nodes are the same type.
-  if (NarrowVT !=  RightOp.getOperand(0).getValueType())
+  if (NarrowVT != RightOp.getOperand(0).getValueType())
     return SDValue();
 
   // Proceed with the transformation if the wide type is twice as large
   // as the narrow type.
   unsigned NarrowVTSize = NarrowVT.getScalarSizeInBits();
-  if (WideVT1.getScalarSizeInBits() != 2 * NarrowVTSize)
+  if (WideVT.getScalarSizeInBits() != 2 * NarrowVTSize)
     return SDValue();
 
   // Check the shift amount with the narrow type size.
@@ -8556,8 +8554,8 @@ static SDValue combineShiftToMULH(SDNode *N, SelectionDAG &DAG,
 
   SDValue Result = DAG.getNode(MulhOpcode, DL, NarrowVT, LeftOp.getOperand(0),
                                RightOp.getOperand(0));
-  return (N->getOpcode() == ISD::SRA ? DAG.getSExtOrTrunc(Result, DL, WideVT1)
-                                     : DAG.getZExtOrTrunc(Result, DL, WideVT1));
+  return (N->getOpcode() == ISD::SRA ? DAG.getSExtOrTrunc(Result, DL, WideVT)
+                                     : DAG.getZExtOrTrunc(Result, DL, WideVT));
 }
 
 SDValue DAGCombiner::visitSRA(SDNode *N) {
@@ -16769,9 +16767,12 @@ SDValue DAGCombiner::ReduceLoadOpStoreWidth(SDNode *N) {
       if (DAG.getDataLayout().isBigEndian())
         PtrOff = (BitWidth + 7 - NewBW) / 8 - PtrOff;
 
+      bool IsFast = false;
       Align NewAlign = commonAlignment(LD->getAlign(), PtrOff);
-      Type *NewVTTy = NewVT.getTypeForEVT(*DAG.getContext());
-      if (NewAlign < DAG.getDataLayout().getABITypeAlign(NewVTTy))
+      if (!TLI.allowsMemoryAccess(*DAG.getContext(), DAG.getDataLayout(), NewVT,
+                                  LD->getAddressSpace(), NewAlign,
+                                  LD->getMemOperand()->getFlags(), &IsFast) ||
+          !IsFast)
         return SDValue();
 
       SDValue NewPtr =
@@ -16970,6 +16971,22 @@ bool DAGCombiner::mergeStoresOfConstantsOrVecElts(
   unsigned SizeInBits = NumStores * ElementSizeBits;
   unsigned NumMemElts = MemVT.isVector() ? MemVT.getVectorNumElements() : 1;
 
+  Optional<MachineMemOperand::Flags> Flags;
+  AAMDNodes AAInfo;
+  for (unsigned I = 0; I != NumStores; ++I) {
+    StoreSDNode *St = cast<StoreSDNode>(StoreNodes[I].MemNode);
+    if (!Flags) {
+      Flags = St->getMemOperand()->getFlags();
+      AAInfo = St->getAAInfo();
+      continue;
+    }
+    // Skip merging if there's an inconsistent flag.
+    if (Flags != St->getMemOperand()->getFlags())
+      return false;
+    // Concatenate AA metadata.
+    AAInfo = AAInfo.concat(St->getAAInfo());
+  }
+
   EVT StoreTy;
   if (UseVector) {
     unsigned Elts = NumStores * NumMemElts;
@@ -17087,9 +17104,9 @@ bool DAGCombiner::mergeStoresOfConstantsOrVecElts(
   // make sure we use trunc store if it's necessary to be legal.
   SDValue NewStore;
   if (!UseTrunc) {
-    NewStore =
-        DAG.getStore(NewChain, DL, StoredVal, FirstInChain->getBasePtr(),
-                     FirstInChain->getPointerInfo(), FirstInChain->getAlign());
+    NewStore = DAG.getStore(NewChain, DL, StoredVal, FirstInChain->getBasePtr(),
+                            FirstInChain->getPointerInfo(),
+                            FirstInChain->getAlign(), Flags.getValue(), AAInfo);
   } else { // Must be realized as a trunc store
     EVT LegalizedStoredValTy =
         TLI.getTypeToTransformTo(*DAG.getContext(), StoredVal.getValueType());
@@ -17101,7 +17118,7 @@ bool DAGCombiner::mergeStoresOfConstantsOrVecElts(
     NewStore = DAG.getTruncStore(
         NewChain, DL, ExtendedStoreVal, FirstInChain->getBasePtr(),
         FirstInChain->getPointerInfo(), StoredVal.getValueType() /*TVT*/,
-        FirstInChain->getAlign(), FirstInChain->getMemOperand()->getFlags());
+        FirstInChain->getAlign(), Flags.getValue(), AAInfo);
   }
 
   // Replace all merged stores with the new store.
@@ -18263,7 +18280,7 @@ SDValue DAGCombiner::visitLIFETIME_END(SDNode *N) {
     case ISD::LIFETIME_END:
       // We can forward past any lifetime start/end that can be proven not to
       // alias the node.
-      if (!isAlias(Chain.getNode(), N))
+      if (!mayAlias(Chain.getNode(), N))
         Chains.push_back(Chain.getOperand(0));
       break;
     case ISD::STORE: {
@@ -23178,7 +23195,7 @@ SDValue DAGCombiner::buildSqrtEstimate(SDValue Op, SDNodeFlags Flags) {
 }
 
 /// Return true if there is any possibility that the two addresses overlap.
-bool DAGCombiner::isAlias(SDNode *Op0, SDNode *Op1) const {
+bool DAGCombiner::mayAlias(SDNode *Op0, SDNode *Op1) const {
 
   struct MemUseCharacteristics {
     bool IsVolatile;
@@ -23338,7 +23355,7 @@ void DAGCombiner::GatherAllAliases(SDNode *N, SDValue OriginalChain,
       // TODO: Relax aliasing for unordered atomics (see D66309)
       bool IsOpLoad = isa<LoadSDNode>(C.getNode()) &&
                       cast<LSBaseSDNode>(C.getNode())->isSimple();
-      if ((IsLoad && IsOpLoad) || !isAlias(N, C.getNode())) {
+      if ((IsLoad && IsOpLoad) || !mayAlias(N, C.getNode())) {
         // Look further up the chain.
         C = C.getOperand(0);
         return true;
@@ -23356,7 +23373,7 @@ void DAGCombiner::GatherAllAliases(SDNode *N, SDValue OriginalChain,
     case ISD::LIFETIME_END: {
       // We can forward past any lifetime start/end that can be proven not to
       // alias the memory access.
-      if (!isAlias(N, C.getNode())) {
+      if (!mayAlias(N, C.getNode())) {
         // Look further up the chain.
         C = C.getOperand(0);
         return true;

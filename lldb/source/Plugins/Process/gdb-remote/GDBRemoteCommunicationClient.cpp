@@ -1543,14 +1543,16 @@ Status GDBRemoteCommunicationClient::Detach(bool keep_stopped,
     }
   }
 
-  if (pid != LLDB_INVALID_PROCESS_ID) {
-    if (!m_supports_multiprocess) {
-      error.SetErrorString(
-          "Multiprocess extension not supported by the server.");
-      return error;
-    }
+  if (m_supports_multiprocess) {
+    // Some servers (e.g. qemu) require specifying the PID even if only a single
+    // process is running.
+    if (pid == LLDB_INVALID_PROCESS_ID)
+      pid = GetCurrentProcessID();
     packet.PutChar(';');
     packet.PutHex64(pid);
+  } else if (pid != LLDB_INVALID_PROCESS_ID) {
+    error.SetErrorString("Multiprocess extension not supported by the server.");
+    return error;
   }
 
   StringExtractorGDBRemote response;
@@ -2906,8 +2908,12 @@ GDBRemoteCommunicationClient::GetCurrentProcessAndThreadIDs(
       if (ch == 'm') {
         do {
           auto pid_tid = response.GetPidTid(LLDB_INVALID_PROCESS_ID);
+          // If we get an invalid response, break out of the loop.
+          // If there are valid tids, they have been added to ids.
+          // If there are no valid tids, we'll fall through to the
+          // bare-iron target handling below.
           if (!pid_tid)
-            return {};
+            break;
 
           ids.push_back(pid_tid.getValue());
           ch = response.GetChar(); // Skip the command separator
