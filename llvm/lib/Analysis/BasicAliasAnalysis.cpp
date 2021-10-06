@@ -203,12 +203,12 @@ static uint64_t getMinimalExtentFrom(const Value &V,
                                      bool NullIsValidLoc) {
   // If we have dereferenceability information we know a lower bound for the
   // extent as accesses for a lower offset would be valid. We need to exclude
-  // the "or null" part if null is a valid pointer.
+  // the "or null" part if null is a valid pointer. We can ignore frees, as an
+  // access after free would be undefined behavior.
   bool CanBeNull, CanBeFreed;
   uint64_t DerefBytes =
     V.getPointerDereferenceableBytes(DL, CanBeNull, CanBeFreed);
   DerefBytes = (CanBeNull && NullIsValidLoc) ? 0 : DerefBytes;
-  DerefBytes = CanBeFreed ? 0 : DerefBytes;
   // If queried with a precise location size, we assume that location size to be
   // accessed, thus valid.
   if (LocSize.isPrecise())
@@ -313,10 +313,22 @@ struct ExtendedValue {
     return N;
   }
 
+  KnownBits evaluateWith(KnownBits N) const {
+    assert(N.getBitWidth() == V->getType()->getPrimitiveSizeInBits() &&
+           "Incompatible bit width");
+    if (SExtBits) N = N.sext(N.getBitWidth() + SExtBits);
+    if (ZExtBits) N = N.zext(N.getBitWidth() + ZExtBits);
+    return N;
+  }
+
   bool canDistributeOver(bool NUW, bool NSW) const {
     // zext(x op<nuw> y) == zext(x) op<nuw> zext(y)
     // sext(x op<nsw> y) == sext(x) op<nsw> sext(y)
     return (!ZExtBits || NUW) && (!SExtBits || NSW);
+  }
+
+  bool hasSameExtensionsAs(const ExtendedValue &Other) const {
+    return ZExtBits == Other.ZExtBits && SExtBits == Other.SExtBits;
   }
 };
 
@@ -454,6 +466,66 @@ static unsigned getMaxPointerSize(const DataLayout &DL) {
 
   return MaxPointerSize;
 }
+
+namespace {
+// A linear transformation of a Value; this class represents
+// ZExt(SExt(V, SExtBits), ZExtBits) * Scale.
+struct VariableGEPIndex {
+  ExtendedValue Val;
+  APInt Scale;
+
+  // Context instruction to use when querying information about this index.
+  const Instruction *CxtI;
+
+  /// True if all operations in this expression are NSW.
+  bool IsNSW;
+
+  void dump() const {
+    print(dbgs());
+    dbgs() << "\n";
+  }
+  void print(raw_ostream &OS) const {
+    OS << "(V=" << Val.V->getName()
+       << ", zextbits=" << Val.ZExtBits
+       << ", sextbits=" << Val.SExtBits
+       << ", scale=" << Scale << ")";
+  }
+};
+}
+
+// Represents the internal structure of a GEP, decomposed into a base pointer,
+// constant offsets, and variable scaled indices.
+struct BasicAAResult::DecomposedGEP {
+  // Base pointer of the GEP
+  const Value *Base;
+  // Total constant offset from base.
+  APInt Offset;
+  // Scaled variable (non-constant) indices.
+  SmallVector<VariableGEPIndex, 4> VarIndices;
+  // Is GEP index scale compile-time constant.
+  bool HasCompileTimeConstantScale;
+  // Are all operations inbounds GEPs or non-indexing operations?
+  // (None iff expression doesn't involve any geps)
+  Optional<bool> InBounds;
+
+  void dump() const {
+    print(dbgs());
+    dbgs() << "\n";
+  }
+  void print(raw_ostream &OS) const {
+    OS << "(DecomposedGEP Base=" << Base->getName()
+       << ", Offset=" << Offset
+       << ", VarIndices=[";
+    for (size_t i = 0; i < VarIndices.size(); i++) {
+      if (i != 0)
+        OS << ", ";
+      VarIndices[i].print(OS);
+    }
+    OS << "], HasCompileTimeConstantScale=" << HasCompileTimeConstantScale
+       << ")";
+  }
+};
+
 
 /// If V is a symbolic pointer expression, decompose it into a base pointer
 /// with a constant offset and a number of scaled symbolic offsets.
@@ -611,9 +683,8 @@ BasicAAResult::DecomposeGEPExpression(const Value *V, const DataLayout &DL,
       //   A[x][x] -> x*16 + x*4 -> x*20
       // This also ensures that 'x' only appears in the index list once.
       for (unsigned i = 0, e = Decomposed.VarIndices.size(); i != e; ++i) {
-        if (Decomposed.VarIndices[i].V == LE.Val.V &&
-            Decomposed.VarIndices[i].ZExtBits == LE.Val.ZExtBits &&
-            Decomposed.VarIndices[i].SExtBits == LE.Val.SExtBits) {
+        if (Decomposed.VarIndices[i].Val.V == LE.Val.V &&
+            Decomposed.VarIndices[i].Val.hasSameExtensionsAs(LE.Val)) {
           Scale += Decomposed.VarIndices[i].Scale;
           Decomposed.VarIndices.erase(Decomposed.VarIndices.begin() + i);
           break;
@@ -625,8 +696,7 @@ BasicAAResult::DecomposeGEPExpression(const Value *V, const DataLayout &DL,
       Scale = adjustToPointerSize(Scale, PointerSize);
 
       if (!!Scale) {
-        VariableGEPIndex Entry = {
-            LE.Val.V, LE.Val.ZExtBits, LE.Val.SExtBits, Scale, CxtI, LE.IsNSW};
+        VariableGEPIndex Entry = {LE.Val, Scale, CxtI, LE.IsNSW};
         Decomposed.VarIndices.push_back(Entry);
       }
     }
@@ -890,8 +960,7 @@ ModRefInfo BasicAAResult::getModRefInfo(const CallBase *Call,
       // pointer were passed to arguments that were neither of these, then it
       // couldn't be no-capture.
       if (!(*CI)->getType()->isPointerTy() ||
-          (!Call->doesNotCapture(OperandNo) &&
-           OperandNo < Call->getNumArgOperands() &&
+          (!Call->doesNotCapture(OperandNo) && OperandNo < Call->arg_size() &&
            !Call->isByValArgument(OperandNo)))
         continue;
 
@@ -1096,8 +1165,7 @@ AliasResult BasicAAResult::aliasGEP(
 
   // Subtract the GEP2 pointer from the GEP1 pointer to find out their
   // symbolic difference.
-  DecompGEP1.Offset -= DecompGEP2.Offset;
-  GetIndexDifference(DecompGEP1.VarIndices, DecompGEP2.VarIndices);
+  subtractDecomposedGEPs(DecompGEP1, DecompGEP2);
 
   // If an inbounds GEP would have to start from an out of bounds address
   // for the two to alias, then we can assume noalias.
@@ -1185,9 +1253,10 @@ AliasResult BasicAAResult::aliasGEP(
     bool AllNonNegative = DecompGEP1.Offset.isNonNegative();
     bool AllNonPositive = DecompGEP1.Offset.isNonPositive();
     for (unsigned i = 0, e = DecompGEP1.VarIndices.size(); i != e; ++i) {
-      APInt Scale = DecompGEP1.VarIndices[i].Scale;
-      APInt ScaleForGCD = DecompGEP1.VarIndices[i].Scale;
-      if (!DecompGEP1.VarIndices[i].IsNSW)
+      const VariableGEPIndex &Index = DecompGEP1.VarIndices[i];
+      const APInt &Scale = Index.Scale;
+      APInt ScaleForGCD = Scale;
+      if (!Index.IsNSW)
         ScaleForGCD = APInt::getOneBitSet(Scale.getBitWidth(),
                                           Scale.countTrailingZeros());
 
@@ -1197,22 +1266,11 @@ AliasResult BasicAAResult::aliasGEP(
         GCD = APIntOps::GreatestCommonDivisor(GCD, ScaleForGCD.abs());
 
       if (AllNonNegative || AllNonPositive) {
-        // If the Value could change between cycles, then any reasoning about
-        // the Value this cycle may not hold in the next cycle. We'll just
-        // give up if we can't determine conditions that hold for every cycle:
-        const Value *V = DecompGEP1.VarIndices[i].V;
-        const Instruction *CxtI = DecompGEP1.VarIndices[i].CxtI;
-
-        KnownBits Known = computeKnownBits(V, DL, 0, &AC, CxtI, DT);
+        KnownBits Known = Index.Val.evaluateWith(
+            computeKnownBits(Index.Val.V, DL, 0, &AC, Index.CxtI, DT));
+        // TODO: Account for implicit trunc.
         bool SignKnownZero = Known.isNonNegative();
         bool SignKnownOne = Known.isNegative();
-
-        // Zero-extension widens the variable, and so forces the sign
-        // bit to zero.
-        bool IsZExt = DecompGEP1.VarIndices[i].ZExtBits > 0 || isa<ZExtInst>(V);
-        SignKnownZero |= IsZExt;
-        SignKnownOne &= !IsZExt;
-
         AllNonNegative &= (SignKnownZero && Scale.isNonNegative()) ||
                           (SignKnownOne && Scale.isNonPositive());
         AllNonPositive &= (SignKnownZero && Scale.isNonPositive()) ||
@@ -1255,7 +1313,7 @@ AliasResult BasicAAResult::aliasGEP(
       if (DecompGEP1.VarIndices.size() == 1) {
         // VarIndex = Scale*V. If V != 0 then abs(VarIndex) >= abs(Scale).
         const VariableGEPIndex &Var = DecompGEP1.VarIndices[0];
-        if (isKnownNonZero(Var.V, DL, 0, &AC, Var.CxtI, DT))
+        if (isKnownNonZero(Var.Val.V, DL, 0, &AC, Var.CxtI, DT))
           MinAbsVarIndex = Var.Scale.abs();
       } else if (DecompGEP1.VarIndices.size() == 2) {
         // VarIndex = Scale*V0 + (-Scale)*V1.
@@ -1264,9 +1322,10 @@ AliasResult BasicAAResult::aliasGEP(
         // inequality of values across loop iterations.
         const VariableGEPIndex &Var0 = DecompGEP1.VarIndices[0];
         const VariableGEPIndex &Var1 = DecompGEP1.VarIndices[1];
-        if (Var0.Scale == -Var1.Scale && Var0.ZExtBits == Var1.ZExtBits &&
-            Var0.SExtBits == Var1.SExtBits && VisitedPhiBBs.empty() &&
-            isKnownNonEqual(Var0.V, Var1.V, DL, &AC, /* CxtI */ nullptr, DT))
+        if (Var0.Scale == -Var1.Scale &&
+            Var0.Val.hasSameExtensionsAs(Var1.Val) && VisitedPhiBBs.empty() &&
+            isKnownNonEqual(Var0.Val.V, Var1.Val.V, DL, &AC, /* CxtI */ nullptr,
+                            DT))
           MinAbsVarIndex = Var0.Scale.abs();
       }
 
@@ -1282,8 +1341,7 @@ AliasResult BasicAAResult::aliasGEP(
       }
     }
 
-    if (constantOffsetHeuristic(DecompGEP1.VarIndices, V1Size, V2Size,
-                                DecompGEP1.Offset, &AC, DT))
+    if (constantOffsetHeuristic(DecompGEP1, V1Size, V2Size, &AC, DT))
       return AliasResult::NoAlias;
   }
 
@@ -1730,62 +1788,53 @@ bool BasicAAResult::isValueEqualInPotentialCycles(const Value *V,
 }
 
 /// Computes the symbolic difference between two de-composed GEPs.
-///
-/// Dest and Src are the variable indices from two decomposed GetElementPtr
-/// instructions GEP1 and GEP2 which have common base pointers.
-void BasicAAResult::GetIndexDifference(
-    SmallVectorImpl<VariableGEPIndex> &Dest,
-    const SmallVectorImpl<VariableGEPIndex> &Src) {
-  if (Src.empty())
-    return;
-
-  for (unsigned i = 0, e = Src.size(); i != e; ++i) {
-    const Value *V = Src[i].V;
-    unsigned ZExtBits = Src[i].ZExtBits, SExtBits = Src[i].SExtBits;
-    APInt Scale = Src[i].Scale;
-
+void BasicAAResult::subtractDecomposedGEPs(DecomposedGEP &DestGEP,
+                                           const DecomposedGEP &SrcGEP) {
+  DestGEP.Offset -= SrcGEP.Offset;
+  for (const VariableGEPIndex &Src : SrcGEP.VarIndices) {
     // Find V in Dest.  This is N^2, but pointer indices almost never have more
     // than a few variable indexes.
-    for (unsigned j = 0, e = Dest.size(); j != e; ++j) {
-      if (!isValueEqualInPotentialCycles(Dest[j].V, V) ||
-          Dest[j].ZExtBits != ZExtBits || Dest[j].SExtBits != SExtBits)
+    bool Found = false;
+    for (auto I : enumerate(DestGEP.VarIndices)) {
+      VariableGEPIndex &Dest = I.value();
+      if (!isValueEqualInPotentialCycles(Dest.Val.V, Src.Val.V) ||
+          !Dest.Val.hasSameExtensionsAs(Src.Val))
         continue;
 
       // If we found it, subtract off Scale V's from the entry in Dest.  If it
       // goes to zero, remove the entry.
-      if (Dest[j].Scale != Scale) {
-        Dest[j].Scale -= Scale;
-        Dest[j].IsNSW = false;
-      } else
-        Dest.erase(Dest.begin() + j);
-      Scale = 0;
+      if (Dest.Scale != Src.Scale) {
+        Dest.Scale -= Src.Scale;
+        Dest.IsNSW = false;
+      } else {
+        DestGEP.VarIndices.erase(DestGEP.VarIndices.begin() + I.index());
+      }
+      Found = true;
       break;
     }
 
     // If we didn't consume this entry, add it to the end of the Dest list.
-    if (!!Scale) {
-      VariableGEPIndex Entry = {V,      ZExtBits,    SExtBits,
-                                -Scale, Src[i].CxtI, Src[i].IsNSW};
-      Dest.push_back(Entry);
+    if (!Found) {
+      VariableGEPIndex Entry = {Src.Val, -Src.Scale, Src.CxtI, Src.IsNSW};
+      DestGEP.VarIndices.push_back(Entry);
     }
   }
 }
 
 bool BasicAAResult::constantOffsetHeuristic(
-    const SmallVectorImpl<VariableGEPIndex> &VarIndices,
-    LocationSize MaybeV1Size, LocationSize MaybeV2Size, const APInt &BaseOffset,
-    AssumptionCache *AC, DominatorTree *DT) {
-  if (VarIndices.size() != 2 || !MaybeV1Size.hasValue() ||
+    const DecomposedGEP &GEP, LocationSize MaybeV1Size,
+    LocationSize MaybeV2Size, AssumptionCache *AC, DominatorTree *DT) {
+  if (GEP.VarIndices.size() != 2 || !MaybeV1Size.hasValue() ||
       !MaybeV2Size.hasValue())
     return false;
 
   const uint64_t V1Size = MaybeV1Size.getValue();
   const uint64_t V2Size = MaybeV2Size.getValue();
 
-  const VariableGEPIndex &Var0 = VarIndices[0], &Var1 = VarIndices[1];
+  const VariableGEPIndex &Var0 = GEP.VarIndices[0], &Var1 = GEP.VarIndices[1];
 
-  if (Var0.ZExtBits != Var1.ZExtBits || Var0.SExtBits != Var1.SExtBits ||
-      Var0.Scale != -Var1.Scale || Var0.V->getType() != Var1.V->getType())
+  if (!Var0.Val.hasSameExtensionsAs(Var1.Val) || Var0.Scale != -Var1.Scale ||
+      Var0.Val.V->getType() != Var1.Val.V->getType())
     return false;
 
   // We'll strip off the Extensions of Var0 and Var1 and do another round
@@ -1793,11 +1842,10 @@ bool BasicAAResult::constantOffsetHeuristic(
   // is zext(%x + 1) we should get V1 == %x and V1Offset == 1.
 
   LinearExpression E0 =
-      GetLinearExpression(ExtendedValue(Var0.V), DL, 0, AC, DT);
+      GetLinearExpression(ExtendedValue(Var0.Val.V), DL, 0, AC, DT);
   LinearExpression E1 =
-      GetLinearExpression(ExtendedValue(Var1.V), DL, 0, AC, DT);
-  if (E0.Scale != E1.Scale || E0.Val.ZExtBits != E1.Val.ZExtBits ||
-      E0.Val.SExtBits != E1.Val.SExtBits ||
+      GetLinearExpression(ExtendedValue(Var1.Val.V), DL, 0, AC, DT);
+  if (E0.Scale != E1.Scale || !E0.Val.hasSameExtensionsAs(E1.Val) ||
       !isValueEqualInPotentialCycles(E0.Val.V, E1.Val.V))
     return false;
 
@@ -1817,8 +1865,8 @@ bool BasicAAResult::constantOffsetHeuristic(
   // arithmetic (i.e. for some values of GEP1 and V2 GEP1 < V2, and for other
   // values GEP1 > V2). We'll therefore only declare NoAlias if both V1Size and
   // V2Size can fit in the MinDiffBytes gap.
-  return MinDiffBytes.uge(V1Size + BaseOffset.abs()) &&
-         MinDiffBytes.uge(V2Size + BaseOffset.abs());
+  return MinDiffBytes.uge(V1Size + GEP.Offset.abs()) &&
+         MinDiffBytes.uge(V2Size + GEP.Offset.abs());
 }
 
 //===----------------------------------------------------------------------===//

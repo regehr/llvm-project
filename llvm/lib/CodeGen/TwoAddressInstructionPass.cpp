@@ -590,15 +590,13 @@ bool TwoAddressInstructionPass::isProfitableToConv3Addr(Register RegA,
 bool TwoAddressInstructionPass::convertInstTo3Addr(
     MachineBasicBlock::iterator &mi, MachineBasicBlock::iterator &nmi,
     Register RegA, Register RegB, unsigned Dist) {
+  MachineInstrSpan MIS(mi, MBB);
   MachineInstr *NewMI = TII->convertToThreeAddress(*mi, LV);
   if (!NewMI)
     return false;
 
   LLVM_DEBUG(dbgs() << "2addr: CONVERTING 2-ADDR: " << *mi);
   LLVM_DEBUG(dbgs() << "2addr:         TO 3-ADDR: " << *NewMI);
-
-  if (LIS)
-    LIS->ReplaceMachineInstrInMaps(*mi, *NewMI);
 
   // If the old instruction is debug value tracked, an update is required.
   if (auto OldInstrNum = mi->peekDebugInstrNum()) {
@@ -618,7 +616,27 @@ bool TwoAddressInstructionPass::convertInstTo3Addr(
                                    std::make_pair(NewInstrNum, NewIdx));
   }
 
+  // If convertToThreeAddress created a single new instruction, assume it has
+  // exactly the same effect on liveness as the old instruction. This is much
+  // more efficient than calling repairIntervalsInRange.
+  bool SingleInst = std::next(MIS.begin(), 2) == MIS.end();
+  if (LIS && SingleInst)
+    LIS->ReplaceMachineInstrInMaps(*mi, *NewMI);
+
+  SmallVector<Register> OrigRegs;
+  if (LIS && !SingleInst) {
+    for (const MachineOperand &MO : mi->operands()) {
+      if (MO.isReg())
+        OrigRegs.push_back(MO.getReg());
+    }
+
+    LIS->RemoveMachineInstrFromMaps(*mi);
+  }
+
   MBB->erase(mi); // Nuke the old inst.
+
+  if (LIS && !SingleInst)
+    LIS->repairIntervalsInRange(MBB, MIS.begin(), MIS.end(), OrigRegs);
 
   DistanceMap.insert(std::make_pair(NewMI, Dist));
   mi = NewMI;
@@ -1317,7 +1335,6 @@ tryInstructionTransform(MachineBasicBlock::iterator &mi,
 // Return true if any tied operands where found, including the trivial ones.
 bool TwoAddressInstructionPass::
 collectTiedOperands(MachineInstr *MI, TiedOperandMap &TiedOperands) {
-  const MCInstrDesc &MCID = MI->getDesc();
   bool AnyOps = false;
   unsigned NumOps = MI->getNumOperands();
 
@@ -1339,10 +1356,10 @@ collectTiedOperands(MachineInstr *MI, TiedOperandMap &TiedOperands) {
     // Deal with undef uses immediately - simply rewrite the src operand.
     if (SrcMO.isUndef() && !DstMO.getSubReg()) {
       // Constrain the DstReg register class if required.
-      if (DstReg.isVirtual())
-        if (const TargetRegisterClass *RC = TII->getRegClass(MCID, SrcIdx,
-                                                             TRI, *MF))
-          MRI->constrainRegClass(DstReg, RC);
+      if (DstReg.isVirtual()) {
+        const TargetRegisterClass *RC = MRI->getRegClass(SrcReg);
+        MRI->constrainRegClass(DstReg, RC);
+      }
       SrcMO.setReg(DstReg);
       SrcMO.setSubReg(0);
       LLVM_DEBUG(dbgs() << "\t\trewrite undef:\t" << *MI);
@@ -1437,6 +1454,10 @@ TwoAddressInstructionPass::processTiedPairs(MachineInstr *MI,
         SlotIndex endIdx =
             LIS->getInstructionIndex(*MI).getRegSlot(IsEarlyClobber);
         LI.addSegment(LiveInterval::Segment(LastCopyIdx, endIdx, VNI));
+        for (auto &S : LI.subranges()) {
+          VNI = S.getNextValue(LastCopyIdx, LIS->getVNInfoAllocator());
+          S.addSegment(LiveInterval::Segment(LastCopyIdx, endIdx, VNI));
+        }
       }
     }
 

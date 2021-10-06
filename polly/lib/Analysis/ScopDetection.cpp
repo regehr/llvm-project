@@ -329,7 +329,8 @@ static bool doesStringMatchAnyRegex(StringRef Str,
 
     std::string Err;
     if (!R.isValid(Err))
-      report_fatal_error("invalid regex given as input to polly: " + Err, true);
+      report_fatal_error(Twine("invalid regex given as input to polly: ") + Err,
+                         true);
 
     if (R.match(Str))
       return true;
@@ -1469,7 +1470,7 @@ bool ScopDetection::isErrorBlock(llvm::BasicBlock &BB, const llvm::Region &R) {
   if (!PollyAllowErrorBlocks)
     return false;
 
-  auto It = ErrorBlockCache.insert({{&BB, &R}, false});
+  auto It = ErrorBlockCache.insert({std::make_pair(&BB, &R), false});
   if (!It.second)
     return It.first->getSecond();
 
@@ -1755,6 +1756,13 @@ bool ScopDetection::isValidRegion(DetectionContext &Context) {
       dbgs() << "\n";
     });
     return false;
+  }
+
+  for (BasicBlock *Pred : predecessors(CurRegion.getEntry())) {
+    Instruction *PredTerm = Pred->getTerminator();
+    if (isa<IndirectBrInst>(PredTerm) || isa<CallBrInst>(PredTerm))
+      return invalid<ReportIndirectPredecessor>(
+          Context, /*Assert=*/true, PredTerm, PredTerm->getDebugLoc());
   }
 
   // SCoP cannot contain the entry block of the function, because we need

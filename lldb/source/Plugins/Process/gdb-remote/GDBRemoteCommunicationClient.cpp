@@ -355,10 +355,7 @@ void GDBRemoteCommunicationClient::GetRemoteQSupported() {
     // configuration of the transport before attaching/launching the process.
     m_qSupported_response = response.GetStringRef().str();
 
-    llvm::SmallVector<llvm::StringRef, 16> server_features;
-    response.GetStringRef().split(server_features, ';');
-
-    for (llvm::StringRef x : server_features) {
+    for (llvm::StringRef x : llvm::Split(response.GetStringRef(), ';')) {
       if (x == "qXfer:auxv:read+")
         m_supports_qXfer_auxv_read = eLazyBoolYes;
       else if (x == "qXfer:libraries-svr4:read+")
@@ -1659,10 +1656,8 @@ Status GDBRemoteCommunicationClient::GetMemoryRegionInfo(
           error_extractor.GetHexByteString(error_string);
           error.SetErrorString(error_string.c_str());
         } else if (name.equals("dirty-pages")) {
-          llvm::SmallVector<llvm::StringRef, 16> split_value;
           std::vector<addr_t> dirty_page_list;
-          value.split(split_value, ',');
-          for (llvm::StringRef x : split_value) {
+          for (llvm::StringRef x : llvm::Split(value, ',')) {
             addr_t page;
             x.consume_front("0x");
             if (llvm::to_integer(x, page, 16))
@@ -2428,24 +2423,6 @@ bool GDBRemoteCommunicationClient::GetGroupName(uint32_t gid,
       return false;
     }
   }
-  return false;
-}
-
-bool GDBRemoteCommunicationClient::SetNonStopMode(const bool enable) {
-  // Form non-stop packet request
-  char packet[32];
-  const int packet_len =
-      ::snprintf(packet, sizeof(packet), "QNonStop:%1d", (int)enable);
-  assert(packet_len < (int)sizeof(packet));
-  UNUSED_IF_ASSERT_DISABLED(packet_len);
-
-  StringExtractorGDBRemote response;
-  // Send to target
-  if (SendPacketAndWaitForResponse(packet, response) == PacketResult::Success)
-    if (response.IsOKResponse())
-      return true;
-
-  // Failed or not supported
   return false;
 }
 

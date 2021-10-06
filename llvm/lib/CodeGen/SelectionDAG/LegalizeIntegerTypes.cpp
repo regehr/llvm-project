@@ -23,6 +23,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/raw_ostream.h"
+#include <algorithm>
 using namespace llvm;
 
 #define DEBUG_TYPE "legalize-types"
@@ -2218,6 +2219,7 @@ void DAGTypeLegalizer::ExpandIntegerResult(SDNode *N, unsigned ResNo) {
     report_fatal_error("Do not know how to expand the result of this "
                        "operator!");
 
+  case ISD::ARITH_FENCE:  SplitRes_ARITH_FENCE(N, Lo, Hi); break;
   case ISD::MERGE_VALUES: SplitRes_MERGE_VALUES(N, ResNo, Lo, Hi); break;
   case ISD::SELECT:       SplitRes_SELECT(N, Lo, Hi); break;
   case ISD::SELECT_CC:    SplitRes_SELECT_CC(N, Lo, Hi); break;
@@ -5056,11 +5058,46 @@ SDValue DAGTypeLegalizer::PromoteIntRes_CONCAT_VECTORS(SDNode *N) {
   EVT NOutVT = TLI.getTypeToTransformTo(*DAG.getContext(), OutVT);
   assert(NOutVT.isVector() && "This type must be promoted to a vector type");
 
+  unsigned NumOperands = N->getNumOperands();
+  unsigned NumOutElem = NOutVT.getVectorMinNumElements();
   EVT OutElemTy = NOutVT.getVectorElementType();
+  if (OutVT.isScalableVector()) {
+    // Find the largest promoted element type for each of the operands.
+    SDUse *MaxSizedValue = std::max_element(
+        N->op_begin(), N->op_end(), [](const SDValue &A, const SDValue &B) {
+          EVT AVT = A.getValueType().getVectorElementType();
+          EVT BVT = B.getValueType().getVectorElementType();
+          return AVT.getScalarSizeInBits() < BVT.getScalarSizeInBits();
+        });
+    EVT MaxElementVT = MaxSizedValue->getValueType().getVectorElementType();
+
+    // Then promote all vectors to the largest element type.
+    SmallVector<SDValue, 8> Ops;
+    for (unsigned I = 0; I < NumOperands; ++I) {
+      SDValue Op = N->getOperand(I);
+      EVT OpVT = Op.getValueType();
+      if (getTypeAction(OpVT) == TargetLowering::TypePromoteInteger)
+        Op = GetPromotedInteger(Op);
+      else
+        assert(getTypeAction(OpVT) == TargetLowering::TypeLegal &&
+               "Unhandled legalization type");
+
+      if (OpVT.getVectorElementType().getScalarSizeInBits() <
+          MaxElementVT.getScalarSizeInBits())
+        Op = DAG.getAnyExtOrTrunc(Op, dl,
+                                  OpVT.changeVectorElementType(MaxElementVT));
+      Ops.push_back(Op);
+    }
+
+    // Do the CONCAT on the promoted type and finally truncate to (the promoted)
+    // NOutVT.
+    return DAG.getAnyExtOrTrunc(
+        DAG.getNode(ISD::CONCAT_VECTORS, dl,
+                    OutVT.changeVectorElementType(MaxElementVT), Ops),
+        dl, NOutVT);
+  }
 
   unsigned NumElem = N->getOperand(0).getValueType().getVectorNumElements();
-  unsigned NumOutElem = NOutVT.getVectorNumElements();
-  unsigned NumOperands = N->getNumOperands();
   assert(NumElem * NumOperands == NumOutElem &&
          "Unexpected number of elements");
 

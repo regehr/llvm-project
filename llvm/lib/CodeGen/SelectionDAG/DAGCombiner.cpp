@@ -515,6 +515,7 @@ namespace {
     SDValue visitFP_TO_FP16(SDNode *N);
     SDValue visitFP16_TO_FP(SDNode *N);
     SDValue visitVECREDUCE(SDNode *N);
+    SDValue visitVPOp(SDNode *N);
 
     SDValue visitFADDForFMACombine(SDNode *N);
     SDValue visitFSUBForFMACombine(SDNode *N);
@@ -1738,6 +1739,9 @@ SDValue DAGCombiner::visit(SDNode *N) {
   case ISD::VECREDUCE_UMIN:
   case ISD::VECREDUCE_FMAX:
   case ISD::VECREDUCE_FMIN:     return visitVECREDUCE(N);
+#define BEGIN_REGISTER_VP_SDNODE(SDOPC, ...) case ISD::SDOPC:
+#include "llvm/IR/VPIntrinsics.def"
+    return visitVPOp(N);
   }
   return SDValue();
 }
@@ -9417,7 +9421,7 @@ SDValue DAGCombiner::foldSelectOfConstants(SDNode *N) {
       }
 
       // select Cond, Pow2, 0 --> (zext Cond) << log2(Pow2)
-      if (C1Val.isPowerOf2() && C2Val.isNullValue()) {
+      if (C1Val.isPowerOf2() && C2Val.isZero()) {
         if (VT != MVT::i1)
           Cond = DAG.getNode(ISD::ZERO_EXTEND, DL, VT, Cond);
         SDValue ShAmtC = DAG.getConstant(C1Val.exactLogBase2(), DL, VT);
@@ -11268,7 +11272,7 @@ static bool isTruncateOf(SelectionDAG &DAG, SDValue N, SDValue &Op,
 
   Known = DAG.computeKnownBits(Op);
 
-  return (Known.Zero | 1).isAllOnesValue();
+  return (Known.Zero | 1).isAllOnes();
 }
 
 /// Given an extending node with a pop-count operand, if the target does not
@@ -16305,7 +16309,7 @@ struct LoadedSlice {
 /// \p UsedBits looks like 0..0 1..1 0..0.
 static bool areUsedBitsDense(const APInt &UsedBits) {
   // If all the bits are one, this is dense!
-  if (UsedBits.isAllOnesValue())
+  if (UsedBits.isAllOnes())
     return true;
 
   // Get rid of the unused bits on the right.
@@ -16314,7 +16318,7 @@ static bool areUsedBitsDense(const APInt &UsedBits) {
   if (NarrowedUsedBits.countLeadingZeros())
     NarrowedUsedBits = NarrowedUsedBits.trunc(NarrowedUsedBits.getActiveBits());
   // Check that the chunk of bits is completely used.
-  return NarrowedUsedBits.isAllOnesValue();
+  return NarrowedUsedBits.isAllOnes();
 }
 
 /// Check whether or not \p First and \p Second are next to each other
@@ -16733,7 +16737,7 @@ SDValue DAGCombiner::ReduceLoadOpStoreWidth(SDNode *N) {
     APInt Imm = cast<ConstantSDNode>(N1)->getAPIntValue();
     if (Opc == ISD::AND)
       Imm ^= APInt::getAllOnes(BitWidth);
-    if (Imm == 0 || Imm.isAllOnesValue())
+    if (Imm == 0 || Imm.isAllOnes())
       return SDValue();
     unsigned ShAmt = Imm.countTrailingZeros();
     unsigned MSB = BitWidth - Imm.countLeadingZeros() - 1;
@@ -18658,32 +18662,35 @@ SDValue DAGCombiner::scalarizeExtractedVectorLoad(SDNode *EVE, EVT InVecVT,
   if (!VecEltVT.isByteSized())
     return SDValue();
 
+  ISD::LoadExtType ExtTy =
+      ResultVT.bitsGT(VecEltVT) ? ISD::NON_EXTLOAD : ISD::EXTLOAD;
+  if (!TLI.isOperationLegalOrCustom(ISD::LOAD, VecEltVT) ||
+      !TLI.shouldReduceLoadWidth(OriginalLoad, ExtTy, VecEltVT))
+    return SDValue();
+
   Align Alignment = OriginalLoad->getAlign();
-  Align NewAlign = DAG.getDataLayout().getABITypeAlign(
-      VecEltVT.getTypeForEVT(*DAG.getContext()));
-
-  if (NewAlign > Alignment ||
-      !TLI.isOperationLegalOrCustom(ISD::LOAD, VecEltVT))
-    return SDValue();
-
-  ISD::LoadExtType ExtTy = ResultVT.bitsGT(VecEltVT) ?
-    ISD::NON_EXTLOAD : ISD::EXTLOAD;
-  if (!TLI.shouldReduceLoadWidth(OriginalLoad, ExtTy, VecEltVT))
-    return SDValue();
-
-  Alignment = NewAlign;
-
   MachinePointerInfo MPI;
   SDLoc DL(EVE);
   if (auto *ConstEltNo = dyn_cast<ConstantSDNode>(EltNo)) {
     int Elt = ConstEltNo->getZExtValue();
     unsigned PtrOff = VecEltVT.getSizeInBits() * Elt / 8;
     MPI = OriginalLoad->getPointerInfo().getWithOffset(PtrOff);
+    Alignment = commonAlignment(Alignment, PtrOff);
   } else {
     // Discard the pointer info except the address space because the memory
     // operand can't represent this new access since the offset is variable.
     MPI = MachinePointerInfo(OriginalLoad->getPointerInfo().getAddrSpace());
+    Alignment = commonAlignment(Alignment, VecEltVT.getSizeInBits() / 8);
   }
+
+  bool IsFast = false;
+  if (!TLI.allowsMemoryAccess(*DAG.getContext(), DAG.getDataLayout(), VecEltVT,
+                              OriginalLoad->getAddressSpace(), Alignment,
+                              OriginalLoad->getMemOperand()->getFlags(),
+                              &IsFast) ||
+      !IsFast)
+    return SDValue();
+
   SDValue NewPtr = TLI.getVectorElementPointer(DAG, OriginalLoad->getBasePtr(),
                                                InVecVT, EltNo);
 
@@ -20603,7 +20610,7 @@ SDValue DAGCombiner::visitEXTRACT_SUBVECTOR(SDNode *N) {
     // If the concatenated source types match this extract, it's a direct
     // simplification:
     // extract_subvec (concat V1, V2, ...), i --> Vi
-    if (ConcatSrcNumElts == ExtNumElts)
+    if (NVT.getVectorElementCount() == ConcatSrcVT.getVectorElementCount())
       return V.getOperand(ConcatOpIdx);
 
     // If the concatenated source vectors are a multiple length of this extract,
@@ -20611,7 +20618,8 @@ SDValue DAGCombiner::visitEXTRACT_SUBVECTOR(SDNode *N) {
     // concat operand. Example:
     //   v2i8 extract_subvec (v16i8 concat (v8i8 X), (v8i8 Y), 14 -->
     //   v2i8 extract_subvec v8i8 Y, 6
-    if (NVT.isFixedLengthVector() && ConcatSrcNumElts % ExtNumElts == 0) {
+    if (NVT.isFixedLengthVector() && ConcatSrcVT.isFixedLengthVector() &&
+        ConcatSrcNumElts % ExtNumElts == 0) {
       SDLoc DL(N);
       unsigned NewExtIdx = ExtIdx - ConcatOpIdx * ConcatSrcNumElts;
       assert(NewExtIdx + ExtNumElts <= ConcatSrcNumElts &&
@@ -22038,6 +22046,40 @@ SDValue DAGCombiner::visitVECREDUCE(SDNode *N) {
   return SDValue();
 }
 
+SDValue DAGCombiner::visitVPOp(SDNode *N) {
+  // VP operations in which all vector elements are disabled - either by
+  // determining that the mask is all false or that the EVL is 0 - can be
+  // eliminated.
+  bool AreAllEltsDisabled = false;
+  if (auto EVLIdx = ISD::getVPExplicitVectorLengthIdx(N->getOpcode()))
+    AreAllEltsDisabled |= isNullConstant(N->getOperand(*EVLIdx));
+  if (auto MaskIdx = ISD::getVPMaskIdx(N->getOpcode()))
+    AreAllEltsDisabled |=
+        ISD::isConstantSplatVectorAllZeros(N->getOperand(*MaskIdx).getNode());
+
+  // This is the only generic VP combine we support for now.
+  if (!AreAllEltsDisabled)
+    return SDValue();
+
+  // Binary operations can be replaced by UNDEF.
+  if (ISD::isVPBinaryOp(N->getOpcode()))
+    return DAG.getUNDEF(N->getValueType(0));
+
+  // VP Memory operations can be replaced by either the chain (stores) or the
+  // chain + undef (loads).
+  if (const auto *MemSD = dyn_cast<MemSDNode>(N)) {
+    if (MemSD->writeMem())
+      return MemSD->getChain();
+    return CombineTo(N, DAG.getUNDEF(N->getValueType(0)), MemSD->getChain());
+  }
+
+  // Reduction operations return the start operand when no elements are active.
+  if (ISD::isVPReduction(N->getOpcode()))
+    return N->getOperand(0);
+
+  return SDValue();
+}
+
 /// Returns a vector_shuffle if it able to transform an AND to a vector_shuffle
 /// with the destination vector and a zero vector.
 /// e.g. AND V, <0xffffffff, 0, 0xffffffff, 0>. ==>
@@ -22094,7 +22136,7 @@ SDValue DAGCombiner::XformToShuffleWithZero(SDNode *N) {
       else
         Bits = Bits.extractBits(NumSubBits, SubIdx * NumSubBits);
 
-      if (Bits.isAllOnesValue())
+      if (Bits.isAllOnes())
         Indices.push_back(i);
       else if (Bits == 0)
         Indices.push_back(i + NumSubElts);

@@ -237,7 +237,7 @@ static void reportGISelDiagnostic(DiagnosticSeverity Severity,
     R << (" (in function: " + MF.getName() + ")").str();
 
   if (IsFatal)
-    report_fatal_error(R.getMsg());
+    report_fatal_error(Twine(R.getMsg()));
   else
     MORE.emit(R);
 }
@@ -1014,6 +1014,19 @@ Optional<RegOrConstant> llvm::getVectorSplat(const MachineInstr &MI,
              [&Reg](const MachineOperand &Op) { return Op.getReg() != Reg; }))
     return None;
   return RegOrConstant(Reg);
+}
+
+Optional<APInt>
+llvm::isConstantOrConstantSplatVector(MachineInstr &MI,
+                                      const MachineRegisterInfo &MRI) {
+  Register Def = MI.getOperand(0).getReg();
+  if (auto C = getIConstantVRegValWithLookThrough(Def, MRI))
+    return C->Value;
+  auto MaybeCst = getBuildVectorConstantSplat(MI, MRI);
+  if (!MaybeCst)
+    return None;
+  const unsigned ScalarSize = MRI.getType(Def).getScalarSizeInBits();
+  return APInt(ScalarSize, *MaybeCst, true);
 }
 
 bool llvm::matchUnaryPredicate(

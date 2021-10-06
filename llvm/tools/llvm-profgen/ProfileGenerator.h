@@ -34,9 +34,19 @@ public:
   virtual ~ProfileGeneratorBase() = default;
   static std::unique_ptr<ProfileGeneratorBase>
   create(ProfiledBinary *Binary, const ContextSampleCounterMap &SampleCounters,
-         enum PerfScriptType SampleType);
+         bool ProfileIsCS);
   virtual void generateProfile() = 0;
   void write();
+
+  static uint32_t getDuplicationFactor(unsigned Discriminator) {
+    return llvm::DILocation::getDuplicationFactorFromDiscriminator(
+        Discriminator);
+  }
+
+  static uint32_t getBaseDiscriminator(unsigned Discriminator) {
+    return DILocation::getBaseDiscriminatorFromDiscriminator(
+        Discriminator, /* IsFSDiscriminator */ false);
+  }
 
 protected:
   // Use SampleProfileWriter to serialize profile map
@@ -228,6 +238,9 @@ private:
   FunctionSamples &
   getFunctionProfileForContext(const SampleContextFrameVector &Context,
                                bool WasLeafInlined = false);
+  // For profiled only functions, on-demand compute their inline context
+  // function byte size which is used by the pre-inliner.
+  void computeSizeForProfiledFunctions();
   // Post processing for profiles before writing out, such as mermining
   // and trimming cold profiles, running preinliner on profiles.
   void postProcessProfiles();

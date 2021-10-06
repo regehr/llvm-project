@@ -145,15 +145,20 @@ LinalgTilingOptions &mlir::linalg::LinalgTilingOptions::scalarizeDynamicDims() {
   return *this;
 }
 
-/// Try to compute a static bounding box for `operand`. The padding happens
-/// even if the operand already has static shape. `result` is the result of a
-/// freshly created PadTensorOp. Return failure if the operand cannot be padded
-/// to a static shape.
+/// Helper function that tries to pad `opOperand`. Exit early and return success
+/// for scalar operands or if `paddingFunc` returns failure. Otherwise, try to
+/// pad the operand even if it already has a static shape. Set `result` to the
+/// result of the created PadTensorOp or return failure if the operand cannot be
+/// padded to a static shape.
 static LogicalResult padOperandToSmallestStaticBoundingBox(
     PatternRewriter &rewriter, linalg::LinalgOp opToPad, OpOperand *opOperand,
     const PaddingValueComputationFunction &paddingFunc, Value &result) {
   // Can't pad scalars.
   if (opToPad.getShape(opOperand).empty())
+    return success();
+  // Can't pad if no padding value is known.
+  FailureOr<Value> paddingValue = paddingFunc(rewriter, *opOperand);
+  if (failed(paddingValue))
     return success();
   auto sliceOp = opOperand->get().getDefiningOp<tensor::ExtractSliceOp>();
   // Not a slice op, cannot construct a static bounding box.
@@ -173,12 +178,11 @@ static LogicalResult padOperandToSmallestStaticBoundingBox(
           opToPad, "No constant bounding box can be found for padding");
     staticSizes.push_back(indexAttr.getInt());
   }
-  Value pad = paddingFunc(rewriter, *opOperand);
   auto staticTensorType = RankedTensorType::get(
       staticSizes, getElementTypeOrSelf(opOperand->get()));
   result = linalg::PadTensorOp::createPadHighOp(
-      staticTensorType, opOperand->get(), pad, /*packing=*/true,
-      opToPad->getLoc(), rewriter);
+      staticTensorType, opOperand->get(), paddingValue.getValue(),
+      /*nofold=*/true, opToPad->getLoc(), rewriter);
   return success();
 }
 
@@ -483,6 +487,36 @@ LogicalResult mlir::linalg::GenericOpInterchangePattern::matchAndRewrite(
   });
   return success();
 }
+
+/// Linalg generalization pattern.
+mlir::linalg::LinalgGeneralizationPattern::LinalgGeneralizationPattern(
+    MLIRContext *context, LinalgTransformationFilter filter,
+    PatternBenefit benefit)
+    : RewritePattern(MatchAnyOpTypeTag(), benefit, context), filter(filter) {}
+
+mlir::linalg::LinalgGeneralizationPattern::LinalgGeneralizationPattern(
+    StringRef opName, MLIRContext *context, LinalgTransformationFilter filter,
+    PatternBenefit benefit)
+    : RewritePattern(opName, benefit, context, {}), filter(filter) {}
+
+LogicalResult mlir::linalg::LinalgGeneralizationPattern::matchAndRewrite(
+    Operation *op, PatternRewriter &rewriter) const {
+  if (failed(filter.checkAndNotify(rewriter, op)))
+    return failure();
+  if (failed(generalizeNamedOpPrecondition(op)))
+    return failure();
+
+  GenericOp genericOp = generalizeNamedOp(rewriter, op);
+  rewriter.replaceOp(op, genericOp.getResults());
+  filter.replaceLinalgTransformationFilter(rewriter, genericOp);
+  return success();
+}
+
+mlir::linalg::LinalgBasePromotionPattern::LinalgBasePromotionPattern(
+    MLIRContext *context, LinalgTransformationFilter filter,
+    LinalgPromotionOptions options, PatternBenefit benefit)
+    : RewritePattern(MatchAnyOpTypeTag(), benefit, context), filter(filter),
+      options(options) {}
 
 mlir::linalg::LinalgBasePromotionPattern::LinalgBasePromotionPattern(
     StringRef opName, MLIRContext *context, LinalgPromotionOptions options,

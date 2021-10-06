@@ -389,7 +389,12 @@ static bool getInPlace(Value val) {
   return false;
 }
 
-/// Generates buffer for the output tensor.
+/// Generates buffer for the output tensor. Note that all sparse kernels
+/// assume that when all elements are written to (viz. x(i) = y(i) * z(i)),
+/// the output buffer is already initialized to all zeroes and only nonzeroes
+/// values are computed and written out. For updates (viz. x(i) += y(i) * z(i)),
+/// only nonzeroes values are used for the updates and no assumption on the
+/// original contents of the output buffer is necessary..
 static Value genOutputBuffer(CodeGen &codegen, PatternRewriter &rewriter,
                              linalg::GenericOp op, MemRefType denseTp,
                              ArrayRef<Value> args) {
@@ -404,7 +409,16 @@ static Value genOutputBuffer(CodeGen &codegen, PatternRewriter &rewriter,
   // By default, a new buffer is allocated which is initialized to the
   // tensor defined in the outs() clause. This is always correct but
   // introduces a dense initialization component that may negatively
-  // impact the running complexity of the sparse kernel.
+  // impact the running complexity of the sparse kernel. If the tensor
+  // materializes within this method, we need to preserve the zero
+  // initialization assumption of all sparse output buffers.
+  if (auto init = tensor.getDefiningOp<linalg::InitTensorOp>()) {
+    Type tp = denseTp.getElementType();
+    Value alloc = rewriter.create<memref::AllocOp>(loc, denseTp, args);
+    Value zero = rewriter.create<ConstantOp>(loc, tp, rewriter.getZeroAttr(tp));
+    rewriter.create<linalg::FillOp>(loc, zero, alloc);
+    return alloc;
+  }
   Value init = rewriter.create<memref::BufferCastOp>(loc, denseTp, tensor);
   Value alloc = rewriter.create<memref::AllocOp>(loc, denseTp, args);
   rewriter.create<memref::CopyOp>(loc, init, alloc);
@@ -776,14 +790,6 @@ static Value genExp(Merger &merger, CodeGen &codegen, PatternRewriter &rewriter,
     return genInvariantValue(merger, codegen, rewriter, exp);
   Value v0 = genExp(merger, codegen, rewriter, op, merger.exp(exp).children.e0);
   Value v1 = genExp(merger, codegen, rewriter, op, merger.exp(exp).children.e1);
-  if (merger.exp(exp).kind == Kind::kNegI) {
-    // TODO: no negi in std, need to make zero explicit.
-    Type tp = op.getOutputTensorTypes()[0].getElementType();
-    v1 = v0;
-    v0 = rewriter.create<ConstantOp>(loc, tp, rewriter.getZeroAttr(tp));
-    if (codegen.curVecLength > 1)
-      v0 = genVectorInvariantValue(codegen, rewriter, v0);
-  }
   return merger.buildExp(rewriter, loc, exp, v0, v1);
 }
 
