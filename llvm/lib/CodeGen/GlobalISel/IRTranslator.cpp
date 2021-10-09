@@ -2246,8 +2246,7 @@ bool IRTranslator::translateKnownIntrinsic(const CallInst &CI, Intrinsic::ID ID,
       Info.OrigArgs.push_back({getOrCreateVRegs(*CI.getArgOperand(0)),
                                CI.getArgOperand(0)->getType(), 0});
     }
-    Info.Callee =
-        MachineOperand::CreateES(MF->createExternalSymbolName(TrapFuncName));
+    Info.Callee = MachineOperand::CreateES(TrapFuncName.data());
     Info.CB = &CI;
     Info.OrigRet = {Register(), Type::getVoidTy(CI.getContext()), 0};
     return CLI->lowerCall(MIRBuilder, Info);
@@ -3184,6 +3183,9 @@ bool IRTranslator::emitSPDescriptorParent(StackProtectorDescriptor &SPD,
     // This path is currently untestable on GlobalISel, since the only platform
     // that needs this seems to be Windows, and we fall back on that currently.
     // The code still lives here in case that changes.
+    // Silence warning about unused variable until the code below that uses
+    // 'GuardCheckFn' is enabled.
+    (void)GuardCheckFn;
     return false;
 #if 0
     // The target provides a guard check function to validate the guard value.

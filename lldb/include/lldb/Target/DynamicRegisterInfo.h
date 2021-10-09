@@ -77,16 +77,18 @@ public:
   const lldb_private::RegisterInfo *
   GetRegisterInfo(llvm::StringRef reg_name) const;
 
+  typedef std::vector<lldb_private::RegisterInfo> reg_collection;
+  llvm::iterator_range<reg_collection::const_iterator> registers() const {
+    return llvm::iterator_range<reg_collection::const_iterator>(m_regs);
+  }
+
 protected:
   // Classes that inherit from DynamicRegisterInfo can see and modify these
-  typedef std::vector<lldb_private::RegisterInfo> reg_collection;
   typedef std::vector<lldb_private::RegisterSet> set_collection;
   typedef std::vector<uint32_t> reg_num_collection;
   typedef std::vector<reg_num_collection> set_reg_num_collection;
   typedef std::vector<lldb_private::ConstString> name_collection;
   typedef std::map<uint32_t, reg_num_collection> reg_to_regs_map;
-  typedef std::vector<uint8_t> dwarf_opcode;
-  typedef std::map<uint32_t, dwarf_opcode> dynamic_reg_size_map;
 
   llvm::Expected<uint32_t> ByteOffsetFromSlice(uint32_t index,
                                                llvm::StringRef slice_str,
