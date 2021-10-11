@@ -21,6 +21,7 @@
 #include "llvm/ExecutionEngine/JITSymbol.h"
 #include "llvm/ExecutionEngine/Orc/ExecutorProcessControl.h"
 #include "llvm/ExecutionEngine/Orc/Shared/WrapperFunctionUtils.h"
+#include "llvm/ExecutionEngine/Orc/TaskDispatch.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ExtensibleRTTI.h"
 
@@ -1254,21 +1255,6 @@ public:
                          const DenseMap<JITDylib *, SymbolLookupSet> &InitSyms);
 };
 
-/// Represents an abstract task for ORC to run.
-class Task : public RTTIExtends<Task, RTTIRoot> {
-public:
-  static char ID;
-
-  /// Description of the task to be performed. Used for logging.
-  virtual void printDescription(raw_ostream &OS) = 0;
-
-  /// Run the task.
-  virtual void run() = 0;
-
-private:
-  void anchor() override;
-};
-
 /// A materialization task.
 class MaterializationTask : public RTTIExtends<MaterializationTask, Task> {
 public:
@@ -1481,9 +1467,10 @@ public:
   /// \endcode{.cpp}
   ///
   /// The given OnComplete function will be called to return the result.
-  void callWrapperAsync(ExecutorProcessControl::SendResultFunction OnComplete,
-                        ExecutorAddr WrapperFnAddr, ArrayRef<char> ArgBuffer) {
-    EPC->callWrapperAsync(std::move(OnComplete), WrapperFnAddr, ArgBuffer);
+  void callWrapperAsync(ExecutorAddr WrapperFnAddr,
+                        ExecutorProcessControl::SendResultFunction OnComplete,
+                        ArrayRef<char> ArgBuffer) {
+    EPC->callWrapperAsync(WrapperFnAddr, std::move(OnComplete), ArgBuffer);
   }
 
   /// Run a wrapper function in the executor. The wrapper function should be
@@ -1500,10 +1487,10 @@ public:
   /// Run a wrapper function using SPS to serialize the arguments and
   /// deserialize the results.
   template <typename SPSSignature, typename SendResultT, typename... ArgTs>
-  void callSPSWrapperAsync(SendResultT &&SendResult, ExecutorAddr WrapperFnAddr,
+  void callSPSWrapperAsync(ExecutorAddr WrapperFnAddr, SendResultT &&SendResult,
                            const ArgTs &...Args) {
     EPC->callSPSWrapperAsync<SPSSignature, SendResultT, ArgTs...>(
-        std::forward<SendResultT>(SendResult), WrapperFnAddr, Args...);
+        WrapperFnAddr, std::forward<SendResultT>(SendResult), Args...);
   }
 
   /// Run a wrapper function using SPS to serialize the arguments and

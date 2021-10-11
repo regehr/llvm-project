@@ -20,27 +20,52 @@
 
 using namespace llvm;
 
-/// Turn out-of-chunk operands into the default value
-static void reduceOperandsInModule(std::vector<Chunk> ChunksToKeep,
-                                   Module *Program) {
-  Oracle O(ChunksToKeep);
+/// Returns if the given operand is undef.
+static bool operandIsUndefValue(Use &Op) {
+  if (auto *C = dyn_cast<Constant>(Op)) {
+    return isa<UndefValue>(C);
+  }
+  return false;
+}
 
-  for (auto &F : *Program) {
-    llvm::outs() << "function: " << F.getName() << "\n";
-    
-    for (auto &BB : F) {
-      for (auto &I : BB) {
-        int NumOperands = I.getNumOperands();
-        for (int OpIndex = 0; OpIndex < NumOperands; ++OpIndex) {
-          // If it's already zero, who cares?? we'll just set it to zero again
-          auto T = I.getOperand(OpIndex)->getType();
-          if (!isa<GetElementPtrInst>(I) && !isa<SwitchInst>(I) && !T->isLabelTy() && !O.shouldKeep())
-            I.setOperand(OpIndex, getDefaultValue(T));
+/// Returns if an operand can be reduced to undef.
+/// TODO: make this logic check what types are reducible rather than
+/// check what types that are not reducible.
+static bool canReduceOperand(Use &Op) {
+  auto *Ty = Op->getType();
+  // Can't reduce labels to undef
+  return !Ty->isLabelTy() && !operandIsUndefValue(Op);
+}
+
+/// Sets Operands to undef.
+static void extractOperandsFromModule(Oracle &O, Module &Program) {
+  // Extract Operands from the module.
+  for (auto &F : Program.functions()) {
+    for (auto &I : instructions(&F)) {
+      for (auto &Op : I.operands()) {
+        // Filter Operands then set to undef.
+        if (canReduceOperand(Op) && !O.shouldKeep()) {
+          auto *Ty = Op->getType();
+          Op.set(UndefValue::get(Ty));
         }
       }
     }
   }
-}  
+}
+
+/// Counts the amount of operands in the module that can be reduced.
+static int countOperands(Module &Program) {
+  int Count = 0;
+  for (auto &F : Program.functions()) {
+    for (auto &I : instructions(&F)) {
+      for (auto &Op : I.operands()) {
+        if (canReduceOperand(Op)) {
+          Count++;
+        }
+      }
+    }
+  }
+}
 
 /// Counts the amount of basic blocks and prints their name & respective index
 static unsigned countOperands(Module *Program) {

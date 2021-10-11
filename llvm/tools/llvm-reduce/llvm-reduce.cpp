@@ -86,7 +86,7 @@ static std::unique_ptr<Module> parseInputFile(StringRef Filename,
   return Result;
 }
 
-void writeOutput(Module *M, StringRef Message) {
+void writeOutput(Module &M, StringRef Message) {
   if (ReplaceInput) // In-place
     OutputFilename = InputFilename.c_str();
   else if (OutputFilename.empty() || OutputFilename == "-")
@@ -98,7 +98,7 @@ void writeOutput(Module *M, StringRef Message) {
     errs() << "Error opening output file: " << EC.message() << "!\n";
     exit(1);
   }
-  M->print(Out, /*AnnotationWriter=*/nullptr);
+  M.print(Out, /*AnnotationWriter=*/nullptr);
   errs() << Message << OutputFilename << "\n";
 }
 
@@ -132,8 +132,7 @@ int main(int Argc, char **Argv) {
   }
 
   // Initialize test environment
-  TestRunner Tester(TestFilename, TestArguments);
-  Tester.setProgram(std::move(OriginalProgram));
+  TestRunner Tester(TestFilename, TestArguments, std::move(OriginalProgram));
 
   // Try to reduce code
   int OldSize, Iterations = 0, NewSize = getProgramSize(Tester.getProgram());
@@ -145,15 +144,11 @@ int main(int Argc, char **Argv) {
       "size changed from " << OldSize << " to " << NewSize << "\n";
   } while (NewSize != OldSize); // Hope it won't oscillate or keep increasing!
 
-  if (!Tester.getProgram()) {
-    errs() << "\nCouldnt reduce input :/\n";
-  } else {
-    // Print reduced file to STDOUT
-    if (OutputFilename == "-")
-      Tester.getProgram()->print(outs(), nullptr);
-    else
-      writeOutput(Tester.getProgram(), "\nDone reducing! Reduced testcase: ");
-  }
+  // Print reduced file to STDOUT
+  if (OutputFilename == "-")
+    Tester.getProgram().print(outs(), nullptr);
+  else
+    writeOutput(Tester.getProgram(), "\nDone reducing! Reduced testcase: ");
 
   return 0;
 }
