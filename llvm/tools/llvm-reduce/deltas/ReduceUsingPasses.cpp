@@ -54,9 +54,7 @@ using namespace llvm;
 
 /// Removes out-of-chunk arguments from functions, and modifies their calls
 /// accordingly. It also removes allocations of out-of-chunk arguments.
-static void runOptPasses(std::vector<Chunk> ChunksToKeep, Module *Program) {
-  Oracle O(ChunksToKeep);
-
+static void runOptPasses(Oracle &O, Module &Program) {
   LoopAnalysisManager LAM;
   FunctionAnalysisManager FAM;
   CGSCCAnalysisManager CGAM;
@@ -205,7 +203,7 @@ static void runOptPasses(std::vector<Chunk> ChunksToKeep, Module *Program) {
   MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
   MPM.addPass(createModuleToFunctionPassAdaptor(
       createFunctionToLoopPassAdaptor(std::move(LPM))));
-  MPM.run(*Program, MAM);
+  MPM.run(Program, MAM);
 }
 
 void llvm::reduceUsingPassesDeltaPass(TestRunner &Test) {

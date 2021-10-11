@@ -43,12 +43,9 @@ static void replaceFunctionCalls(Function &OldF, Function &NewF,
 
 /// Removes out-of-chunk arguments from functions, and modifies their calls
 /// accordingly. It also removes allocations of out-of-chunk arguments.
-static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
-                                   Module *Program) {
-  Oracle O(ChunksToKeep);
-
+static void instToArgumentInModule(Oracle &O, Module &Program) {
   std::vector<Function *> Funcs;
-  for (auto &F : *Program)
+  for (auto &F : Program)
     Funcs.push_back(&F);
 
   for (auto F : Funcs) {
@@ -87,7 +84,7 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
     
     auto FuncTy = FunctionType::get(F->getReturnType(), ArgTy, F->isVarArg());
     auto ClonedFunc = Function::Create(FuncTy, F->getLinkage(), F->getAddressSpace(),
-                                       F->getName(), Program);
+                                       F->getName(), &Program);
 
     ValueToValueMapTy VMap;
     auto A = ClonedFunc->arg_begin();
@@ -117,7 +114,7 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
       
     // In order to preserve function order, we move Clone after old Function
     ClonedFunc->removeFromParent();
-    Program->getFunctionList().insertAfter(F->getIterator(), ClonedFunc);
+    Program.getFunctionList().insertAfter(F->getIterator(), ClonedFunc);
 
 #if 0
     // FIXME!!!! must update calls to have extra undef arguments of the correct types
@@ -133,11 +130,11 @@ static void instToArgumentInModule(std::vector<Chunk> ChunksToKeep,
 }  
 
 /// Counts the amount of basic blocks and prints their name & respective index
-static unsigned countInstructions(Module *Program) {
+static unsigned countInstructions(Module &Program) {
   // TODO: Silence index with --quiet flag
   outs() << "----------------------------\n";
   int InstCount = 0;
-  for (auto &F : *Program)
+  for (auto &F : Program)
     for (auto &BB : F)
       InstCount += BB.getInstList().size();
   outs() << "Number of instructions: " << InstCount << "\n";

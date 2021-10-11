@@ -102,13 +102,11 @@ void writeOutput(Module &M, StringRef Message) {
   errs() << Message << OutputFilename << "\n";
 }
 
-int getProgramSize(Module *M) {
-  if (!M)
-    return 0;
+int getProgramSize(Module &M) {
   std::error_code EC;
   std::string Str;
   raw_string_ostream SS(Str);
-  M->print(SS, /*AnnotationWriter=*/nullptr);
+  M.print(SS, /*AnnotationWriter=*/nullptr);
   return SS.str().length();
 }
 
