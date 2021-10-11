@@ -65,6 +65,7 @@ static int countOperands(Module &Program) {
       }
     }
   }
+  return Count;
 }
 
 /// Counts the amount of basic blocks and prints their name & respective index
