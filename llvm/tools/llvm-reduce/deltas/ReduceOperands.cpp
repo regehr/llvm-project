@@ -6,17 +6,13 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file implements a function which calls the Generic Delta pass
-// in order to make values come from function arguments instead of
-// being produced by instructions.
+// This file implements a function to reduce operands to undef.
 //
 //===----------------------------------------------------------------------===//
 
 #include "ReduceOperands.h"
-#include "Delta.h"
-#include "llvm/ADT/SmallVector.h"
-#include <set>
-#include <vector>
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/InstIterator.h"
 
 using namespace llvm;
 
@@ -68,22 +64,8 @@ static int countOperands(Module &Program) {
   return Count;
 }
 
-/// Counts the amount of basic blocks and prints their name & respective index
-static unsigned countOperands(Module *Program) {
-  // TODO: Silence index with --quiet flag
-  outs() << "----------------------------\n";
-  int OperandCount = 0;
-  for (auto &F : *Program)
-    for (auto &BB : F)
-      for (auto &I : BB)
-        OperandCount += I.getNumOperands();
-  outs() << "Number of operands: " << OperandCount << "\n";
-
-  return OperandCount;
-}
-
 void llvm::reduceOperandsDeltaPass(TestRunner &Test) {
-  outs() << "*** Reducing Operands...\n";
-  unsigned OperandCount = countOperands(Test.getProgram());
-  runDeltaPass(Test, OperandCount, reduceOperandsInModule);
+  errs() << "*** Reducing Operands...\n";
+  int Count = countOperands(Test.getProgram());
+  runDeltaPass(Test, Count, extractOperandsFromModule);
 }
