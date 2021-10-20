@@ -3841,7 +3841,7 @@ SDValue DAGCombiner::visitMUL(SDNode *N) {
   }
 
   // fold (mul x, -(1 << c)) -> -(x << c) or (-x) << c
-  if (N1IsConst && !N1IsOpaqueConst && (-ConstValue1).isPowerOf2()) {
+  if (N1IsConst && !N1IsOpaqueConst && ConstValue1.isNegatedPowerOf2()) {
     unsigned Log2Val = (-ConstValue1).logBase2();
     SDLoc DL(N);
     // FIXME: If the input is something that is easily negated (e.g. a
@@ -4212,7 +4212,7 @@ SDValue DAGCombiner::visitSDIVLike(SDValue N0, SDValue N1, SDNode *N) {
       return false;
     if (C->getAPIntValue().isPowerOf2())
       return true;
-    if ((-C->getAPIntValue()).isPowerOf2())
+    if (C->getAPIntValue().isNegatedPowerOf2())
       return true;
     return false;
   };
@@ -21254,15 +21254,9 @@ SDValue DAGCombiner::visitVECTOR_SHUFFLE(SDNode *N) {
   ShuffleVectorSDNode *SVN = cast<ShuffleVectorSDNode>(N);
 
   // Canonicalize shuffle v, v -> v, undef
-  if (N0 == N1) {
-    SmallVector<int, 8> NewMask;
-    for (unsigned i = 0; i != NumElts; ++i) {
-      int Idx = SVN->getMaskElt(i);
-      if (Idx >= (int)NumElts) Idx -= NumElts;
-      NewMask.push_back(Idx);
-    }
-    return DAG.getVectorShuffle(VT, SDLoc(N), N0, DAG.getUNDEF(VT), NewMask);
-  }
+  if (N0 == N1)
+    return DAG.getVectorShuffle(VT, SDLoc(N), N0, DAG.getUNDEF(VT),
+                                createUnaryMask(SVN->getMask(), NumElts));
 
   // Canonicalize shuffle undef, v -> v, undef.  Commute the shuffle mask.
   if (N0.isUndef())

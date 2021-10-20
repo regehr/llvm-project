@@ -55,8 +55,10 @@ static cl::opt<std::string>
   DELTA_PASS("arguments", reduceArgumentsDeltaPass)                            \
   DELTA_PASS("instructions", reduceInstructionsDeltaPass)                      \
   DELTA_PASS("insts-to-arguments", reduceInstsToArgumentsDeltaPass)            \
-  DELTA_PASS("operands", reduceOperandsDeltaPass)                              \
   DELTA_PASS("using-passes", reduceUsingPassesDeltaPass)                       \
+  DELTA_PASS("operands-zero", reduceOperandsZeroDeltaPass)                     \
+  DELTA_PASS("operands-one", reduceOperandsOneDeltaPass)                       \
+  DELTA_PASS("operands-undef", reduceOperandsUndefDeltaPass)                   \
   DELTA_PASS("operands-to-args", reduceOperandsToArgsDeltaPass)                \
   DELTA_PASS("operand-bundles", reduceOperandBundesDeltaPass)                  \
   DELTA_PASS("attributes", reduceAttributesDeltaPass)                          \
