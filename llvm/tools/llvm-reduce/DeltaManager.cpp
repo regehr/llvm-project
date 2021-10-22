@@ -43,6 +43,7 @@ static cl::opt<std::string>
                          "default, run all delta passes."));
 
 #define DELTA_PASSES                                                           \
+  DELTA_PASS("using-passes", reduceUsingPassesDeltaPass)                       \
   DELTA_PASS("special-globals", reduceSpecialGlobalsDeltaPass)                 \
   DELTA_PASS("aliases", reduceAliasesDeltaPass)                                \
   DELTA_PASS("function-bodies", reduceFunctionBodiesDeltaPass)                 \
@@ -55,7 +56,6 @@ static cl::opt<std::string>
   DELTA_PASS("arguments", reduceArgumentsDeltaPass)                            \
   DELTA_PASS("instructions", reduceInstructionsDeltaPass)                      \
   DELTA_PASS("insts-to-arguments", reduceInstsToArgumentsDeltaPass)            \
-  DELTA_PASS("using-passes", reduceUsingPassesDeltaPass)                       \
   DELTA_PASS("operands-zero", reduceOperandsZeroDeltaPass)                     \
   DELTA_PASS("operands-one", reduceOperandsOneDeltaPass)                       \
   DELTA_PASS("operands-undef", reduceOperandsUndefDeltaPass)                   \
