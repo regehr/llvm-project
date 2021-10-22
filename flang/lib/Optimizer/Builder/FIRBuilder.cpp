@@ -8,9 +8,12 @@
 
 #include "flang/Optimizer/Builder/FIRBuilder.h"
 #include "flang/Optimizer/Builder/BoxValue.h"
+#include "flang/Optimizer/Builder/Character.h"
+#include "flang/Optimizer/Builder/MutableBox.h"
 #include "flang/Optimizer/Dialect/FIROpsSupport.h"
 #include "flang/Optimizer/Support/FatalError.h"
 #include "flang/Optimizer/Support/InternalNames.h"
+#include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/MD5.h"
@@ -112,6 +115,113 @@ mlir::Value fir::FirOpBuilder::createRealConstant(mlir::Location loc,
   llvm_unreachable("should use builtin floating-point type");
 }
 
+static llvm::SmallVector<mlir::Value>
+elideExtentsAlreadyInType(mlir::Type type, mlir::ValueRange shape) {
+  auto arrTy = type.dyn_cast<fir::SequenceType>();
+  if (shape.empty() || !arrTy)
+    return {};
+  // elide the constant dimensions before construction
+  assert(shape.size() == arrTy.getDimension());
+  llvm::SmallVector<mlir::Value> dynamicShape;
+  auto typeShape = arrTy.getShape();
+  for (unsigned i = 0, end = arrTy.getDimension(); i < end; ++i)
+    if (typeShape[i] == fir::SequenceType::getUnknownExtent())
+      dynamicShape.push_back(shape[i]);
+  return dynamicShape;
+}
+
+static llvm::SmallVector<mlir::Value>
+elideLengthsAlreadyInType(mlir::Type type, mlir::ValueRange lenParams) {
+  if (lenParams.empty())
+    return {};
+  if (auto arrTy = type.dyn_cast<fir::SequenceType>())
+    type = arrTy.getEleTy();
+  if (fir::hasDynamicSize(type))
+    return lenParams;
+  return {};
+}
+
+/// Allocate a local variable.
+/// A local variable ought to have a name in the source code.
+mlir::Value fir::FirOpBuilder::allocateLocal(
+    mlir::Location loc, mlir::Type ty, llvm::StringRef uniqName,
+    llvm::StringRef name, bool pinned, llvm::ArrayRef<mlir::Value> shape,
+    llvm::ArrayRef<mlir::Value> lenParams, bool asTarget) {
+  // Convert the shape extents to `index`, as needed.
+  llvm::SmallVector<mlir::Value> indices;
+  llvm::SmallVector<mlir::Value> elidedShape =
+      elideExtentsAlreadyInType(ty, shape);
+  llvm::SmallVector<mlir::Value> elidedLenParams =
+      elideLengthsAlreadyInType(ty, lenParams);
+  auto idxTy = getIndexType();
+  llvm::for_each(elidedShape, [&](mlir::Value sh) {
+    indices.push_back(createConvert(loc, idxTy, sh));
+  });
+  // Add a target attribute, if needed.
+  llvm::SmallVector<mlir::NamedAttribute> attrs;
+  if (asTarget)
+    attrs.emplace_back(
+        mlir::Identifier::get(fir::getTargetAttrName(), getContext()),
+        getUnitAttr());
+  // Create the local variable.
+  if (name.empty()) {
+    if (uniqName.empty())
+      return create<fir::AllocaOp>(loc, ty, pinned, elidedLenParams, indices,
+                                   attrs);
+    return create<fir::AllocaOp>(loc, ty, uniqName, pinned, elidedLenParams,
+                                 indices, attrs);
+  }
+  return create<fir::AllocaOp>(loc, ty, uniqName, name, pinned, elidedLenParams,
+                               indices, attrs);
+}
+
+mlir::Value fir::FirOpBuilder::allocateLocal(
+    mlir::Location loc, mlir::Type ty, llvm::StringRef uniqName,
+    llvm::StringRef name, llvm::ArrayRef<mlir::Value> shape,
+    llvm::ArrayRef<mlir::Value> lenParams, bool asTarget) {
+  return allocateLocal(loc, ty, uniqName, name, /*pinned=*/false, shape,
+                       lenParams, asTarget);
+}
+
+/// Get the block for adding Allocas.
+mlir::Block *fir::FirOpBuilder::getAllocaBlock() {
+  // auto iface =
+  //     getRegion().getParentOfType<mlir::omp::OutlineableOpenMPOpInterface>();
+  // return iface ? iface.getAllocaBlock() : getEntryBlock();
+  return getEntryBlock();
+}
+
+/// Create a temporary variable on the stack. Anonymous temporaries have no
+/// `name` value. Temporaries do not require a uniqued name.
+mlir::Value
+fir::FirOpBuilder::createTemporary(mlir::Location loc, mlir::Type type,
+                                   llvm::StringRef name, mlir::ValueRange shape,
+                                   mlir::ValueRange lenParams,
+                                   llvm::ArrayRef<mlir::NamedAttribute> attrs) {
+  llvm::SmallVector<mlir::Value> dynamicShape =
+      elideExtentsAlreadyInType(type, shape);
+  llvm::SmallVector<mlir::Value> dynamicLength =
+      elideLengthsAlreadyInType(type, lenParams);
+  InsertPoint insPt;
+  const bool hoistAlloc = dynamicShape.empty() && dynamicLength.empty();
+  if (hoistAlloc) {
+    insPt = saveInsertionPoint();
+    setInsertionPointToStart(getAllocaBlock());
+  }
+
+  // If the alloca is inside an OpenMP Op which will be outlined then pin the
+  // alloca here.
+  const bool pinned =
+      getRegion().getParentOfType<mlir::omp::OutlineableOpenMPOpInterface>();
+  assert(!type.isa<fir::ReferenceType>() && "cannot be a reference");
+  auto ae =
+      create<fir::AllocaOp>(loc, type, /*unique_name=*/llvm::StringRef{}, name,
+                            pinned, dynamicLength, dynamicShape, attrs);
+  if (hoistAlloc)
+    restoreInsertionPoint(insPt);
+  return ae;
+}
+
 /// Create a global variable in the (read-only) data section. A global variable
 /// must have a unique name to identify and reference it.
 fir::GlobalOp
@@ -169,6 +279,54 @@ fir::StringLitOp fir::FirOpBuilder::createStringLitOp(mlir::Location loc,
                                   llvm::None, attrs);
 }
 
+mlir::Value fir::FirOpBuilder::genShape(mlir::Location loc,
+                                        llvm::ArrayRef<mlir::Value> exts) {
+  auto shapeType = fir::ShapeType::get(getContext(), exts.size());
+  return create<fir::ShapeOp>(loc, shapeType, exts);
+}
+
+mlir::Value fir::FirOpBuilder::genShape(mlir::Location loc,
+                                        llvm::ArrayRef<mlir::Value> shift,
+                                        llvm::ArrayRef<mlir::Value> exts) {
+  auto shapeType = fir::ShapeShiftType::get(getContext(), exts.size());
+  llvm::SmallVector<mlir::Value> shapeArgs;
+  auto idxTy = getIndexType();
+  for (auto [lbnd, ext] : llvm::zip(shift, exts)) {
+    auto lb = createConvert(loc, idxTy, lbnd);
+    shapeArgs.push_back(lb);
+    shapeArgs.push_back(ext);
+  }
+  return create<fir::ShapeShiftOp>(loc, shapeType, shapeArgs);
+}
+
+mlir::Value fir::FirOpBuilder::genShape(mlir::Location loc,
+                                        const fir::AbstractArrayBox &arr) {
+  if (arr.lboundsAllOne())
+    return genShape(loc, arr.getExtents());
+  return genShape(loc, arr.getLBounds(), arr.getExtents());
+}
+
+mlir::Value fir::FirOpBuilder::createShape(mlir::Location loc,
+                                           const fir::ExtendedValue &exv) {
+  return exv.match(
+      [&](const fir::ArrayBoxValue &box) { return genShape(loc, box); },
+      [&](const fir::CharArrayBoxValue &box) { return genShape(loc, box); },
+      [&](const fir::BoxValue &box) -> mlir::Value {
+        if (!box.getLBounds().empty()) {
+          auto shiftType =
+              fir::ShiftType::get(getContext(), box.getLBounds().size());
+          return create<fir::ShiftOp>(loc, shiftType, box.getLBounds());
+        }
+        return {};
+      },
+      [&](const fir::MutableBoxValue &) -> mlir::Value {
+        // MutableBoxValue must be read into another category to work with them
+        // outside of allocation/assignment contexts.
+        fir::emitFatalError(loc, "createShape on MutableBoxValue");
+      },
+      [&](auto) -> mlir::Value { fir::emitFatalError(loc, "not an array"); });
+}
+
 static mlir::Value genNullPointerComparison(fir::FirOpBuilder &builder,
                                             mlir::Location loc,
                                             mlir::Value addr,
@@ -186,6 +344,76 @@ mlir::Value fir::FirOpBuilder::genIsNotNull(mlir::Location loc,
 
 mlir::Value fir::FirOpBuilder::genIsNull(mlir::Location loc, mlir::Value addr) {
   return genNullPointerComparison(*this, loc, addr, arith::CmpIPredicate::eq);
+}
+
+//===--------------------------------------------------------------------===//
+// ExtendedValue inquiry helper implementation
+//===--------------------------------------------------------------------===//
+
+mlir::Value fir::factory::readCharLen(fir::FirOpBuilder &builder,
+                                      mlir::Location loc,
+                                      const fir::ExtendedValue &box) {
+  return box.match(
+      [&](const fir::CharBoxValue &x) -> mlir::Value { return x.getLen(); },
+      [&](const fir::CharArrayBoxValue &x) -> mlir::Value {
+        return x.getLen();
+      },
+      [&](const fir::BoxValue &x) -> mlir::Value {
+        assert(x.isCharacter());
+        if (!x.getExplicitParameters().empty())
+          return x.getExplicitParameters()[0];
+        return fir::factory::CharacterExprHelper{builder, loc}
+            .readLengthFromBox(x.getAddr());
+      },
+      [&](const fir::MutableBoxValue &) -> mlir::Value {
+        // MutableBoxValue must be read into another category to work with them
+        // outside of allocation/assignment contexts.
+        fir::emitFatalError(loc, "readCharLen on MutableBoxValue");
+      },
+      [&](const auto &) -> mlir::Value {
+        fir::emitFatalError(
+            loc, "Character length inquiry on a non-character entity");
+      });
+}
+
+llvm::SmallVector<mlir::Value>
+fir::factory::readExtents(fir::FirOpBuilder &builder, mlir::Location loc,
+                          const fir::BoxValue &box) {
+  llvm::SmallVector<mlir::Value> result;
+  auto explicitExtents = box.getExplicitExtents();
+  if (!explicitExtents.empty()) {
+    result.append(explicitExtents.begin(), explicitExtents.end());
+    return result;
+  }
+  auto rank = box.rank();
+  auto idxTy = builder.getIndexType();
+  for (decltype(rank) dim = 0; dim < rank; ++dim) {
+    auto dimVal = builder.createIntegerConstant(loc, idxTy, dim);
+    auto dimInfo = builder.create<fir::BoxDimsOp>(loc, idxTy, idxTy, idxTy,
+                                                  box.getAddr(), dimVal);
+    result.emplace_back(dimInfo.getResult(1));
+  }
+  return result;
+}
+
+llvm::SmallVector<mlir::Value>
+fir::factory::getExtents(fir::FirOpBuilder &builder, mlir::Location loc,
+                         const fir::ExtendedValue &box) {
+  return box.match(
+      [&](const fir::ArrayBoxValue &x) -> llvm::SmallVector<mlir::Value> {
+        return {x.getExtents().begin(), x.getExtents().end()};
+      },
+      [&](const fir::CharArrayBoxValue &x) -> llvm::SmallVector<mlir::Value> {
+        return {x.getExtents().begin(), x.getExtents().end()};
+      },
+      [&](const fir::BoxValue &x) -> llvm::SmallVector<mlir::Value> {
+        return fir::factory::readExtents(builder, loc, x);
+      },
+      [&](const fir::MutableBoxValue &x) -> llvm::SmallVector<mlir::Value> {
+        auto load = fir::factory::genMutableBoxRead(builder, loc, x);
+        return fir::factory::getExtents(builder, loc, load);
+      },
+      [&](const auto &) -> llvm::SmallVector<mlir::Value> { return {}; });
 }
 
 std::string fir::factory::uniqueCGIdent(llvm::StringRef prefix,

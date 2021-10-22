@@ -55,6 +55,13 @@ def get_triple():
 
 
 class BuilderDarwin(Builder):
+    def getTriple(self, arch):
+        vendor, os, version, env = get_triple()
+        components = [arch, vendor, os, version, env]
+        if None in components:
+            return None
+        return '-'.join(components)
+
     def getExtraMakeArgs(self):
         """
         Helper function to return extra argumentsfor the make system. This
@@ -96,7 +103,7 @@ class BuilderDarwin(Builder):
         version_min = ""
         if env == "simulator":
             version_min = "-m{}-simulator-version-min={}".format(os, version)
-        elif os == "macosx":
+        else:
             version_min = "-m{}-version-min={}".format(os, version)
 
         return ["ARCH_CFLAGS=-target {} {}".format(triple, version_min)]

@@ -23,7 +23,9 @@
 #include "mlir/IR/BuiltinOps.h"
 
 namespace fir {
+class AbstractArrayBox;
 class ExtendedValue;
+class BoxValue;
 
 //===----------------------------------------------------------------------===//
 // FirOpBuilder
@@ -47,8 +49,21 @@ public:
     return getRegion().getParentOfType<mlir::ModuleOp>();
   }
 
+  /// Get the current Function
+  mlir::FuncOp getFunction() {
+    return getRegion().getParentOfType<mlir::FuncOp>();
+  }
+
   /// Get a reference to the kind map.
   const fir::KindMapping &getKindMap() { return kindMap; }
+
+  /// Get the entry block of the current Function
+  mlir::Block *getEntryBlock() { return &getFunction().front(); }
+
+  /// Get the block for adding Allocas. If OpenMP is enabled then get the
+  /// the alloca block from an Operation which can be Outlined. Otherwise
+  /// use the entry block of the current Function
+  mlir::Block *getAllocaBlock();
 
   /// Safely create a reference type to the type `eleTy`.
   mlir::Type getRefType(mlir::Type eleTy);
@@ -89,6 +104,45 @@ public:
   /// Create a real constant of type \p realType with a value zero.
   mlir::Value createRealZeroConstant(mlir::Location loc, mlir::Type realType) {
     return createRealConstant(loc, realType, 0u);
+  }
+
+  /// Create a slot for a local on the stack. Besides the variable's type and
+  /// shape, it may be given name, pinned, or target attributes.
+  mlir::Value allocateLocal(mlir::Location loc, mlir::Type ty,
+                            llvm::StringRef uniqName, llvm::StringRef name,
+                            bool pinned, llvm::ArrayRef<mlir::Value> shape,
+                            llvm::ArrayRef<mlir::Value> lenParams,
+                            bool asTarget = false);
+  mlir::Value allocateLocal(mlir::Location loc, mlir::Type ty,
+                            llvm::StringRef uniqName, llvm::StringRef name,
+                            llvm::ArrayRef<mlir::Value> shape,
+                            llvm::ArrayRef<mlir::Value> lenParams,
+                            bool asTarget = false);
+
+  /// Create a temporary. A temp is allocated using `fir.alloca` and can be read
+  /// and written using `fir.load` and `fir.store`, resp.  The temporary can be
+  /// given a name via a front-end `Symbol` or a `StringRef`.
+  mlir::Value createTemporary(mlir::Location loc, mlir::Type type,
+                              llvm::StringRef name = {},
+                              mlir::ValueRange shape = {},
+                              mlir::ValueRange lenParams = {},
+                              llvm::ArrayRef<mlir::NamedAttribute> attrs = {});
+
+  /// Create an unnamed and untracked temporary on the stack.
+  mlir::Value createTemporary(mlir::Location loc, mlir::Type type,
+                              mlir::ValueRange shape) {
+    return createTemporary(loc, type, llvm::StringRef{}, shape);
+  }
+
+  mlir::Value createTemporary(mlir::Location loc, mlir::Type type,
+                              llvm::ArrayRef<mlir::NamedAttribute> attrs) {
+    return createTemporary(loc, type, llvm::StringRef{}, {}, {}, attrs);
+  }
+
+  mlir::Value createTemporary(mlir::Location loc, mlir::Type type,
+                              llvm::StringRef name,
+                              llvm::ArrayRef<mlir::NamedAttribute> attrs) {
+    return createTemporary(loc, type, name, {}, {}, attrs);
   }
 
   /// Create a global value.
@@ -189,6 +243,16 @@ public:
     return createFunction(loc, module, name, ty);
   }
 
+  /// Construct one of the two forms of shape op from an array box.
+  mlir::Value genShape(mlir::Location loc, const fir::AbstractArrayBox &arr);
+  mlir::Value genShape(mlir::Location loc, llvm::ArrayRef<mlir::Value> shift,
+                       llvm::ArrayRef<mlir::Value> exts);
+  mlir::Value genShape(mlir::Location loc, llvm::ArrayRef<mlir::Value> exts);
+
+  /// Create one of the shape ops given an extended value. For a boxed value,
+  /// this may create a `fir.shift` op.
+  mlir::Value createShape(mlir::Location loc, const fir::ExtendedValue &exv);
+
   /// Create constant i1 with value 1. if \p b is true or 0. otherwise
   mlir::Value createBool(mlir::Location loc, bool b) {
     return createIntegerConstant(loc, getIntegerType(1), b ? 1 : 0);
@@ -269,6 +333,28 @@ private:
 } // namespace fir
 
 namespace fir::factory {
+
+//===----------------------------------------------------------------------===//
+// ExtendedValue inquiry helpers
+//===----------------------------------------------------------------------===//
+
+/// Read or get character length from \p box that must contain a character
+/// entity. If the length value is contained in the ExtendedValue, this will
+/// not generate any code, otherwise this will generate a read of the fir.box
+/// describing the entity.
+mlir::Value readCharLen(fir::FirOpBuilder &builder, mlir::Location loc,
+                        const fir::ExtendedValue &box);
+
+/// Read extents from \p box.
+llvm::SmallVector<mlir::Value> readExtents(fir::FirOpBuilder &builder,
+                                           mlir::Location loc,
+                                           const fir::BoxValue &box);
+
+/// Get extents from \p box. For fir::BoxValue and
+/// fir::MutableBoxValue, this will generate code to read the extents.
+llvm::SmallVector<mlir::Value> getExtents(fir::FirOpBuilder &builder,
+                                          mlir::Location loc,
+                                          const fir::ExtendedValue &box);
 
 //===----------------------------------------------------------------------===//
 // String literal helper helpers
