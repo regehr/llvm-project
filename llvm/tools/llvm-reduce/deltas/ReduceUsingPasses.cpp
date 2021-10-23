@@ -71,7 +71,8 @@ static void runOptPasses(Oracle &O, Module &Program) {
 
   if (!O.shouldKeep()) {
     outs() << "LICM\n";
-    LPM.addPass(LICMPass());
+    // FIXME!!!!!
+    //LPM.addPass(LICMPass());
   }
   if (!O.shouldKeep()) {
     outs() << "LoopDeletion\n";
