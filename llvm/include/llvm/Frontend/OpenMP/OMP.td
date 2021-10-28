@@ -144,6 +144,26 @@ def OMPC_Schedule : Clause<"schedule"> {
   ];
 }
 
+def OMP_MEMORY_ORDER_SeqCst : ClauseVal<"seq_cst", 1, 1> {}
+def OMP_MEMORY_ORDER_AcqRel : ClauseVal<"acq_rel", 2, 1> {}
+def OMP_MEMORY_ORDER_Acquire : ClauseVal<"acquire", 3, 1> {}
+def OMP_MEMORY_ORDER_Release : ClauseVal<"release", 4, 1> {}
+def OMP_MEMORY_ORDER_Relaxed : ClauseVal<"relaxed", 5, 1> {}
+def OMP_MEMORY_ORDER_Default : ClauseVal<"default", 6, 0> {
+  let isDefault = 1;
+}
+def OMPC_MemoryOrder : Clause<"memory_order"> {
+  let enumClauseValue = "MemoryOrderKind";
+  let allowedClauseValues = [
+    OMP_MEMORY_ORDER_SeqCst,
+    OMP_MEMORY_ORDER_AcqRel,
+    OMP_MEMORY_ORDER_Acquire,
+    OMP_MEMORY_ORDER_Release,
+    OMP_MEMORY_ORDER_Relaxed,
+    OMP_MEMORY_ORDER_Default
+  ];
+}
+
 def OMPC_Ordered : Clause<"ordered"> {
   let clangClass = "OMPOrderedClause";
   let flangClass = "ScalarIntConstantExpr";
@@ -315,6 +335,7 @@ def OMPC_Uniform : Clause<"uniform"> {
 def OMPC_DeviceType : Clause<"device_type"> {}
 def OMPC_Match : Clause<"match"> {}
 def OMPC_AdjustArgs : Clause<"adjust_args"> { }
+def OMPC_AppendArgs : Clause<"append_args"> { }
 def OMPC_Depobj : Clause<"depobj"> {
   let clangClass = "OMPDepobjClause";
   let isImplicit = true;
@@ -1520,7 +1541,8 @@ def OMP_DeclareVariant : Directive<"declare variant"> {
     VersionedClause<OMPC_Match>
   ];
   let allowedExclusiveClauses = [
-    VersionedClause<OMPC_AdjustArgs, 51>
+    VersionedClause<OMPC_AdjustArgs, 51>,
+    VersionedClause<OMPC_AppendArgs, 51>
   ];
 }
 def OMP_MasterTaskloop : Directive<"master taskloop"> {

@@ -79,6 +79,19 @@ TEST(IncludeCleaner, ReferencedLocations) {
           "struct ^X { ^X(int) {} int ^foo(); };",
           "auto x = X(42); auto y = x.foo();",
       },
+      // Function
+      {
+          "void ^foo();",
+          "void foo() {}",
+      },
+      {
+          "void foo() {}",
+          "void foo();",
+      },
+      {
+          "inline void ^foo() {}",
+          "void bar() { foo(); }",
+      },
       // Static function
       {
           "struct ^X { static bool ^foo(); }; bool X::^foo() {}",
@@ -102,6 +115,59 @@ TEST(IncludeCleaner, ReferencedLocations) {
       {
           "struct ^X { enum ^Language { ^CXX = 42, Python = 9000}; };",
           "int Lang = X::CXX;",
+      },
+      // Macros
+      {
+          "#define ^CONSTANT 42",
+          "int Foo = CONSTANT;",
+      },
+      {
+          "#define ^FOO x",
+          "#define BAR FOO",
+      },
+      {
+          "#define INNER 42\n"
+          "#define ^OUTER INNER",
+          "int answer = OUTER;",
+      },
+      {
+          "#define ^ANSWER 42\n"
+          "#define ^SQUARE(X) X * X",
+          "int sq = SQUARE(ANSWER);",
+      },
+      {
+          "#define ^FOO\n"
+          "#define ^BAR",
+          "#if 0\n"
+          "#if FOO\n"
+          "BAR\n"
+          "#endif\n"
+          "#endif",
+      },
+      // Misc
+      {
+          "enum class ^Color : int;",
+          "enum class Color : int {};",
+      },
+      {
+          "enum class Color : int {};",
+          "enum class Color : int;",
+      },
+      {
+          "enum class ^Color;",
+          "Color c;",
+      },
+      {
+          "enum class ^Color : int;",
+          "Color c;",
+      },
+      {
+          "enum class ^Color : char;",
+          "Color *c;",
+      },
+      {
+          "enum class ^Color : char {};",
+          "Color *c;",
       },
       {
           // When a type is resolved via a using declaration, the
@@ -140,6 +206,7 @@ TEST(IncludeCleaner, GetUnusedHeaders) {
     #include "dir/c.h"
     #include "dir/unused.h"
     #include "unused.h"
+    #include <system_header.h>
     void foo() {
       a();
       b();
@@ -154,26 +221,30 @@ TEST(IncludeCleaner, GetUnusedHeaders) {
   TU.AdditionalFiles["dir/c.h"] = "void c();";
   TU.AdditionalFiles["unused.h"] = "void unused();";
   TU.AdditionalFiles["dir/unused.h"] = "void dirUnused();";
-  TU.AdditionalFiles["not_included.h"] = "void notIncluded();";
-  TU.ExtraArgs = {"-I" + testPath("dir")};
+  TU.AdditionalFiles["system/system_header.h"] = "";
+  TU.ExtraArgs.push_back("-I" + testPath("dir"));
+  TU.ExtraArgs.push_back("-isystem" + testPath("system"));
   TU.Code = MainFile.str();
   ParsedAST AST = TU.build();
-  auto UnusedIncludes = computeUnusedIncludes(AST);
-  std::vector<std::string> UnusedHeaders;
-  UnusedHeaders.reserve(UnusedIncludes.size());
-  for (const auto &Include : UnusedIncludes)
-    UnusedHeaders.push_back(Include->Written);
-  EXPECT_THAT(UnusedHeaders,
-              UnorderedElementsAre("\"unused.h\"", "\"dir/unused.h\""));
+  std::vector<std::string> UnusedIncludes;
+  for (const auto &Include : computeUnusedIncludes(AST))
+    UnusedIncludes.push_back(Include->Written);
+  EXPECT_THAT(UnusedIncludes,
+              UnorderedElementsAre("\"unused.h\"", "\"dir/unused.h\"",
+                                   "<system_header.h>"));
 }
 
-TEST(IncludeCleaner, ScratchBuffer) {
+TEST(IncludeCleaner, VirtualBuffers) {
   TestTU TU;
   TU.Filename = "foo.cpp";
   TU.Code = R"cpp(
     #include "macro_spelling_in_scratch_buffer.h"
 
     using flags::FLAGS_FOO;
+
+    // CLI will come from a define, __llvm__ is a built-in. In both cases, they
+    // come from non-existent files.
+    int y = CLI + __llvm__;
 
     int concat(a, b) = 42;
     )cpp";
@@ -191,6 +262,7 @@ TEST(IncludeCleaner, ScratchBuffer) {
     #define ab x
     #define concat(x, y) x##y
     )cpp";
+  TU.ExtraArgs = {"-DCLI=42"};
   ParsedAST AST = TU.build();
   auto &SM = AST.getSourceManager();
   auto &Includes = AST.getIncludeStructure();

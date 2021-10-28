@@ -468,8 +468,7 @@ void Writer::populateTargetFeatures() {
     auto isTLS = [](InputChunk *segment) {
       return segment->live && segment->isTLS();
     };
-    tlsUsed = tlsUsed ||
-              std::any_of(file->segments.begin(), file->segments.end(), isTLS);
+    tlsUsed = tlsUsed || llvm::any_of(file->segments, isTLS);
   }
 
   if (inferFeatures)
@@ -950,10 +949,9 @@ bool Writer::needsPassiveInitialization(const OutputSegment *segment) {
 }
 
 bool Writer::hasPassiveInitializedSegments() {
-  return std::find_if(segments.begin(), segments.end(),
-                      [this](const OutputSegment *s) {
-                        return this->needsPassiveInitialization(s);
-                      }) != segments.end();
+  return llvm::any_of(segments, [this](const OutputSegment *s) {
+    return this->needsPassiveInitialization(s);
+  });
 }
 
 void Writer::createSyntheticInitFunctions() {
@@ -1229,7 +1227,7 @@ void Writer::createApplyDataRelocationsFunction() {
 }
 
 // Similar to createApplyDataRelocationsFunction but generates relocation code
-// fro WebAssembly globals. Because these globals are not shared between threads
+// for WebAssembly globals. Because these globals are not shared between threads
 // these relocation need to run on every thread.
 void Writer::createApplyGlobalRelocationsFunction() {
   // First write the body's contents to a string.
@@ -1468,8 +1466,8 @@ void Writer::run() {
       sym->forceExport = true;
   }
 
-  // Delay reporting error about explict exports until after addStartStopSymbols
-  // which can create optional symbols.
+  // Delay reporting error about explicit exports until after
+  // addStartStopSymbols which can create optional symbols.
   for (auto &name : config->requiredExports) {
     Symbol *sym = symtab->find(name);
     if (!sym || !sym->isDefined()) {
@@ -1481,7 +1479,7 @@ void Writer::run() {
   }
 
   if (config->isPic && !config->sharedMemory) {
-    // In shared memory mode all data segments are passive and initilized
+    // In shared memory mode all data segments are passive and initialized
     // via __wasm_init_memory.
     log("-- combineOutputSegments");
     combineOutputSegments();

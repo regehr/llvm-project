@@ -84,7 +84,7 @@ public:
 
   // DynamicLoader
   static bool
-  RegisterPlugin(ConstString name, const char *description,
+  RegisterPlugin(llvm::StringRef name, llvm::StringRef description,
                  DynamicLoaderCreateInstance create_callback,
                  DebuggerInitializeCallback debugger_init_callback = nullptr);
 
@@ -94,11 +94,11 @@ public:
   GetDynamicLoaderCreateCallbackAtIndex(uint32_t idx);
 
   static DynamicLoaderCreateInstance
-  GetDynamicLoaderCreateCallbackForPluginName(ConstString name);
+  GetDynamicLoaderCreateCallbackForPluginName(llvm::StringRef name);
 
   // JITLoader
   static bool
-  RegisterPlugin(ConstString name, const char *description,
+  RegisterPlugin(llvm::StringRef name, llvm::StringRef description,
                  JITLoaderCreateInstance create_callback,
                  DebuggerInitializeCallback debugger_init_callback = nullptr);
 
@@ -108,7 +108,7 @@ public:
   GetJITLoaderCreateCallbackAtIndex(uint32_t idx);
 
   // EmulateInstruction
-  static bool RegisterPlugin(ConstString name, const char *description,
+  static bool RegisterPlugin(llvm::StringRef name, llvm::StringRef description,
                              EmulateInstructionCreateInstance create_callback);
 
   static bool
@@ -118,7 +118,7 @@ public:
   GetEmulateInstructionCreateCallbackAtIndex(uint32_t idx);
 
   static EmulateInstructionCreateInstance
-  GetEmulateInstructionCreateCallbackForPluginName(ConstString name);
+  GetEmulateInstructionCreateCallbackForPluginName(llvm::StringRef name);
 
   // OperatingSystem
   static bool RegisterPlugin(llvm::StringRef name, llvm::StringRef description,
@@ -134,7 +134,7 @@ public:
   GetOperatingSystemCreateCallbackForPluginName(llvm::StringRef name);
 
   // Language
-  static bool RegisterPlugin(ConstString name, const char *description,
+  static bool RegisterPlugin(llvm::StringRef name, llvm::StringRef description,
                              LanguageCreateInstance create_callback);
 
   static bool UnregisterPlugin(LanguageCreateInstance create_callback);
@@ -143,7 +143,7 @@ public:
 
   // LanguageRuntime
   static bool RegisterPlugin(
-      ConstString name, const char *description,
+      llvm::StringRef name, llvm::StringRef description,
       LanguageRuntimeCreateInstance create_callback,
       LanguageRuntimeGetCommandObject command_callback = nullptr,
       LanguageRuntimeGetExceptionPrecondition precondition_callback = nullptr);
@@ -160,7 +160,7 @@ public:
   GetLanguageRuntimeGetExceptionPreconditionAtIndex(uint32_t idx);
 
   // SystemRuntime
-  static bool RegisterPlugin(ConstString name, const char *description,
+  static bool RegisterPlugin(llvm::StringRef name, llvm::StringRef description,
                              SystemRuntimeCreateInstance create_callback);
 
   static bool UnregisterPlugin(SystemRuntimeCreateInstance create_callback);
@@ -211,7 +211,7 @@ public:
 
   // Platform
   static bool
-  RegisterPlugin(ConstString name, const char *description,
+  RegisterPlugin(llvm::StringRef name, llvm::StringRef description,
                  PlatformCreateInstance create_callback,
                  DebuggerInitializeCallback debugger_init_callback = nullptr);
 
@@ -220,11 +220,11 @@ public:
   static PlatformCreateInstance GetPlatformCreateCallbackAtIndex(uint32_t idx);
 
   static PlatformCreateInstance
-  GetPlatformCreateCallbackForPluginName(ConstString name);
+  GetPlatformCreateCallbackForPluginName(llvm::StringRef name);
 
-  static const char *GetPlatformPluginNameAtIndex(uint32_t idx);
+  static llvm::StringRef GetPlatformPluginNameAtIndex(uint32_t idx);
 
-  static const char *GetPlatformPluginDescriptionAtIndex(uint32_t idx);
+  static llvm::StringRef GetPlatformPluginDescriptionAtIndex(uint32_t idx);
 
   static void AutoCompletePlatformName(llvm::StringRef partial_name,
                                        CompletionRequest &request);
@@ -314,7 +314,7 @@ public:
 
   // SymbolFile
   static bool
-  RegisterPlugin(ConstString name, const char *description,
+  RegisterPlugin(llvm::StringRef name, llvm::StringRef description,
                  SymbolFileCreateInstance create_callback,
                  DebuggerInitializeCallback debugger_init_callback = nullptr);
 

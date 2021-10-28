@@ -1006,7 +1006,6 @@ static void gatherInputSections() {
             continue;
           if (isec->getSegName() == segment_names::ld) {
             assert(isec->getName() == section_names::compactUnwind);
-            in.unwindInfo->addInput(isec);
             continue;
           }
           isec->outSecOff = inputOrder++;
@@ -1171,6 +1170,7 @@ bool macho::link(ArrayRef<const char *> argsArr, bool canExitEarly,
       args.hasArg(OPT_print_dylib_search) || getenv("RC_TRACE_DYLIB_SEARCHING");
   config->printEachFile = args.hasArg(OPT_t);
   config->printWhyLoad = args.hasArg(OPT_why_load);
+  config->omitDebugInfo = args.hasArg(OPT_S);
   config->outputType = getOutputType(args);
   if (const Arg *arg = args.getLastArg(OPT_bundle_loader)) {
     if (config->outputType != MH_BUNDLE)

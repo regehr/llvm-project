@@ -70,9 +70,6 @@ InputSectionBase::InputSectionBase(InputFile *file, uint64_t flags,
   if (sectionKind == SectionBase::Merge && rawData.size() > UINT32_MAX)
     error(toString(this) + ": section too large");
 
-  numRelocations = 0;
-  areRelocsRela = false;
-
   // The ELF spec states that a value of 0 means the section has
   // no alignment constraints.
   uint32_t v = std::max<uint32_t>(alignment, 1);
@@ -117,32 +114,14 @@ static uint64_t getFlags(uint64_t flags) {
   return flags;
 }
 
-// GNU assembler 2.24 and LLVM 4.0.0's MC (the newest release as of
-// March 2017) fail to infer section types for sections starting with
-// ".init_array." or ".fini_array.". They set SHT_PROGBITS instead of
-// SHF_INIT_ARRAY. As a result, the following assembler directive
-// creates ".init_array.100" with SHT_PROGBITS, for example.
-//
-//   .section .init_array.100, "aw"
-//
-// This function forces SHT_{INIT,FINI}_ARRAY so that we can handle
-// incorrect inputs as if they were correct from the beginning.
-static uint64_t getType(uint64_t type, StringRef name) {
-  if (type == SHT_PROGBITS && name.startswith(".init_array."))
-    return SHT_INIT_ARRAY;
-  if (type == SHT_PROGBITS && name.startswith(".fini_array."))
-    return SHT_FINI_ARRAY;
-  return type;
-}
-
 template <class ELFT>
 InputSectionBase::InputSectionBase(ObjFile<ELFT> &file,
                                    const typename ELFT::Shdr &hdr,
                                    StringRef name, Kind sectionKind)
-    : InputSectionBase(&file, getFlags(hdr.sh_flags),
-                       getType(hdr.sh_type, name), hdr.sh_entsize, hdr.sh_link,
-                       hdr.sh_info, hdr.sh_addralign,
-                       getSectionContents(file, hdr), name, sectionKind) {
+    : InputSectionBase(&file, getFlags(hdr.sh_flags), hdr.sh_type,
+                       hdr.sh_entsize, hdr.sh_link, hdr.sh_info,
+                       hdr.sh_addralign, getSectionContents(file, hdr), name,
+                       sectionKind) {
   // We reject object files having insanely large alignments even though
   // they are allowed by the spec. I think 4GB is a reasonable limitation.
   // We might want to relax this in the future.
@@ -178,6 +157,25 @@ uint64_t InputSectionBase::getOffsetInFile() const {
   const uint8_t *fileStart = (const uint8_t *)file->mb.getBufferStart();
   const uint8_t *secStart = data().begin();
   return secStart - fileStart;
+}
+
+template <class ELFT> RelsOrRelas<ELFT> InputSectionBase::relsOrRelas() const {
+  if (relSecIdx == 0)
+    return {};
+  RelsOrRelas<ELFT> ret;
+  const ELFFile<ELFT> obj = cast<ELFFileBase>(file)->getObj<ELFT>();
+  typename ELFT::Shdr shdr = cantFail(obj.sections())[relSecIdx];
+  if (shdr.sh_type == SHT_REL) {
+    ret.rels = makeArrayRef(reinterpret_cast<const typename ELFT::Rel *>(
+                                obj.base() + shdr.sh_offset),
+                            shdr.sh_size / sizeof(typename ELFT::Rel));
+  } else {
+    assert(shdr.sh_type == SHT_RELA);
+    ret.relas = makeArrayRef(reinterpret_cast<const typename ELFT::Rela *>(
+                                 obj.base() + shdr.sh_offset),
+                             shdr.sh_size / sizeof(typename ELFT::Rela));
+  }
+  return ret;
 }
 
 uint64_t SectionBase::getOffset(uint64_t offset) const {
@@ -795,6 +793,8 @@ uint64_t InputSectionBase::getRelocTargetVA(const InputFile *file, RelType type,
   case R_PLT_PC:
   case R_PPC64_CALL_PLT:
     return sym.getPltVA() + a - p;
+  case R_PLT_GOTPLT:
+    return sym.getPltVA() + a - in.gotPlt->getVA();
   case R_PPC32_PLTREL:
     // R_PPC_PLTREL24 uses the addend (usually 0 or 0x8000) to indicate r30
     // stores _GLOBAL_OFFSET_TABLE_ or .got2+0x8000. The addend is ignored for
@@ -1009,12 +1009,15 @@ void InputSectionBase::relocate(uint8_t *buf, uint8_t *bufEnd) {
   }
 
   auto *sec = cast<InputSection>(this);
-  if (config->relocatable)
+  if (config->relocatable) {
     relocateNonAllocForRelocatable(sec, buf);
-  else if (sec->areRelocsRela)
-    sec->relocateNonAlloc<ELFT>(buf, sec->template relas<ELFT>());
-  else
-    sec->relocateNonAlloc<ELFT>(buf, sec->template rels<ELFT>());
+  } else {
+    const RelsOrRelas<ELFT> rels = sec->template relsOrRelas<ELFT>();
+    if (rels.areRelocsRel())
+      sec->relocateNonAlloc<ELFT>(buf, rels.rels);
+    else
+      sec->relocateNonAlloc<ELFT>(buf, rels.relas);
+  }
 }
 
 void InputSectionBase::relocateAlloc(uint8_t *buf, uint8_t *bufEnd) {
@@ -1328,10 +1331,11 @@ static unsigned getReloc(IntTy begin, IntTy size, const ArrayRef<RelTy> &rels,
 // .eh_frame is a sequence of CIE or FDE records.
 // This function splits an input section into records and returns them.
 template <class ELFT> void EhInputSection::split() {
-  if (areRelocsRela)
-    split<ELFT>(relas<ELFT>());
+  const RelsOrRelas<ELFT> rels = relsOrRelas<ELFT>();
+  if (rels.areRelocsRel())
+    split<ELFT>(rels.rels);
   else
-    split<ELFT>(rels<ELFT>());
+    split<ELFT>(rels.relas);
 }
 
 template <class ELFT, class RelTy>
@@ -1467,6 +1471,11 @@ template void InputSection::writeTo<ELF32LE>(uint8_t *);
 template void InputSection::writeTo<ELF32BE>(uint8_t *);
 template void InputSection::writeTo<ELF64LE>(uint8_t *);
 template void InputSection::writeTo<ELF64BE>(uint8_t *);
+
+template RelsOrRelas<ELF32LE> InputSectionBase::relsOrRelas<ELF32LE>() const;
+template RelsOrRelas<ELF32BE> InputSectionBase::relsOrRelas<ELF32BE>() const;
+template RelsOrRelas<ELF64LE> InputSectionBase::relsOrRelas<ELF64LE>() const;
+template RelsOrRelas<ELF64BE> InputSectionBase::relsOrRelas<ELF64BE>() const;
 
 template MergeInputSection::MergeInputSection(ObjFile<ELF32LE> &,
                                               const ELF32LE::Shdr &, StringRef);
