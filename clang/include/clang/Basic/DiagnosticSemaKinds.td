@@ -1643,6 +1643,9 @@ def warn_weak_vtable : Warning<
   "%0 has no out-of-line virtual method definitions; its vtable will be "
   "emitted in every translation unit">,
   InGroup<DiagGroup<"weak-vtables">>, DefaultIgnore;
+def warn_weak_template_vtable : Warning<
+  "this warning is no longer in use and will be removed in the next release">,
+  InGroup<DiagGroup<"weak-template-vtables">>, DefaultIgnore;
 
 def ext_using_undefined_std : ExtWarn<
   "using directive refers to implicitly-defined namespace 'std'">;
@@ -6789,7 +6792,7 @@ def warn_taking_address_of_packed_member : Warning<
   "taking address of packed member %0 of class or structure %q1 may result in an unaligned pointer value">,
   InGroup<DiagGroup<"address-of-packed-member">>;
 def warn_param_mismatched_alignment : Warning<
-  "passing %0-byte aligned argument to %1-byte aligned parameter %2 of %3 may result in an unaligned pointer access">,
+  "passing %0-byte aligned argument to %1-byte aligned parameter %2%select{| of %4}3 may result in an unaligned pointer access">,
   InGroup<DiagGroup<"align-mismatch">>;
 
 def err_objc_object_assignment : Error<
@@ -10800,6 +10803,9 @@ def note_omp_protected_structured_block
     : Note<"jump bypasses OpenMP structured block">;
 def note_omp_exits_structured_block
     : Note<"jump exits scope of OpenMP structured block">;
+def err_omp_lastprivate_loop_var_non_loop_iteration : Error<
+  "only loop iteration variables are allowed in 'lastprivate' clause in "
+  "'omp loop' directives">;
 def err_omp_interop_variable_expected : Error<
   "expected%select{| non-const}0 variable of type 'omp_interop_t'">;
 def err_omp_interop_variable_wrong_type : Error<

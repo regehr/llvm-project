@@ -16,7 +16,12 @@ namespace clang {
 namespace clangd {
 namespace {
 
+using ::testing::ElementsAre;
 using ::testing::UnorderedElementsAre;
+
+std::string guard(llvm::StringRef Code) {
+  return "#pragma once\n" + Code.str();
+}
 
 TEST(IncludeCleaner, ReferencedLocations) {
   struct TestCase {
@@ -205,6 +210,7 @@ TEST(IncludeCleaner, GetUnusedHeaders) {
     #include "b.h"
     #include "dir/c.h"
     #include "dir/unused.h"
+    #include "unguarded.h"
     #include "unused.h"
     #include <system_header.h>
     void foo() {
@@ -215,13 +221,14 @@ TEST(IncludeCleaner, GetUnusedHeaders) {
   // Build expected ast with symbols coming from headers.
   TestTU TU;
   TU.Filename = "foo.cpp";
-  TU.AdditionalFiles["foo.h"] = "void foo();";
-  TU.AdditionalFiles["a.h"] = "void a();";
-  TU.AdditionalFiles["b.h"] = "void b();";
-  TU.AdditionalFiles["dir/c.h"] = "void c();";
-  TU.AdditionalFiles["unused.h"] = "void unused();";
-  TU.AdditionalFiles["dir/unused.h"] = "void dirUnused();";
-  TU.AdditionalFiles["system/system_header.h"] = "";
+  TU.AdditionalFiles["foo.h"] = guard("void foo();");
+  TU.AdditionalFiles["a.h"] = guard("void a();");
+  TU.AdditionalFiles["b.h"] = guard("void b();");
+  TU.AdditionalFiles["dir/c.h"] = guard("void c();");
+  TU.AdditionalFiles["unused.h"] = guard("void unused();");
+  TU.AdditionalFiles["dir/unused.h"] = guard("void dirUnused();");
+  TU.AdditionalFiles["system/system_header.h"] = guard("");
+  TU.AdditionalFiles["unguarded.h"] = "";
   TU.ExtraArgs.push_back("-I" + testPath("dir"));
   TU.ExtraArgs.push_back("-isystem" + testPath("system"));
   TU.Code = MainFile.str();
@@ -230,15 +237,13 @@ TEST(IncludeCleaner, GetUnusedHeaders) {
   for (const auto &Include : computeUnusedIncludes(AST))
     UnusedIncludes.push_back(Include->Written);
   EXPECT_THAT(UnusedIncludes,
-              UnorderedElementsAre("\"unused.h\"", "\"dir/unused.h\"",
-                                   "<system_header.h>"));
+              UnorderedElementsAre("\"unused.h\"", "\"dir/unused.h\""));
 }
 
 TEST(IncludeCleaner, VirtualBuffers) {
   TestTU TU;
-  TU.Filename = "foo.cpp";
   TU.Code = R"cpp(
-    #include "macro_spelling_in_scratch_buffer.h"
+    #include "macros.h"
 
     using flags::FLAGS_FOO;
 
@@ -251,7 +256,10 @@ TEST(IncludeCleaner, VirtualBuffers) {
   // The pasting operator in combination with DEFINE_FLAG will create
   // ScratchBuffer with `flags::FLAGS_FOO` that will have FileID but not
   // FileEntry.
-  TU.AdditionalFiles["macro_spelling_in_scratch_buffer.h"] = R"cpp(
+  TU.AdditionalFiles["macros.h"] = R"cpp(
+    #ifndef MACROS_H
+    #define MACROS_H
+
     #define DEFINE_FLAG(X) \
     namespace flags { \
     int FLAGS_##X; \
@@ -261,23 +269,34 @@ TEST(IncludeCleaner, VirtualBuffers) {
 
     #define ab x
     #define concat(x, y) x##y
+
+    #endif // MACROS_H
     )cpp";
   TU.ExtraArgs = {"-DCLI=42"};
   ParsedAST AST = TU.build();
   auto &SM = AST.getSourceManager();
   auto &Includes = AST.getIncludeStructure();
+
   auto ReferencedFiles = findReferencedFiles(findReferencedLocations(AST), SM);
-  auto Entry = SM.getFileManager().getFile(
-      testPath("macro_spelling_in_scratch_buffer.h"));
-  ASSERT_TRUE(Entry);
-  auto FID = SM.translateFile(*Entry);
-  // No "<scratch space>" FID.
-  EXPECT_THAT(ReferencedFiles, UnorderedElementsAre(FID));
-  // Should not crash due to <scratch space> "files" missing from include
-  // structure.
-  EXPECT_THAT(
-      getUnused(Includes, translateToHeaderIDs(ReferencedFiles, Includes, SM)),
-      ::testing::IsEmpty());
+  llvm::StringSet<> ReferencedFileNames;
+  for (FileID FID : ReferencedFiles)
+    ReferencedFileNames.insert(
+        SM.getPresumedLoc(SM.getLocForStartOfFile(FID)).getFilename());
+  // Note we deduped the names as _number_ of <built-in>s is uninteresting.
+  EXPECT_THAT(ReferencedFileNames.keys(),
+              UnorderedElementsAre("<built-in>", "<scratch space>",
+                                   testPath("macros.h")));
+
+  // Should not crash due to FileIDs that are not headers.
+  auto ReferencedHeaders = translateToHeaderIDs(ReferencedFiles, Includes, SM);
+  std::vector<llvm::StringRef> ReferencedHeaderNames;
+  for (IncludeStructure::HeaderID HID : ReferencedHeaders)
+    ReferencedHeaderNames.push_back(Includes.getRealPath(HID));
+  // Non-header files are gone at this point.
+  EXPECT_THAT(ReferencedHeaderNames, ElementsAre(testPath("macros.h")));
+
+  // Sanity check.
+  EXPECT_THAT(getUnused(AST, ReferencedHeaders), ::testing::IsEmpty());
 }
 
 } // namespace

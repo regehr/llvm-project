@@ -284,32 +284,21 @@ Defined *InputSectionBase::getEnclosingFunction(uint64_t offset) {
   return nullptr;
 }
 
-// Returns a source location string. Used to construct an error message.
+// Returns an object file location string. Used to construct an error message.
 template <class ELFT>
 std::string InputSectionBase::getLocation(uint64_t offset) {
-  std::string secAndOffset = (name + "+0x" + utohexstr(offset)).str();
+  std::string secAndOffset =
+      (name + "+0x" + Twine::utohexstr(offset) + ")").str();
 
   // We don't have file for synthetic sections.
   if (getFile<ELFT>() == nullptr)
-    return (config->outputFile + ":(" + secAndOffset + ")")
-        .str();
+    return (config->outputFile + ":(" + secAndOffset).str();
 
-  // First check if we can get desired values from debugging information.
-  if (Optional<DILineInfo> info = getFile<ELFT>()->getDILineInfo(this, offset))
-    return info->FileName + ":" + std::to_string(info->Line) + ":(" +
-           secAndOffset + ")";
-
-  // File->sourceFile contains STT_FILE symbol that contains a
-  // source file name. If it's missing, we use an object file name.
-  std::string srcFile = std::string(getFile<ELFT>()->sourceFile);
-  if (srcFile.empty())
-    srcFile = toString(file);
-
+  std::string file = toString(getFile<ELFT>());
   if (Defined *d = getEnclosingFunction<ELFT>(offset))
-    return srcFile + ":(function " + toString(*d) + ": " + secAndOffset + ")";
+    return file + ":(function " + toString(*d) + ": " + secAndOffset;
 
-  // If there's no symbol, print out the offset in the section.
-  return (srcFile + ":(" + secAndOffset + ")");
+  return file + ":(" + secAndOffset;
 }
 
 // This function is intended to be used for constructing an error message.
@@ -829,7 +818,7 @@ uint64_t InputSectionBase::getRelocTargetVA(const InputFile *file, RelType type,
     // --noinhibit-exec, even a non-weak undefined reference may reach here.
     // Just return A, which matches R_ABS, and the behavior of some dynamic
     // loaders.
-    if (sym.isUndefined() || sym.isLazy())
+    if (sym.isUndefined())
       return a;
     return getTlsTpOffset(sym) + a;
   case R_RELAX_TLS_GD_TO_LE_NEG:
@@ -843,6 +832,8 @@ uint64_t InputSectionBase::getRelocTargetVA(const InputFile *file, RelType type,
     return in.got->getGlobalDynAddr(sym) + a;
   case R_TLSDESC_PC:
     return in.got->getGlobalDynAddr(sym) + a - p;
+  case R_TLSDESC_GOTPLT:
+    return in.got->getGlobalDynAddr(sym) + a - in.gotPlt->getVA();
   case R_AARCH64_TLSDESC_PAGE:
     return getAArch64Page(in.got->getGlobalDynAddr(sym) + a) -
            getAArch64Page(p);

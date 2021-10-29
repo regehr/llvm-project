@@ -49,17 +49,21 @@ using ReferencedLocations = llvm::DenseSet<SourceLocation>;
 ReferencedLocations findReferencedLocations(ParsedAST &AST);
 
 /// Retrieves IDs of all files containing SourceLocations from \p Locs.
+/// The output only includes things SourceManager sees as files (not macro IDs).
+/// This can include <built-in>, <scratch space> etc that are not true files.
 llvm::DenseSet<FileID> findReferencedFiles(const ReferencedLocations &Locs,
                                            const SourceManager &SM);
 
 /// Maps FileIDs to the internal IncludeStructure representation (HeaderIDs).
+/// FileIDs that are not true files (<built-in> etc) are dropped.
 llvm::DenseSet<IncludeStructure::HeaderID>
 translateToHeaderIDs(const llvm::DenseSet<FileID> &Files,
                      const IncludeStructure &Includes, const SourceManager &SM);
 
 /// Retrieves headers that are referenced from the main file but not used.
+/// In unclear cases, headers are not marked as unused.
 std::vector<const Inclusion *>
-getUnused(const IncludeStructure &Includes,
+getUnused(ParsedAST &AST,
           const llvm::DenseSet<IncludeStructure::HeaderID> &ReferencedFiles);
 
 std::vector<const Inclusion *> computeUnusedIncludes(ParsedAST &AST);

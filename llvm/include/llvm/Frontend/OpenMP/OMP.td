@@ -285,11 +285,13 @@ def OMPC_NonTemporal : Clause<"nontemporal"> {
   let isValueList = true; 
 }
 
-def OMP_ORDER_concurrent : ClauseVal<"default",2,0> { let isDefault = 1; }
+def OMP_ORDER_concurrent : ClauseVal<"concurrent",1,1> {}
+def OMP_ORDER_unknown : ClauseVal<"unknown",2,0> { let isDefault = 1; }
 def OMPC_Order : Clause<"order"> {
   let clangClass = "OMPOrderClause";
   let enumClauseValue = "OrderKind";
   let allowedClauseValues = [
+    OMP_ORDER_unknown,
     OMP_ORDER_concurrent
   ];
 }
@@ -1728,6 +1730,17 @@ def OMP_dispatch : Directive<"dispatch"> {
 def OMP_masked : Directive<"masked"> {
   let allowedOnceClauses = [
     VersionedClause<OMPC_Filter>
+  ];
+}
+def OMP_loop : Directive<"loop"> {
+  let allowedClauses = [
+    VersionedClause<OMPC_LastPrivate>,
+    VersionedClause<OMPC_Private>,
+    VersionedClause<OMPC_Reduction>,
+  ];
+  let allowedOnceClauses = [
+    VersionedClause<OMPC_Collapse>,
+    VersionedClause<OMPC_Order>,
   ];
 }
 def OMP_Metadirective : Directive<"metadirective"> {

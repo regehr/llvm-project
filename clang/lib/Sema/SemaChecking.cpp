@@ -4887,7 +4887,7 @@ void Sema::CheckArgAlignment(SourceLocation Loc, NamedDecl *FDecl,
   if (ArgAlign < ParamAlign)
     Diag(Loc, diag::warn_param_mismatched_alignment)
         << (int)ArgAlign.getQuantity() << (int)ParamAlign.getQuantity()
-        << ParamName << FDecl;
+        << ParamName << (FDecl != nullptr) << FDecl;
 }
 
 /// Handles the checks for format strings, non-POD arguments to vararg
@@ -5287,6 +5287,7 @@ ExprResult Sema::BuildAtomicExpr(SourceRange CallRange, SourceRange ExprRange,
   case AtomicExpr::AO__c11_atomic_fetch_and:
   case AtomicExpr::AO__c11_atomic_fetch_or:
   case AtomicExpr::AO__c11_atomic_fetch_xor:
+  case AtomicExpr::AO__c11_atomic_fetch_nand:
   case AtomicExpr::AO__opencl_atomic_fetch_and:
   case AtomicExpr::AO__opencl_atomic_fetch_or:
   case AtomicExpr::AO__opencl_atomic_fetch_xor:

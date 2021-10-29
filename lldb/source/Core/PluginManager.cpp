@@ -830,22 +830,23 @@ static ProcessInstances &GetProcessInstances() {
 }
 
 bool PluginManager::RegisterPlugin(
-    ConstString name, const char *description,
+    llvm::StringRef name, llvm::StringRef description,
     ProcessCreateInstance create_callback,
     DebuggerInitializeCallback debugger_init_callback) {
   return GetProcessInstances().RegisterPlugin(
-      name, description, create_callback, debugger_init_callback);
+      ConstString(name), description.str().c_str(), create_callback,
+      debugger_init_callback);
 }
 
 bool PluginManager::UnregisterPlugin(ProcessCreateInstance create_callback) {
   return GetProcessInstances().UnregisterPlugin(create_callback);
 }
 
-const char *PluginManager::GetProcessPluginNameAtIndex(uint32_t idx) {
+llvm::StringRef PluginManager::GetProcessPluginNameAtIndex(uint32_t idx) {
   return GetProcessInstances().GetNameAtIndex(idx);
 }
 
-const char *PluginManager::GetProcessPluginDescriptionAtIndex(uint32_t idx) {
+llvm::StringRef PluginManager::GetProcessPluginDescriptionAtIndex(uint32_t idx) {
   return GetProcessInstances().GetDescriptionAtIndex(idx);
 }
 
@@ -855,8 +856,8 @@ PluginManager::GetProcessCreateCallbackAtIndex(uint32_t idx) {
 }
 
 ProcessCreateInstance
-PluginManager::GetProcessCreateCallbackForPluginName(ConstString name) {
-  return GetProcessInstances().GetCallbackForName(name);
+PluginManager::GetProcessCreateCallbackForPluginName(llvm::StringRef name) {
+  return GetProcessInstances().GetCallbackForName(ConstString(name));
 }
 
 void PluginManager::AutoCompleteProcessName(llvm::StringRef name,
@@ -889,11 +890,12 @@ static ScriptInterpreterInstances &GetScriptInterpreterInstances() {
 }
 
 bool PluginManager::RegisterPlugin(
-    ConstString name, const char *description,
+    llvm::StringRef name, llvm::StringRef description,
     lldb::ScriptLanguage script_language,
     ScriptInterpreterCreateInstance create_callback) {
   return GetScriptInterpreterInstances().RegisterPlugin(
-      name, description, create_callback, script_language);
+      ConstString(name), description.str().c_str(), create_callback,
+      script_language);
 }
 
 bool PluginManager::UnregisterPlugin(
@@ -949,13 +951,13 @@ static StructuredDataPluginInstances &GetStructuredDataPluginInstances() {
 }
 
 bool PluginManager::RegisterPlugin(
-    ConstString name, const char *description,
+    llvm::StringRef name, llvm::StringRef description,
     StructuredDataPluginCreateInstance create_callback,
     DebuggerInitializeCallback debugger_init_callback,
     StructuredDataFilterLaunchInfo filter_callback) {
   return GetStructuredDataPluginInstances().RegisterPlugin(
-      name, description, create_callback, debugger_init_callback,
-      filter_callback);
+      ConstString(name), description.str().c_str(), create_callback,
+      debugger_init_callback, filter_callback);
 }
 
 bool PluginManager::UnregisterPlugin(
@@ -1019,10 +1021,11 @@ static SymbolVendorInstances &GetSymbolVendorInstances() {
   return g_instances;
 }
 
-bool PluginManager::RegisterPlugin(ConstString name, const char *description,
+bool PluginManager::RegisterPlugin(llvm::StringRef name,
+                                   llvm::StringRef description,
                                    SymbolVendorCreateInstance create_callback) {
-  return GetSymbolVendorInstances().RegisterPlugin(name, description,
-                                                   create_callback);
+  return GetSymbolVendorInstances().RegisterPlugin(
+      ConstString(name), description.str().c_str(), create_callback);
 }
 
 bool PluginManager::UnregisterPlugin(
@@ -1061,13 +1064,14 @@ static TraceInstances &GetTracePluginInstances() {
 }
 
 bool PluginManager::RegisterPlugin(
-    ConstString name, const char *description,
+    llvm::StringRef name, llvm::StringRef description,
     TraceCreateInstanceForSessionFile create_callback_for_session_file,
     TraceCreateInstanceForLiveProcess create_callback_for_live_process,
     llvm::StringRef schema) {
   return GetTracePluginInstances().RegisterPlugin(
-      name, description, create_callback_for_session_file,
-      create_callback_for_live_process, schema);
+      ConstString(name), description.str().c_str(),
+      create_callback_for_session_file, create_callback_for_live_process,
+      schema);
 }
 
 bool PluginManager::UnregisterPlugin(
@@ -1077,21 +1081,21 @@ bool PluginManager::UnregisterPlugin(
 }
 
 TraceCreateInstanceForSessionFile
-PluginManager::GetTraceCreateCallback(ConstString plugin_name) {
-  return GetTracePluginInstances().GetCallbackForName(plugin_name);
+PluginManager::GetTraceCreateCallback(llvm::StringRef plugin_name) {
+  return GetTracePluginInstances().GetCallbackForName(ConstString(plugin_name));
 }
 
 TraceCreateInstanceForLiveProcess
-PluginManager::GetTraceCreateCallbackForLiveProcess(ConstString plugin_name) {
+PluginManager::GetTraceCreateCallbackForLiveProcess(llvm::StringRef plugin_name) {
   for (const TraceInstance &instance : GetTracePluginInstances().GetInstances())
-    if (instance.name == plugin_name)
+    if (instance.name.GetStringRef() == plugin_name)
       return instance.create_callback_for_live_process;
   return nullptr;
 }
 
-llvm::StringRef PluginManager::GetTraceSchema(ConstString plugin_name) {
+llvm::StringRef PluginManager::GetTraceSchema(llvm::StringRef plugin_name) {
   for (const TraceInstance &instance : GetTracePluginInstances().GetInstances())
-    if (instance.name == plugin_name)
+    if (instance.name.GetStringRef() == plugin_name)
       return instance.schema;
   return llvm::StringRef();
 }
@@ -1127,16 +1131,18 @@ static TraceExporterInstances &GetTraceExporterInstances() {
 }
 
 bool PluginManager::RegisterPlugin(
-    ConstString name, const char *description,
+    llvm::StringRef name, llvm::StringRef description,
     TraceExporterCreateInstance create_callback,
     ThreadTraceExportCommandCreator create_thread_trace_export_command) {
   return GetTraceExporterInstances().RegisterPlugin(
-      name, description, create_callback, create_thread_trace_export_command);
+      ConstString(name), description.str().c_str(), create_callback,
+      create_thread_trace_export_command);
 }
 
 TraceExporterCreateInstance
-PluginManager::GetTraceExporterCreateCallback(ConstString plugin_name) {
-  return GetTraceExporterInstances().GetCallbackForName(plugin_name);
+PluginManager::GetTraceExporterCreateCallback(llvm::StringRef plugin_name) {
+  return GetTraceExporterInstances().GetCallbackForName(
+      ConstString(plugin_name));
 }
 
 bool PluginManager::UnregisterPlugin(
@@ -1152,7 +1158,8 @@ PluginManager::GetThreadTraceExportCommandCreatorAtIndex(uint32_t index) {
   return nullptr;
 }
 
-const char *PluginManager::GetTraceExporterPluginNameAtIndex(uint32_t index) {
+llvm::StringRef
+PluginManager::GetTraceExporterPluginNameAtIndex(uint32_t index) {
   return GetTraceExporterInstances().GetNameAtIndex(index);
 }
 
@@ -1167,10 +1174,10 @@ static UnwindAssemblyInstances &GetUnwindAssemblyInstances() {
 }
 
 bool PluginManager::RegisterPlugin(
-    ConstString name, const char *description,
+    llvm::StringRef name, llvm::StringRef description,
     UnwindAssemblyCreateInstance create_callback) {
-  return GetUnwindAssemblyInstances().RegisterPlugin(name, description,
-                                                     create_callback);
+  return GetUnwindAssemblyInstances().RegisterPlugin(
+      ConstString(name), description.str().c_str(), create_callback);
 }
 
 bool PluginManager::UnregisterPlugin(
@@ -1194,10 +1201,10 @@ static MemoryHistoryInstances &GetMemoryHistoryInstances() {
 }
 
 bool PluginManager::RegisterPlugin(
-    ConstString name, const char *description,
+    llvm::StringRef name, llvm::StringRef description,
     MemoryHistoryCreateInstance create_callback) {
-  return GetMemoryHistoryInstances().RegisterPlugin(name, description,
-                                                    create_callback);
+  return GetMemoryHistoryInstances().RegisterPlugin(
+      ConstString(name), description.str().c_str(), create_callback);
 }
 
 bool PluginManager::UnregisterPlugin(
@@ -1233,11 +1240,12 @@ static InstrumentationRuntimeInstances &GetInstrumentationRuntimeInstances() {
 }
 
 bool PluginManager::RegisterPlugin(
-    ConstString name, const char *description,
+    llvm::StringRef name, llvm::StringRef description,
     InstrumentationRuntimeCreateInstance create_callback,
     InstrumentationRuntimeGetType get_type_callback) {
   return GetInstrumentationRuntimeInstances().RegisterPlugin(
-      name, description, create_callback, get_type_callback);
+      ConstString(name), description.str().c_str(), create_callback,
+      get_type_callback);
 }
 
 bool PluginManager::UnregisterPlugin(
