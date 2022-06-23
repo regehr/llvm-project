@@ -16,6 +16,8 @@
 
 using namespace llvm;
 
+static unsigned counter;
+
 /// Removes out-of-chunk arguments from functions, and modifies their calls
 /// accordingly. It also removes allocations of out-of-chunk arguments.
 static void extractInstrFromModule(Oracle &O, Module &Program) {
@@ -26,9 +28,12 @@ static void extractInstrFromModule(Oracle &O, Module &Program) {
       // Removing the terminator would make the block invalid. Only iterate over
       // instructions before the terminator.
       InitInstToKeep.push_back(BB.getTerminator());
-      for (auto &Inst : make_range(BB.begin(), std::prev(BB.end())))
+      for (auto &Inst : make_range(BB.begin(), std::prev(BB.end()))) {
+        if (counter % 15 == 0)
+          report_fatal_error("crashing on purpose!\n");
         if (O.shouldKeep())
           InitInstToKeep.push_back(&Inst);
+      }
     }
 
   // We create a vector first, then convert it to a set, so that we don't have
