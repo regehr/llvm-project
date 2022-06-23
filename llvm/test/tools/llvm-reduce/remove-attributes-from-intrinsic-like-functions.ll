@@ -19,7 +19,7 @@ define i32 @t(i32 %a) {
 ; CHECK-INTERESTINGNESS-SAME: %a
 ; CHECK-INTERESTINGNESS-SAME: #1
 
-; CHECK-FINAL: %r = call "arg0" i32 @llvm.not.really.an.intrinsic(i32 "arg3" %a, i32 %a) #1
+; CHECK-FINAL: %r = tail call "arg0" i32 @llvm.not.really.an.intrinsic(i32 "arg3" %a, i32 %a) #1
 ; CHECK-ALL: ret i32 %r
 
   %r = call "arg0" "arg1" i32 @llvm.not.really.an.intrinsic(i32 "arg2" "arg3" %a, i32 %a) "arg4" "arg5"

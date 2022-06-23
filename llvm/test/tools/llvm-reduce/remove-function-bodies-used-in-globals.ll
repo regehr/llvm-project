@@ -5,7 +5,7 @@
 ; (Aliasee should be either GlobalValue or ConstantExpr).
 
 ; CHECK-INTERESTINGNESS: @alias =
-; CHECK-FINAL: @alias = alias void (i32), bitcast (void ()* @func to void (i32)*)
+; CHECK-FINAL: @alias = internal alias void (i32), bitcast (void ()* @func to void (i32)*)
 
 @alias = alias void (i32), void (i32)* @func
 

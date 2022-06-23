@@ -18,7 +18,7 @@
 
 declare void @llvm.foo(metadata)
 
-; CHECK-LABEL: define i32 @main
+; CHECK-LABEL: define {{(internal )?}}i32 @main
 define i32 @main(%t* %a, i32 %a2) {
 
 ; CHECK-LABEL: lb1:

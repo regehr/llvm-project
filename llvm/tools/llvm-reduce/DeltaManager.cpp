@@ -37,6 +37,7 @@
 #include "deltas/ReduceOperandsToArgs.h"
 #include "deltas/ReduceRegisterUses.h"
 #include "deltas/ReduceSpecialGlobals.h"
+#include "deltas/ReduceUsingOpt.h"
 #include "deltas/ReduceVirtualRegisters.h"
 #include "deltas/SimplifyInstructions.h"
 #include "llvm/Support/CommandLine.h"
@@ -51,6 +52,7 @@ static cl::opt<std::string>
                 cl::cat(LLVMReduceOptions));
 
 #define DELTA_PASSES                                                           \
+  DELTA_PASS("using-opt", reduceUsingOptDeltaPass)                             \
   DELTA_PASS("special-globals", reduceSpecialGlobalsDeltaPass)                 \
   DELTA_PASS("aliases", reduceAliasesDeltaPass)                                \
   DELTA_PASS("function-bodies", reduceFunctionBodiesDeltaPass)                 \

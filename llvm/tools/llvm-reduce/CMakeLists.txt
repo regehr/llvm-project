@@ -1,4 +1,5 @@
 set(LLVM_LINK_COMPONENTS
+  AggressiveInstCombine
   AllTargetsAsmParsers
   AllTargetsCodeGens
   AllTargetsDescs
@@ -8,9 +9,13 @@ set(LLVM_LINK_COMPONENTS
   BitWriter
   CodeGen
   Core
+  InstCombine
+  IPO
   IRReader
   MC
   MIRParser
+  Passes
+  ScalarOpts
   Support
   Target
   TransformUtils
@@ -41,6 +46,7 @@ add_llvm_tool(llvm-reduce
   deltas/ReduceOperandsSkip.cpp
   deltas/ReduceOperandsToArgs.cpp
   deltas/ReduceInstructionsMIR.cpp
+  deltas/ReduceUsingOpt.cpp
   deltas/ReduceInstructionFlagsMIR.cpp
   deltas/ReduceIRReferences.cpp
   deltas/ReduceVirtualRegisters.cpp
