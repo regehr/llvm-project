@@ -240,6 +240,14 @@ def force_load : Separate<["-"], "force_load">,
 def force_load_swift_libs : Flag<["-"], "force_load_swift_libs">,
     HelpText<"Apply -force_load to libraries listed in LC_LINKER_OPTIONS whose names start with 'swift'">,
     Group<grp_libs>;
+def load_hidden : Separate<["-"], "load_hidden">,
+    MetaVarName<"<path>">,
+    HelpText<"Load all symbols from static library with hidden visibility">,
+    Group<grp_libs>;
+def hidden_l : Joined<["-"], "hidden-l">,
+    MetaVarName<"<name>">,
+    HelpText<"Like -l<name>, but load all symbols with hidden visibility">,
+    Group<grp_libs>;
 
 def grp_content : OptionGroup<"content">, HelpText<"ADDITIONAL CONTENT">;
 
@@ -505,7 +513,6 @@ def reexported_symbols_list : Separate<["-"], "reexported_symbols_list">,
 def alias : MultiArg<["-"], "alias", 2>,
     MetaVarName<"<symbol_name> <alternate_name>">,
     HelpText<"Create a symbol alias with default global visibility">,
-    Flags<[HelpHidden]>,
     Group<grp_resolve>;
 def alias_list : Separate<["-"], "alias_list">,
     MetaVarName<"<file>">,
@@ -1257,8 +1264,7 @@ def ignore_auto_link : Flag<["-"], "ignore_auto_link">,
     Flags<[HelpHidden]>,
     Group<grp_undocumented>;
 def ignore_optimization_hints : Flag<["-"], "ignore_optimization_hints">,
-    HelpText<"This option is undocumented in ld64">,
-    Flags<[HelpHidden]>,
+    HelpText<"Ignore Linker Optimization Hints">,
     Group<grp_undocumented>;
 def init_offsets : Flag<["-"], "init_offsets">,
     HelpText<"This option is undocumented in ld64">,

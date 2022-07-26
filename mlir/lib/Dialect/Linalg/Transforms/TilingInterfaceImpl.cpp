@@ -71,9 +71,10 @@ struct LinalgOpTilingInterface
     Location loc = op->getLoc();
     LinalgOp linalgOp = cast<LinalgOp>(op);
     SmallVector<Value> valuesToTile = linalgOp.getInputAndOutputOperands();
+    SmallVector<Value> offsetValues =
+        getValueOrCreateConstantIndexOp(b, loc, offsets);
     SmallVector<Value, 4> tiledOperands = makeTiledShapes(
-        b, loc, linalgOp, valuesToTile,
-        getValueOrCreateConstantIndexOp(b, loc, offsets),
+        b, loc, linalgOp, valuesToTile, offsetValues,
         getValueOrCreateConstantIndexOp(b, loc, sizes), {}, true);
 
     SmallVector<Type> resultTensorTypes = llvm::to_vector(llvm::map_range(
@@ -83,6 +84,7 @@ struct LinalgOpTilingInterface
 
     Operation *tiledOp =
         linalgOp.clone(b, loc, resultTensorTypes, tiledOperands);
+    offsetIndices(b, cast<LinalgOp>(tiledOp), offsetValues);
 
     return {tiledOp};
   }
@@ -158,12 +160,12 @@ struct LinalgOpTilingInterface
     if (!indexingMap.isPermutation()) {
       SmallVector<Range> iterationDomain =
           tilingInterfaceOp.getIterationDomain(b);
-      for (auto range : llvm::enumerate(iterationDomain)) {
+      for (const auto &range : llvm::enumerate(iterationDomain)) {
         iterationTileOffsets[range.index()] = range.value().offset;
         iterationTileSizes[range.index()] = range.value().size;
       }
     }
-    for (auto resultExpr : llvm::enumerate(indexingMap.getResults())) {
+    for (const auto &resultExpr : llvm::enumerate(indexingMap.getResults())) {
       unsigned dimPosition =
           resultExpr.value().cast<AffineDimExpr>().getPosition();
       iterationTileOffsets[dimPosition] = offsets[resultExpr.index()];

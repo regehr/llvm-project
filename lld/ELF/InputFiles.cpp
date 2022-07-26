@@ -43,13 +43,6 @@ using namespace lld::elf;
 bool InputFile::isInGroup;
 uint32_t InputFile::nextGroupId;
 
-SmallVector<std::unique_ptr<MemoryBuffer>> elf::memoryBuffers;
-SmallVector<BinaryFile *, 0> elf::binaryFiles;
-SmallVector<BitcodeFile *, 0> elf::bitcodeFiles;
-SmallVector<BitcodeFile *, 0> elf::lazyBitcodeFiles;
-SmallVector<ELFFileBase *, 0> elf::objectFiles;
-SmallVector<SharedFile *, 0> elf::sharedFiles;
-
 std::unique_ptr<TarWriter> elf::tar;
 
 // Returns "<internal>", "foo.a(bar.o)" or "baz.o".
@@ -123,7 +116,7 @@ Optional<MemoryBufferRef> elf::readFile(StringRef path) {
   }
 
   MemoryBufferRef mbref = (*mbOrErr)->getMemBufferRef();
-  memoryBuffers.push_back(std::move(*mbOrErr)); // take MB ownership
+  ctx->memoryBuffers.push_back(std::move(*mbOrErr)); // take MB ownership
 
   if (tar)
     tar->append(relativeToRoot(path), mbref.getBuffer());
@@ -152,12 +145,12 @@ static bool isCompatible(InputFile *file) {
   }
 
   InputFile *existing = nullptr;
-  if (!objectFiles.empty())
-    existing = objectFiles[0];
-  else if (!sharedFiles.empty())
-    existing = sharedFiles[0];
-  else if (!bitcodeFiles.empty())
-    existing = bitcodeFiles[0];
+  if (!ctx->objectFiles.empty())
+    existing = ctx->objectFiles[0];
+  else if (!ctx->sharedFiles.empty())
+    existing = ctx->sharedFiles[0];
+  else if (!ctx->bitcodeFiles.empty())
+    existing = ctx->bitcodeFiles[0];
   std::string with;
   if (existing)
     with = " with " + toString(existing);
@@ -171,7 +164,7 @@ template <class ELFT> static void doParseFile(InputFile *file) {
 
   // Binary file
   if (auto *f = dyn_cast<BinaryFile>(file)) {
-    binaryFiles.push_back(f);
+    ctx->binaryFiles.push_back(f);
     f->parse();
     return;
   }
@@ -179,7 +172,7 @@ template <class ELFT> static void doParseFile(InputFile *file) {
   // Lazy object file
   if (file->lazy) {
     if (auto *f = dyn_cast<BitcodeFile>(file)) {
-      lazyBitcodeFiles.push_back(f);
+      ctx->lazyBitcodeFiles.push_back(f);
       f->parseLazy();
     } else {
       cast<ObjFile<ELFT>>(file)->parseLazy();
@@ -198,13 +191,13 @@ template <class ELFT> static void doParseFile(InputFile *file) {
 
   // LLVM bitcode file
   if (auto *f = dyn_cast<BitcodeFile>(file)) {
-    bitcodeFiles.push_back(f);
+    ctx->bitcodeFiles.push_back(f);
     f->parse<ELFT>();
     return;
   }
 
   // Regular object file
-  objectFiles.push_back(cast<ELFFileBase>(file));
+  ctx->objectFiles.push_back(cast<ELFFileBase>(file));
   cast<ObjFile<ELFT>>(file)->parse();
 }
 
@@ -744,9 +737,9 @@ static void updateARMVFPArgs(const ARMAttributeParser &attributes,
 static void updateSupportedARMFeatures(const ARMAttributeParser &attributes) {
   Optional<unsigned> attr =
       attributes.getAttributeValue(ARMBuildAttrs::CPU_arch);
-  if (!attr.hasValue())
+  if (!attr)
     return;
-  auto arch = attr.getValue();
+  auto arch = attr.value();
   switch (arch) {
   case ARMBuildAttrs::Pre_v4:
   case ARMBuildAttrs::v4:
@@ -1397,7 +1390,7 @@ template <class ELFT> void SharedFile::parse() {
   if (!wasInserted)
     return;
 
-  sharedFiles.push_back(this);
+  ctx->sharedFiles.push_back(this);
 
   verdefs = parseVerdefs<ELFT>(obj.base(), verdefSec);
   std::vector<uint32_t> verneeds = parseVerneed<ELFT>(obj, verneedSec);
@@ -1717,34 +1710,27 @@ void BinaryFile::parse() {
                                        data.size(), 0, nullptr});
 }
 
-InputFile *elf::createObjectFile(MemoryBufferRef mb, StringRef archiveName,
-                                 uint64_t offsetInArchive) {
-  if (isBitcode(mb))
-    return make<BitcodeFile>(mb, archiveName, offsetInArchive, /*lazy=*/false);
-
+ELFFileBase *elf::createObjFile(MemoryBufferRef mb, StringRef archiveName,
+                                bool lazy) {
+  ELFFileBase *f;
   switch (getELFKind(mb, archiveName)) {
   case ELF32LEKind:
-    return make<ObjFile<ELF32LE>>(mb, archiveName);
+    f = make<ObjFile<ELF32LE>>(mb, archiveName);
+    break;
   case ELF32BEKind:
-    return make<ObjFile<ELF32BE>>(mb, archiveName);
+    f = make<ObjFile<ELF32BE>>(mb, archiveName);
+    break;
   case ELF64LEKind:
-    return make<ObjFile<ELF64LE>>(mb, archiveName);
+    f = make<ObjFile<ELF64LE>>(mb, archiveName);
+    break;
   case ELF64BEKind:
-    return make<ObjFile<ELF64BE>>(mb, archiveName);
+    f = make<ObjFile<ELF64BE>>(mb, archiveName);
+    break;
   default:
     llvm_unreachable("getELFKind");
   }
-}
-
-InputFile *elf::createLazyFile(MemoryBufferRef mb, StringRef archiveName,
-                               uint64_t offsetInArchive) {
-  if (isBitcode(mb))
-    return make<BitcodeFile>(mb, archiveName, offsetInArchive, /*lazy=*/true);
-
-  auto *file =
-      cast<ELFFileBase>(createObjectFile(mb, archiveName, offsetInArchive));
-  file->lazy = true;
-  return file;
+  f->lazy = lazy;
+  return f;
 }
 
 template <class ELFT> void ObjFile<ELFT>::parseLazy() {
@@ -1770,7 +1756,7 @@ template <class ELFT> void ObjFile<ELFT>::parseLazy() {
 }
 
 bool InputFile::shouldExtractForCommon(StringRef name) {
-  if (isBitcode(mb))
+  if (isa<BitcodeFile>(this))
     return isBitcodeNonCommonDef(mb, name, archiveName);
 
   return isNonCommonDef(mb, name, archiveName);

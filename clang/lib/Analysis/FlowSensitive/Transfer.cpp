@@ -251,6 +251,16 @@ public:
       Env.setStorageLocation(*S, *SubExprLoc);
       break;
     }
+    case CK_NullToPointer:
+    case CK_NullToMemberPointer: {
+      auto &Loc = Env.createStorageLocation(S->getType());
+      Env.setStorageLocation(*S, Loc);
+
+      auto &NullPointerVal =
+          Env.getOrCreateNullPointerValue(S->getType()->getPointeeType());
+      Env.setValue(Loc, NullPointerVal);
+      break;
+    }
     default:
       break;
     }
@@ -554,11 +564,11 @@ public:
     Env.setValue(Loc, *Val);
 
     if (Type->isStructureOrClassType()) {
-      for (auto IT : llvm::zip(Type->getAsRecordDecl()->fields(), S->inits())) {
-        const FieldDecl *Field = std::get<0>(IT);
+      for (auto It : llvm::zip(Type->getAsRecordDecl()->fields(), S->inits())) {
+        const FieldDecl *Field = std::get<0>(It);
         assert(Field != nullptr);
 
-        const Expr *Init = std::get<1>(IT);
+        const Expr *Init = std::get<1>(It);
         assert(Init != nullptr);
 
         if (Value *InitVal = Env.getValue(*Init, SkipPast::None))

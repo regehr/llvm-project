@@ -15,10 +15,8 @@
 #include "clang/Analysis/FlowSensitive/DataflowEnvironment.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"
-#include "clang/AST/ExprCXX.h"
 #include "clang/AST/Type.h"
 #include "clang/Analysis/FlowSensitive/DataflowLattice.h"
-#include "clang/Analysis/FlowSensitive/StorageLocation.h"
 #include "clang/Analysis/FlowSensitive/Value.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -150,29 +148,6 @@ static void initGlobalVars(const Stmt &S, Environment &Env) {
   } else if (auto *E = dyn_cast<MemberExpr>(&S)) {
     initGlobalVar(*E->getMemberDecl(), Env);
   }
-}
-
-// FIXME: Does not precisely handle non-virtual diamond inheritance. A single
-// field decl will be modeled for all instances of the inherited field.
-static void
-getFieldsFromClassHierarchy(QualType Type,
-                            llvm::DenseSet<const FieldDecl *> &Fields) {
-  if (Type->isIncompleteType() || Type->isDependentType() ||
-      !Type->isRecordType())
-    return;
-
-  for (const FieldDecl *Field : Type->getAsRecordDecl()->fields())
-    Fields.insert(Field);
-  if (auto *CXXRecord = Type->getAsCXXRecordDecl())
-    for (const CXXBaseSpecifier &Base : CXXRecord->bases())
-      getFieldsFromClassHierarchy(Base.getType(), Fields);
-}
-
-/// Gets the set of all fields in the type.
-static llvm::DenseSet<const FieldDecl *> getObjectFields(QualType Type) {
-  llvm::DenseSet<const FieldDecl *> Fields;
-  getFieldsFromClassHierarchy(Type, Fields);
-  return Fields;
 }
 
 Environment::Environment(DataflowAnalysisContext &DACtx)
@@ -310,39 +285,21 @@ LatticeJoinEffect Environment::join(const Environment &Other,
 }
 
 StorageLocation &Environment::createStorageLocation(QualType Type) {
-  assert(!Type.isNull());
-  if (Type->isStructureOrClassType() || Type->isUnionType()) {
-    // FIXME: Explore options to avoid eager initialization of fields as some of
-    // them might not be needed for a particular analysis.
-    llvm::DenseMap<const ValueDecl *, StorageLocation *> FieldLocs;
-    for (const FieldDecl *Field : getObjectFields(Type))
-      FieldLocs.insert({Field, &createStorageLocation(Field->getType())});
-    return takeOwnership(
-        std::make_unique<AggregateStorageLocation>(Type, std::move(FieldLocs)));
-  }
-  return takeOwnership(std::make_unique<ScalarStorageLocation>(Type));
+  return DACtx->getStableStorageLocation(Type);
 }
 
 StorageLocation &Environment::createStorageLocation(const VarDecl &D) {
   // Evaluated declarations are always assigned the same storage locations to
   // ensure that the environment stabilizes across loop iterations. Storage
   // locations for evaluated declarations are stored in the analysis context.
-  if (auto *Loc = DACtx->getStorageLocation(D))
-    return *Loc;
-  auto &Loc = createStorageLocation(D.getType());
-  DACtx->setStorageLocation(D, Loc);
-  return Loc;
+  return DACtx->getStableStorageLocation(D);
 }
 
 StorageLocation &Environment::createStorageLocation(const Expr &E) {
   // Evaluated expressions are always assigned the same storage locations to
   // ensure that the environment stabilizes across loop iterations. Storage
   // locations for evaluated expressions are stored in the analysis context.
-  if (auto *Loc = DACtx->getStorageLocation(E))
-    return *Loc;
-  auto &Loc = createStorageLocation(E.getType());
-  DACtx->setStorageLocation(E, Loc);
-  return Loc;
+  return DACtx->getStableStorageLocation(E);
 }
 
 void Environment::setStorageLocation(const ValueDecl &D, StorageLocation &Loc) {
@@ -373,6 +330,10 @@ StorageLocation *Environment::getThisPointeeStorageLocation() const {
   return DACtx->getThisPointeeStorageLocation();
 }
 
+PointerValue &Environment::getOrCreateNullPointerValue(QualType PointeeType) {
+  return DACtx->getOrCreateNullPointerValue(PointeeType);
+}
+
 void Environment::setValue(const StorageLocation &Loc, Value &Val) {
   LocToVal[&Loc] = &Val;
 
@@ -391,16 +352,16 @@ void Environment::setValue(const StorageLocation &Loc, Value &Val) {
     }
   }
 
-  auto IT = MemberLocToStruct.find(&Loc);
-  if (IT != MemberLocToStruct.end()) {
+  auto It = MemberLocToStruct.find(&Loc);
+  if (It != MemberLocToStruct.end()) {
     // `Loc` is the location of a struct member so we need to also update the
     // value of the member in the corresponding `StructValue`.
 
-    assert(IT->second.first != nullptr);
-    StructValue &StructVal = *IT->second.first;
+    assert(It->second.first != nullptr);
+    StructValue &StructVal = *It->second.first;
 
-    assert(IT->second.second != nullptr);
-    const ValueDecl &Member = *IT->second.second;
+    assert(It->second.second != nullptr);
+    const ValueDecl &Member = *It->second.second;
 
     StructVal.setChild(Member, Val);
   }
@@ -547,6 +508,10 @@ void Environment::addToFlowCondition(BoolValue &Val) {
 
 bool Environment::flowConditionImplies(BoolValue &Val) const {
   return DACtx->flowConditionImplies(*FlowConditionToken, Val);
+}
+
+void Environment::dump() const {
+  DACtx->dumpFlowCondition(*FlowConditionToken);
 }
 
 } // namespace dataflow
