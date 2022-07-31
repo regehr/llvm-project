@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/APSInt.h"
@@ -52,6 +53,8 @@ SmallVector<int64_t, 4> extractFromI64ArrayAttr(Attribute attr) {
 /// Given a value, try to extract a constant Attribute. If this fails, return
 /// the original value.
 OpFoldResult getAsOpFoldResult(Value val) {
+  if (!val)
+    return OpFoldResult();
   Attribute attr;
   if (matchPattern(val, m_Constant(&attr)))
     return attr;
@@ -60,7 +63,7 @@ OpFoldResult getAsOpFoldResult(Value val) {
 
 /// Given an array of values, try to extract a constant Attribute from each
 /// value. If this fails, return the original value.
-SmallVector<OpFoldResult> getAsOpFoldResult(ArrayRef<Value> values) {
+SmallVector<OpFoldResult> getAsOpFoldResult(ValueRange values) {
   return llvm::to_vector<4>(
       llvm::map_range(values, [](Value v) { return getAsOpFoldResult(v); }));
 }
@@ -107,4 +110,40 @@ bool isEqualConstantIntOrValue(OpFoldResult ofr1, OpFoldResult ofr2) {
   auto v1 = ofr1.dyn_cast<Value>(), v2 = ofr2.dyn_cast<Value>();
   return v1 && v1 == v2;
 }
+
+/// Return a vector of OpFoldResults given the special value
+/// that indicates whether of the value is dynamic or not.
+SmallVector<OpFoldResult, 4> getMixedValues(ArrayAttr staticValues,
+                                            ValueRange dynamicValues,
+                                            int64_t dynamicValueIndicator) {
+  SmallVector<OpFoldResult, 4> res;
+  res.reserve(staticValues.size());
+  unsigned numDynamic = 0;
+  unsigned count = static_cast<unsigned>(staticValues.size());
+  for (unsigned idx = 0; idx < count; ++idx) {
+    APInt value = staticValues[idx].cast<IntegerAttr>().getValue();
+    res.push_back(value.getSExtValue() == dynamicValueIndicator
+                      ? OpFoldResult{dynamicValues[numDynamic++]}
+                      : OpFoldResult{staticValues[idx]});
+  }
+  return res;
+}
+
+std::pair<ArrayAttr, SmallVector<Value>>
+decomposeMixedValues(Builder &b,
+                     const SmallVectorImpl<OpFoldResult> &mixedValues,
+                     const int64_t dynamicValueIndicator) {
+  SmallVector<int64_t> staticValues;
+  SmallVector<Value> dynamicValues;
+  for (const auto &it : mixedValues) {
+    if (it.is<Attribute>()) {
+      staticValues.push_back(it.get<Attribute>().cast<IntegerAttr>().getInt());
+    } else {
+      staticValues.push_back(dynamicValueIndicator);
+      dynamicValues.push_back(it.get<Value>());
+    }
+  }
+  return {b.getI64ArrayAttr(staticValues), dynamicValues};
+}
+
 } // namespace mlir

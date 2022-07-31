@@ -34,6 +34,7 @@ using namespace lld;
 using namespace lld::elf;
 
 SmallVector<InputSectionBase *, 0> elf::inputSections;
+SmallVector<EhInputSection *, 0> elf::ehInputSections;
 DenseSet<std::pair<const Symbol *, uint64_t>> elf::ppc64noTocRelax;
 
 // Returns a string to construct an error message.
@@ -1341,10 +1342,6 @@ static size_t findNull(StringRef s, size_t entSize) {
       return i;
   }
   llvm_unreachable("");
-}
-
-SyntheticSection *MergeInputSection::getParent() const {
-  return cast_or_null<SyntheticSection>(parent);
 }
 
 // Split SHF_STRINGS section. Such section is a sequence of

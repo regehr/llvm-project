@@ -2451,12 +2451,15 @@ Error DWARFLinker::link() {
       continue;
     }
 
-    if (OptContext.File.Dwarf->getDWARFObj().getMacinfoSection().size() > 1) {
-      reportWarning("'.debug_macinfo' is not currently supported: file "
-                    "will be skipped",
-                    OptContext.File);
-      OptContext.Skip = true;
-      continue;
+    if (OptContext.File.Dwarf->getDWARFObj().getMacinfoSection().size() > 0) {
+      if (OptContext.File.Dwarf->getDWARFObj().getMacinfoSection().find_if(
+              [](char Sym) { return Sym != 0; }) != StringRef::npos) {
+        reportWarning("'.debug_macinfo' is not currently supported: file "
+                      "will be skipped",
+                      OptContext.File);
+        OptContext.Skip = true;
+        continue;
+      }
     }
 
     // In a first phase, just read in the debug info and load all clang modules.

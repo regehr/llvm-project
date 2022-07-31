@@ -4034,14 +4034,14 @@ TypeResult Sema::ActOnTemplateIdType(
     return CreateParsedType(T, TLB.getTypeSourceInfo(Context, T));
   }
 
-  QualType Result = CheckTemplateIdType(Template, TemplateIILoc, TemplateArgs);
-  if (Result.isNull())
+  QualType SpecTy = CheckTemplateIdType(Template, TemplateIILoc, TemplateArgs);
+  if (SpecTy.isNull())
     return true;
 
   // Build type-source information.
   TypeLocBuilder TLB;
-  TemplateSpecializationTypeLoc SpecTL
-    = TLB.push<TemplateSpecializationTypeLoc>(Result);
+  TemplateSpecializationTypeLoc SpecTL =
+      TLB.push<TemplateSpecializationTypeLoc>(SpecTy);
   SpecTL.setTemplateKeywordLoc(TemplateKWLoc);
   SpecTL.setTemplateNameLoc(TemplateIILoc);
   SpecTL.setLAngleLoc(LAngleLoc);
@@ -4049,18 +4049,14 @@ TypeResult Sema::ActOnTemplateIdType(
   for (unsigned i = 0, e = SpecTL.getNumArgs(); i != e; ++i)
     SpecTL.setArgLocInfo(i, TemplateArgs[i].getLocInfo());
 
-  // NOTE: avoid constructing an ElaboratedTypeLoc if this is a
-  // constructor or destructor name (in such a case, the scope specifier
-  // will be attached to the enclosing Decl or Expr node).
-  if (SS.isNotEmpty() && !IsCtorOrDtorName) {
-    // Create an elaborated-type-specifier containing the nested-name-specifier.
-    Result = Context.getElaboratedType(ETK_None, SS.getScopeRep(), Result);
-    ElaboratedTypeLoc ElabTL = TLB.push<ElaboratedTypeLoc>(Result);
-    ElabTL.setElaboratedKeywordLoc(SourceLocation());
+  // Create an elaborated-type-specifier containing the nested-name-specifier.
+  QualType ElTy = getElaboratedType(
+      ETK_None, !IsCtorOrDtorName ? SS : CXXScopeSpec(), SpecTy);
+  ElaboratedTypeLoc ElabTL = TLB.push<ElaboratedTypeLoc>(ElTy);
+  ElabTL.setElaboratedKeywordLoc(SourceLocation());
+  if (!ElabTL.isEmpty())
     ElabTL.setQualifierLoc(SS.getWithLocInContext(Context));
-  }
-
-  return CreateParsedType(Result, TLB.getTypeSourceInfo(Context, Result));
+  return CreateParsedType(ElTy, TLB.getTypeSourceInfo(Context, ElTy));
 }
 
 TypeResult Sema::ActOnTagTemplateIdType(TagUseKind TUK,
@@ -4755,9 +4751,12 @@ Sema::CheckConceptTemplateId(const CXXScopeSpec &SS,
   bool AreArgsDependent =
       TemplateSpecializationType::anyDependentTemplateArguments(*TemplateArgs,
                                                                 Converted);
+  MultiLevelTemplateArgumentList MLTAL;
+  MLTAL.addOuterTemplateArguments(Converted);
+  LocalInstantiationScope Scope(*this);
   if (!AreArgsDependent &&
       CheckConstraintSatisfaction(
-          NamedConcept, {NamedConcept->getConstraintExpr()}, Converted,
+          NamedConcept, {NamedConcept->getConstraintExpr()}, MLTAL,
           SourceRange(SS.isSet() ? SS.getBeginLoc() : ConceptNameInfo.getLoc(),
                       TemplateArgs->getRAngleLoc()),
           Satisfaction))
@@ -5974,13 +5973,18 @@ bool Sema::CheckTemplateArgumentList(
   if (UpdateArgsWithConversions)
     TemplateArgs = std::move(NewArgs);
 
-  if (!PartialTemplateArgs &&
-      EnsureTemplateArgumentListConstraints(
-        Template, Converted, SourceRange(TemplateLoc,
-                                         TemplateArgs.getRAngleLoc()))) {
-    if (ConstraintsNotSatisfied)
-      *ConstraintsNotSatisfied = true;
-    return true;
+  if (!PartialTemplateArgs) {
+    // FIXME: This will be changed a bit once deferred concept instantiation is
+    // implemented.
+    MultiLevelTemplateArgumentList MLTAL;
+    MLTAL.addOuterTemplateArguments(Converted);
+    if (EnsureTemplateArgumentListConstraints(
+            Template, MLTAL,
+            SourceRange(TemplateLoc, TemplateArgs.getRAngleLoc()))) {
+      if (ConstraintsNotSatisfied)
+        *ConstraintsNotSatisfied = true;
+      return true;
+    }
   }
 
   return false;
@@ -8728,7 +8732,7 @@ void Sema::CheckConceptRedefinition(ConceptDecl *NewDecl,
   if (Previous.empty())
     return;
 
-  auto *OldConcept = dyn_cast<ConceptDecl>(Previous.getRepresentativeDecl());
+  auto *OldConcept = dyn_cast<ConceptDecl>(Previous.getRepresentativeDecl()->getUnderlyingDecl());
   if (!OldConcept) {
     auto *Old = Previous.getRepresentativeDecl();
     Diag(NewDecl->getLocation(), diag::err_redefinition_different_kind)
@@ -8746,7 +8750,8 @@ void Sema::CheckConceptRedefinition(ConceptDecl *NewDecl,
     AddToScope = false;
     return;
   }
-  if (hasReachableDefinition(OldConcept)) {
+  if (hasReachableDefinition(OldConcept) &&
+      IsRedefinitionInModule(NewDecl, OldConcept)) {
     Diag(NewDecl->getLocation(), diag::err_redefinition)
         << NewDecl->getDeclName();
     notePreviousDefinition(OldConcept, NewDecl->getLocation());
@@ -8758,7 +8763,8 @@ void Sema::CheckConceptRedefinition(ConceptDecl *NewDecl,
     //        Other decls (e.g. namespaces) also have this shortcoming.
     return;
   }
-  Context.setPrimaryMergedDecl(NewDecl, OldConcept);
+  // We unwrap canonical decl late to check for module visibility.
+  Context.setPrimaryMergedDecl(NewDecl, OldConcept->getCanonicalDecl());
 }
 
 /// \brief Strips various properties off an implicit instantiation

@@ -39,6 +39,19 @@ void dispatchIndexOpFoldResults(ArrayRef<OpFoldResult> ofrs,
                                 SmallVectorImpl<int64_t> &staticVec,
                                 int64_t sentinel);
 
+/// Return a vector of OpFoldResults given the special value
+/// that indicates whether of the value is dynamic or not.
+SmallVector<OpFoldResult, 4> getMixedValues(ArrayAttr staticValues,
+                                            ValueRange dynamicValues,
+                                            int64_t dynamicValueIndicator);
+
+/// Decompose a vector of mixed static or dynamic values into the corresponding
+/// pair of arrays. This is the inverse function of `getMixedValues`.
+std::pair<ArrayAttr, SmallVector<Value>>
+decomposeMixedValues(Builder &b,
+                     const SmallVectorImpl<OpFoldResult> &mixedValues,
+                     const int64_t dynamicValueIndicator);
+
 /// Extract int64_t values from the assumed ArrayAttr of IntegerAttr.
 SmallVector<int64_t, 4> extractFromI64ArrayAttr(Attribute attr);
 
@@ -48,7 +61,7 @@ OpFoldResult getAsOpFoldResult(Value val);
 
 /// Given an array of values, try to extract a constant Attribute from each
 /// value. If this fails, return the original value.
-SmallVector<OpFoldResult> getAsOpFoldResult(ArrayRef<Value> values);
+SmallVector<OpFoldResult> getAsOpFoldResult(ValueRange values);
 
 /// Convert `arrayAttr` to a vector of OpFoldResult.
 SmallVector<OpFoldResult> getAsOpFoldResult(ArrayAttr arrayAttr);
