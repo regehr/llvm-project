@@ -19,6 +19,7 @@
 #include "deltas/ReduceArguments.h"
 #include "deltas/ReduceAttributes.h"
 #include "deltas/ReduceBasicBlocks.h"
+#include "deltas/ReduceBranches.h"
 #include "deltas/ReduceFunctionBodies.h"
 #include "deltas/ReduceFunctions.h"
 #include "deltas/ReduceGlobalObjects.h"
@@ -73,6 +74,9 @@ static cl::opt<std::string>
     DELTA_PASS("operands-to-args", reduceOperandsToArgsDeltaPass)              \
     DELTA_PASS("operands-skip", reduceOperandsSkipDeltaPass)                   \
     DELTA_PASS("operand-bundles", reduceOperandBundesDeltaPass)                \
+    DELTA_PASS("cond-branches-true", reduceConditionalBranchesTrueDeltaPass)   \
+    DELTA_PASS("cond-branches-false", reduceConditionalBranchesFalseDeltaPass) \
+    DELTA_PASS("uncond-branches", reduceUnconditionalBranchesDeltaPass)        \
     DELTA_PASS("attributes", reduceAttributesDeltaPass)                        \
     DELTA_PASS("module-data", reduceModuleDataDeltaPass)                       \
   } while (false)
