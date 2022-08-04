@@ -23,6 +23,7 @@
 #include "llvm/Transforms/IPO/GlobalOpt.h"
 #include "llvm/Transforms/IPO/Internalize.h"
 #include "llvm/Transforms/IPO/SCCP.h"
+#include "llvm/Transforms/IPO/StripSymbols.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/Scalar/ADCE.h"
 #include "llvm/Transforms/Scalar/BDCE.h"
@@ -102,6 +103,7 @@ static std::vector<std::function<void(LoopPassManager &)>> LoopPasses = {
 
 static std::vector<std::function<void(ModulePassManager &)>> ModulePasses = {
     [](ModulePassManager &MPM) -> void { MPM.addPass(GlobalDCEPass()); },
+    [](ModulePassManager &MPM) -> void { MPM.addPass(StripSymbolsPass()); },
     [](ModulePassManager &MPM) -> void {
       MPM.addPass(DeadArgumentEliminationPass());
     },
