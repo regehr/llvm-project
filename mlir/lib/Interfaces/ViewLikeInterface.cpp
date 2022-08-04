@@ -180,21 +180,48 @@ bool mlir::detail::sameOffsetsSizesAndStrides(
 }
 
 SmallVector<OpFoldResult, 4>
-mlir::getMixedOffsets(OffsetSizeAndStrideOpInterface op,
-                      ArrayAttr staticOffsets, ValueRange offsets) {
-  return getMixedValues(staticOffsets, offsets, op.getDynamicOffsetIndicator());
+mlir::getMixedValues(ArrayAttr staticValues, ValueRange dynamicValues,
+                     const int64_t dynamicValueIndicator) {
+  SmallVector<OpFoldResult, 4> res;
+  res.reserve(staticValues.size());
+  unsigned numDynamic = 0;
+  unsigned count = static_cast<unsigned>(staticValues.size());
+  for (unsigned idx = 0; idx < count; ++idx) {
+    APInt value = staticValues[idx].cast<IntegerAttr>().getValue();
+    res.push_back(value.getSExtValue() == dynamicValueIndicator
+                      ? OpFoldResult{dynamicValues[numDynamic++]}
+                      : OpFoldResult{staticValues[idx]});
+  }
+  return res;
 }
 
 SmallVector<OpFoldResult, 4>
-mlir::getMixedSizes(OffsetSizeAndStrideOpInterface op, ArrayAttr staticSizes,
-                    ValueRange sizes) {
-  return getMixedValues(staticSizes, sizes, op.getDynamicSizeIndicator());
+mlir::getMixedStridesOrOffsets(ArrayAttr staticValues,
+                               ValueRange dynamicValues) {
+  return getMixedValues(staticValues, dynamicValues,
+                        ShapedType::kDynamicStrideOrOffset);
 }
 
-SmallVector<OpFoldResult, 4>
-mlir::getMixedStrides(OffsetSizeAndStrideOpInterface op,
-                      ArrayAttr staticStrides, ValueRange strides) {
-  return getMixedValues(staticStrides, strides, op.getDynamicStrideIndicator());
+SmallVector<OpFoldResult, 4> mlir::getMixedSizes(ArrayAttr staticValues,
+                                                 ValueRange dynamicValues) {
+  return getMixedValues(staticValues, dynamicValues, ShapedType::kDynamicSize);
+}
+
+std::pair<ArrayAttr, SmallVector<Value>>
+mlir::decomposeMixedValues(Builder &b,
+                           const SmallVectorImpl<OpFoldResult> &mixedValues,
+                           const int64_t dynamicValueIndicator) {
+  SmallVector<int64_t> staticValues;
+  SmallVector<Value> dynamicValues;
+  for (const auto &it : mixedValues) {
+    if (it.is<Attribute>()) {
+      staticValues.push_back(it.get<Attribute>().cast<IntegerAttr>().getInt());
+    } else {
+      staticValues.push_back(dynamicValueIndicator);
+      dynamicValues.push_back(it.get<Value>());
+    }
+  }
+  return {b.getI64ArrayAttr(staticValues), dynamicValues};
 }
 
 std::pair<ArrayAttr, SmallVector<Value>> mlir::decomposeMixedStridesOrOffsets(
