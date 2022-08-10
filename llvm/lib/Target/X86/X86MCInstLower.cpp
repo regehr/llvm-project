@@ -1401,7 +1401,7 @@ void X86AsmPrinter::LowerPATCHABLE_OP(const MachineInstr &MI,
     if (MinSize == 2 && Subtarget->is32Bit() &&
         Subtarget->isTargetWindowsMSVC() &&
         (Subtarget->getCPU().empty() || Subtarget->getCPU() == "pentium3")) {
-      // For compatibilty reasons, when targetting MSVC, is is important to
+      // For compatibility reasons, when targetting MSVC, is is important to
       // generate a 'legacy' NOP in the form of a 8B FF MOV EDI, EDI. Some tools
       // rely specifically on this pattern to be able to patch a function.
       // This is only for 32-bit targets, when using /arch:IA32 or /arch:SSE.
@@ -2500,7 +2500,7 @@ void X86AsmPrinter::emitInstruction(const MachineInstr *MI) {
   case X86::TAILJMPd64:
     if (IndCSPrefix && MI->hasRegisterImplicitUseOperand(X86::R11))
       EmitAndCountInstruction(MCInstBuilder(X86::CS_PREFIX));
-    LLVM_FALLTHROUGH;
+    [[fallthrough]];
   case X86::TAILJMPr:
   case X86::TAILJMPm:
   case X86::TAILJMPd:
