@@ -18,7 +18,9 @@
 
 using namespace llvm;
 
-static void setCondBranchesTo(Oracle &O, Module &Program, unsigned SuccNum) {
+/// For each conditional branch, try to turn it into an unconditional
+/// branch to the specified successor
+static void setConditionalBranchesTo(Oracle &O, Module &Program, unsigned SuccNum) {
   for (auto &F : Program) {
     for (auto &BB : F) {
       BranchInst *BI = dyn_cast<BranchInst>(BB.getTerminator());
@@ -30,20 +32,12 @@ static void setCondBranchesTo(Oracle &O, Module &Program, unsigned SuccNum) {
   }
 }
 
-/*
- * for each conditional branch, try to turn it into an unconditional
- * branch to its true target
- */
 static void reduceConditionalBranchesTrue(Oracle &O, Module &Program) {
-  setCondBranchesTo(O, Program, 0);
+  setConditionalBranchesTo(O, Program, 0);
 }
 
-/*
- * for each conditional branch, try to turn it into an unconditional
- * branch to its false target
- */
 static void reduceConditionalBranchesFalse(Oracle &O, Module &Program) {
-  setCondBranchesTo(O, Program, 1);
+  setConditionalBranchesTo(O, Program, 1);
 }
 
 ///  Given a basic block terminated by an unconditional branch, move
@@ -81,8 +75,8 @@ static bool pushInsnsToSuccessor(Oracle &O, BasicBlock *BB, BranchInst *BI) {
       unsigned index = 0;
       for (BasicBlock *TBB : successors(SI)) {
         if (TBB == BB) {
-          SI->setSuccessor(index, NewTarget);
           Pred->replacePhiUsesWith(BB, NewTarget);
+          SI->setSuccessor(index, NewTarget);
         }
         ++index;
       }
