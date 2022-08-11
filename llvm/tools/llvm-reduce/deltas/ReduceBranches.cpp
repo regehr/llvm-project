@@ -65,14 +65,13 @@ static bool pushInsnsToSuccessor(Oracle &O, BasicBlock *BB, BranchInst *BI) {
   /// Branch around the BB we're trying to get rid of
   BasicBlock *NewTarget = BI->getSuccessor(0);
   for (BasicBlock *Pred : predecessors(BB)) {
-    // Pred->replaceSuccessorsPhiUsesWith(BB, NewTarget);
     BranchInst *BI = dyn_cast<BranchInst>(Pred->getTerminator());
     if (BI) {
       unsigned index = 0;
       for (BasicBlock *TBB : successors(BI)) {
         if (TBB == BB) {
-          BI->setSuccessor(index, NewTarget);
           Pred->replacePhiUsesWith(BB, NewTarget);
+          BI->setSuccessor(index, NewTarget);
         }
         ++index;
       }
