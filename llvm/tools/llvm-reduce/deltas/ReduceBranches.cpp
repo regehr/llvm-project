@@ -18,18 +18,24 @@
 
 using namespace llvm;
 
+static void setCondBranchesTo(Oracle &O, Module &Program, unsigned SuccNum) {
+  for (auto &F : Program) {
+    for (auto &BB : F) {
+      BranchInst *BI = dyn_cast<BranchInst>(BB.getTerminator());
+      if (BI && BI->isConditional() && !O.shouldKeep()) {
+        BI->getSuccessor(1 - SuccNum)->removePredecessor(&BB, true);
+        ReplaceInstWithInst(BI, BranchInst::Create(BI->getSuccessor(SuccNum)));
+      }
+    }
+  }
+}
+
 /*
  * for each conditional branch, try to turn it into an unconditional
  * branch to its true target
  */
 static void reduceConditionalBranchesTrue(Oracle &O, Module &Program) {
-  for (auto &F : Program) {
-    for (auto &BB : F) {
-      BranchInst *BI = dyn_cast<BranchInst>(BB.getTerminator());
-      if (BI && BI->isConditional() && !O.shouldKeep())
-        ReplaceInstWithInst(BI, BranchInst::Create(BI->getSuccessor(0)));
-    }
-  }
+  setCondBranchesTo(O, Program, 0);
 }
 
 /*
@@ -37,13 +43,7 @@ static void reduceConditionalBranchesTrue(Oracle &O, Module &Program) {
  * branch to its false target
  */
 static void reduceConditionalBranchesFalse(Oracle &O, Module &Program) {
-  for (auto &F : Program) {
-    for (auto &BB : F) {
-      BranchInst *BI = dyn_cast<BranchInst>(BB.getTerminator());
-      if (BI && BI->isConditional() && !O.shouldKeep())
-        ReplaceInstWithInst(BI, BranchInst::Create(BI->getSuccessor(1)));
-    }
-  }
+  setCondBranchesTo(O, Program, 1);
 }
 
 ///  Given a basic block terminated by an unconditional branch, move
@@ -65,12 +65,15 @@ static bool pushInsnsToSuccessor(Oracle &O, BasicBlock *BB, BranchInst *BI) {
   /// Branch around the BB we're trying to get rid of
   BasicBlock *NewTarget = BI->getSuccessor(0);
   for (BasicBlock *Pred : predecessors(BB)) {
+    // Pred->replaceSuccessorsPhiUsesWith(BB, NewTarget);
     BranchInst *BI = dyn_cast<BranchInst>(Pred->getTerminator());
     if (BI) {
       unsigned index = 0;
       for (BasicBlock *TBB : successors(BI)) {
-        if (TBB == BB)
+        if (TBB == BB) {
           BI->setSuccessor(index, NewTarget);
+          Pred->replacePhiUsesWith(BB, NewTarget);
+        }
         ++index;
       }
     }
@@ -78,8 +81,10 @@ static bool pushInsnsToSuccessor(Oracle &O, BasicBlock *BB, BranchInst *BI) {
     if (SI) {
       unsigned index = 0;
       for (BasicBlock *TBB : successors(SI)) {
-        if (TBB == BB)
+        if (TBB == BB) {
           SI->setSuccessor(index, NewTarget);
+          Pred->replacePhiUsesWith(BB, NewTarget);
+        }
         ++index;
       }
     }
