@@ -23,7 +23,7 @@ static void setCondBranchesTo(Oracle &O, Module &Program, unsigned SuccNum) {
     for (auto &BB : F) {
       BranchInst *BI = dyn_cast<BranchInst>(BB.getTerminator());
       if (BI && BI->isConditional() && !O.shouldKeep()) {
-        BI->getSuccessor(1 - SuccNum)->removePredecessor(&BB, true);
+        BI->getSuccessor(1 - SuccNum)->removePredecessor(&BB);
         ReplaceInstWithInst(BI, BranchInst::Create(BI->getSuccessor(SuccNum)));
       }
     }
