@@ -21,15 +21,21 @@ using namespace llvm;
 /// For each conditional branch, try to turn it into an unconditional
 /// branch to the specified successor
 static void setConditionalBranchesTo(Oracle &O, Module &Program, unsigned SuccNum) {
+  SmallPtrSet<BasicBlock *, 8> TryToDelete;
   for (auto &F : Program) {
     for (auto &BB : F) {
       BranchInst *BI = dyn_cast<BranchInst>(BB.getTerminator());
       if (BI && BI->isConditional() && !O.shouldKeep()) {
-        BI->getSuccessor(1 - SuccNum)->removePredecessor(&BB);
+        auto Other = BI->getSuccessor(1 - SuccNum);
+        TryToDelete.insert(Other);
+        Other->removePredecessor(&BB);
         ReplaceInstWithInst(BI, BranchInst::Create(BI->getSuccessor(SuccNum)));
       }
     }
   }
+  for (auto *BB : TryToDelete)
+    if (!BB->hasNPredecessorsOrMore(1))
+      BB->eraseFromParent();
 }
 
 static void reduceConditionalBranchesTrue(Oracle &O, Module &Program) {
@@ -40,74 +46,50 @@ static void reduceConditionalBranchesFalse(Oracle &O, Module &Program) {
   setConditionalBranchesTo(O, Program, 1);
 }
 
-///  Given a basic block terminated by an unconditional branch, move
-///  its instructions to the head of the successor BB and then update
-///  predecessors to skip over the block
-static bool pushInsnsToSuccessor(Oracle &O, BasicBlock *BB, BranchInst *BI) {
-  /// Feasibility checks before talking to the oracle
-  if (BB->isEntryBlock())
-    return false;
-  for (BasicBlock *Pred : predecessors(BB)) {
-    auto *TI = Pred->getTerminator();
-    if (!isa<BranchInst>(TI) && !isa<SwitchInst>(TI))
-      return false;
-  }
-
-  if (O.shouldKeep())
-    return false;
-
-  /// Branch around the BB we're trying to get rid of
-  BasicBlock *NewTarget = BI->getSuccessor(0);
-  for (BasicBlock *Pred : predecessors(BB)) {
-    BranchInst *BI = dyn_cast<BranchInst>(Pred->getTerminator());
-    if (BI) {
-      unsigned index = 0;
-      for (BasicBlock *TBB : successors(BI)) {
-        if (TBB == BB) {
-          Pred->replacePhiUsesWith(BB, NewTarget);
-          BI->setSuccessor(index, NewTarget);
-        }
-        ++index;
-      }
-    }
-    SwitchInst *SI = dyn_cast<SwitchInst>(Pred->getTerminator());
-    if (SI) {
-      unsigned index = 0;
-      for (BasicBlock *TBB : successors(SI)) {
-        if (TBB == BB) {
-          Pred->replacePhiUsesWith(BB, NewTarget);
-          SI->setSuccessor(index, NewTarget);
-        }
-        ++index;
-      }
-    }
-  }
-
-  /// Sink all instructions to the front of the new branch target
-  std::vector<Instruction *> Insns;
-  for (auto &I : *BB)
-    if (!I.isTerminator())
-      Insns.push_back(&I);
-  auto it = NewTarget->getFirstInsertionPt();
-  for (auto I : Insns)
-    I->moveBefore(*NewTarget, it);
-
-  return true;
-}
-
 static void reduceUnconditionalBranches(Oracle &O, Module &Program) {
-  SmallSet<BasicBlock *, 4> ToDelete;
   for (auto &F : Program) {
     for (auto &BB : F) {
-      BranchInst *BI = dyn_cast<BranchInst>(BB.getTerminator());
-      if (BI && BI->isUnconditional())
-        if (pushInsnsToSuccessor(O, &BB, BI))
-          ToDelete.insert(&BB);
+      if (BB.isEntryBlock())
+        continue;
+      BranchInst *XBI = dyn_cast<BranchInst>(&*BB.begin());
+      if (!XBI || !XBI->isUnconditional())
+        continue;
+      if (O.shouldKeep())
+        continue;
+      outs() << "ok to go\n";
+      BasicBlock *NewTarget = XBI->getSuccessor(0);
+    again:
+      for (BasicBlock *Pred : predecessors(&BB)) {
+        BranchInst *PredBI = dyn_cast<BranchInst>(Pred->getTerminator());
+        if (PredBI) {
+          outs() << "  removepred " << *Pred << "\n";
+          BB.removePredecessor(Pred);
+          unsigned index = 0;
+          for (BasicBlock *TBB : successors(PredBI)) {
+            if (TBB == &BB) {
+              //Pred->replacePhiUsesWith(&BB, NewTarget);
+              PredBI->setSuccessor(index, NewTarget);
+              goto again;
+            }
+            ++index;
+          }
+        }
+        SwitchInst *SI = dyn_cast<SwitchInst>(Pred->getTerminator());
+        if (SI) {
+          assert(false);
+          unsigned index = 0;
+          for (BasicBlock *TBB : successors(SI)) {
+            if (TBB == &BB) {
+              Pred->replacePhiUsesWith(&BB, NewTarget);
+              SI->setSuccessor(index, NewTarget);
+            }
+            ++index;
+          }
+        }
+      }
     }
   }
-  for (auto *BB : ToDelete)
-    if (!BB->hasNPredecessorsOrMore(1))
-      BB->eraseFromParent();
+  outs() << Program << "\n";
 }
 
 void llvm::reduceConditionalBranchesTrueDeltaPass(TestRunner &Test) {
