@@ -4565,6 +4565,9 @@ bool SelectionDAG::canCreateUndefOrPoison(SDValue Op, const APInt &DemandedElts,
   unsigned Opcode = Op.getOpcode();
   switch (Opcode) {
   case ISD::FREEZE:
+  case ISD::AND:
+  case ISD::OR:
+  case ISD::XOR:
   case ISD::BSWAP:
   case ISD::CTPOP:
   case ISD::BITREVERSE:
@@ -4578,6 +4581,15 @@ bool SelectionDAG::canCreateUndefOrPoison(SDValue Op, const APInt &DemandedElts,
   case ISD::ADD:
   case ISD::SUB:
   case ISD::MUL:
+    // Matches hasPoisonGeneratingFlags().
+    return ConsiderFlags && (Op->getFlags().hasNoSignedWrap() ||
+                             Op->getFlags().hasNoUnsignedWrap());
+
+  case ISD::SHL:
+    // If the max shift amount isn't in range, then the shift can create poison.
+    if (!getValidMaximumShiftAmountConstant(Op, DemandedElts))
+      return true;
+
     // Matches hasPoisonGeneratingFlags().
     return ConsiderFlags && (Op->getFlags().hasNoSignedWrap() ||
                              Op->getFlags().hasNoUnsignedWrap());
