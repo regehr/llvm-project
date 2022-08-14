@@ -13,9 +13,12 @@
 
 #include "ReduceBranches.h"
 #include "Utils.h"
+#include "llvm/Analysis/DomTreeUpdater.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -53,8 +56,20 @@ static void reduceConditionalBranchesFalse(Oracle &O, Module &Program) {
 }
 
 static void reduceUsingSimplifyCFG(Oracle &O, Module &Program) {
+  Program.dump();
+  if (verifyModule(Program, &outs())) {
+    outs() << "BORKEN!!!!\n\n";
+  } else {
+    outs() << "not broken\n\n";
+  }
+  outs().flush();
+
   TargetTransformInfo TTI(Program.getDataLayout());
+  SimplifyCFGOptions Options{};
+  Options.setAssumptionCache(nullptr);
   for (auto &F : Program) {
+    DominatorTree DT(F);
+    //DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Eager);
     for (auto &BB : F)
       if (!O.shouldKeep())
         simplifyCFG(&BB, TTI);
