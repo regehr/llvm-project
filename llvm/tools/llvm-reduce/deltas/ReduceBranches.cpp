@@ -50,6 +50,13 @@ static void reduceConditionalBranchesFalse(Oracle &O, Module &Program) {
 }
 
 static void reduceUsingSimplifyCFG(Oracle &O, Module &Program) {
+  for (auto &F : Program) {
+    for (auto &BB : F) {
+      if (O.shouldKeep())
+        continue;
+      
+    }
+  }
 }
 
 void llvm::reduceConditionalBranchesTrueDeltaPass(TestRunner &Test) {
