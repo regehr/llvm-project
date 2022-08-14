@@ -13,10 +13,13 @@
 
 #include "ReduceBranches.h"
 #include "Utils.h"
+#include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/PassManager.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/SimplifyCFGOptions.h"
 
 using namespace llvm;
@@ -50,12 +53,16 @@ static void reduceConditionalBranchesFalse(Oracle &O, Module &Program) {
 }
 
 static void reduceUsingSimplifyCFG(Oracle &O, Module &Program) {
-  
-
-  for (auto &F : Program)
+  ModuleAnalysisManager MAM;
+  SimplifyCFGOptions Options;
+  SmallVector<WeakVH, 16> LoopHeaders;
+  for (auto &F : Program) {
+    auto &FAM = MAM.getResult<FunctionAnalysisManagerModuleProxy>(Program).getManager();
+    auto &TTI = FAM.getResult<TargetIRAnalysis>(F);
     for (auto &BB : F)
       if (!O.shouldKeep())
-        simplifyCFG(&BB, TTI, DTU, Options, LoopHeaders);
+        simplifyCFG(&BB, TTI, nullptr, Options, LoopHeaders);
+  }
 }
 
 void llvm::reduceConditionalBranchesTrueDeltaPass(TestRunner &Test) {
