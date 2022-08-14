@@ -16,6 +16,7 @@
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/Passes/PassBuilder.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -53,11 +54,21 @@ static void reduceConditionalBranchesFalse(Oracle &O, Module &Program) {
 }
 
 static void reduceUsingSimplifyCFG(Oracle &O, Module &Program) {
+  LoopAnalysisManager LAM;
+  FunctionAnalysisManager FAM;
+  CGSCCAnalysisManager CGAM;
   ModuleAnalysisManager MAM;
+  PassBuilder PB;
   SimplifyCFGOptions Options;
   SmallVector<WeakVH, 16> LoopHeaders;
+
+  PB.registerModuleAnalyses(MAM);
+  PB.registerCGSCCAnalyses(CGAM);
+  PB.registerFunctionAnalyses(FAM);
+  PB.registerLoopAnalyses(LAM);
+  PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+
   for (auto &F : Program) {
-    auto &FAM = MAM.getResult<FunctionAnalysisManagerModuleProxy>(Program).getManager();
     auto &TTI = FAM.getResult<TargetIRAnalysis>(F);
     for (auto &BB : F)
       if (!O.shouldKeep())
