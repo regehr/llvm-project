@@ -18,7 +18,7 @@
 namespace llvm {
 void reduceConditionalBranchesTrueDeltaPass(TestRunner &Test);
 void reduceConditionalBranchesFalseDeltaPass(TestRunner &Test);
-void reduceUnconditionalBranchesDeltaPass(TestRunner &Test);
+void reduceUsingSimplifyCFGDeltaPass(TestRunner &Test);
 } // namespace llvm
 
 #endif
