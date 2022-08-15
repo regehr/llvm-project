@@ -56,24 +56,11 @@ static void reduceConditionalBranchesFalse(Oracle &O, Module &Program) {
 }
 
 static void reduceUsingSimplifyCFG(Oracle &O, Module &Program) {
-  Program.dump();
-  if (verifyModule(Program, &outs())) {
-    outs() << "BORKEN!!!!\n\n";
-  } else {
-    outs() << "not broken\n\n";
-  }
-  outs().flush();
-
   TargetTransformInfo TTI(Program.getDataLayout());
-  SimplifyCFGOptions Options{};
-  Options.setAssumptionCache(nullptr);
-  for (auto &F : Program) {
-    DominatorTree DT(F);
-    //DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Eager);
+  for (auto &F : Program)
     for (auto &BB : F)
       if (!O.shouldKeep())
         simplifyCFG(&BB, TTI);
-  }
 }
 
 void llvm::reduceConditionalBranchesTrueDeltaPass(TestRunner &Test) {

@@ -56,7 +56,6 @@ static cl::opt<std::string>
 
 #define DELTA_PASSES                                                           \
   do {                                                                         \
-    DELTA_PASS("simplify-cfg", reduceUsingSimplifyCFGDeltaPass)                \
     DELTA_PASS("functions", reduceFunctionsDeltaPass)                          \
     DELTA_PASS("function-bodies", reduceFunctionBodiesDeltaPass)               \
     DELTA_PASS("special-globals", reduceSpecialGlobalsDeltaPass)               \
@@ -79,7 +78,7 @@ static cl::opt<std::string>
     DELTA_PASS("operand-bundles", reduceOperandBundesDeltaPass)                \
     DELTA_PASS("cond-branches-true", reduceConditionalBranchesTrueDeltaPass)   \
     DELTA_PASS("cond-branches-false", reduceConditionalBranchesFalseDeltaPass) \
-      /* DELTA_PASS("simplify-cfg", reduceUsingSimplifyCFGDeltaPass) */ \
+    DELTA_PASS("simplify-cfg", reduceUsingSimplifyCFGDeltaPass)                \
     DELTA_PASS("attributes", reduceAttributesDeltaPass)                        \
     DELTA_PASS("module-data", reduceModuleDataDeltaPass)                       \
   } while (false)
