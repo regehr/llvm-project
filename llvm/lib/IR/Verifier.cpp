@@ -1801,6 +1801,11 @@ void Verifier::verifyParameterAttrs(AttributeSet Attrs, Type *Ty,
         "'zeroext and signext' are incompatible!",
         V);
 
+  Check(!(Attrs.hasAttribute(Attribute::SExt) &&
+          Ty->isIntegerTy(1)),
+        "signext i1 not allowed!",
+        V);
+  
   Check(!(Attrs.hasAttribute(Attribute::ReadNone) &&
           Attrs.hasAttribute(Attribute::ReadOnly)),
         "Attributes "
