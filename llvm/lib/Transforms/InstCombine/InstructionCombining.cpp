@@ -147,6 +147,12 @@ static cl::opt<unsigned> LimitMaxIterations(
     cl::desc("Limit the maximum number of instruction combining iterations"),
     cl::init(InstCombineDefaultMaxIterations));
 
+extern bool DisablePeepholes;
+cl::opt<bool, true> DisablePeepholesOption("disable-peepholes",
+                                           cl::desc("Disable InstCombine and InstSimplify"),
+                                           cl::init(false),
+                                           cl::location(DisablePeepholes));
+
 static cl::opt<unsigned> InfiniteLoopDetectionThreshold(
     "instcombine-infinite-loop-threshold",
     cl::desc("Number of instruction combining iterations considered an "
@@ -4588,6 +4594,8 @@ InstCombinePass::InstCombinePass(unsigned MaxIterations)
 
 PreservedAnalyses InstCombinePass::run(Function &F,
                                        FunctionAnalysisManager &AM) {
+  if (DisablePeepholes)
+    return PreservedAnalyses::all();
   auto &AC = AM.getResult<AssumptionAnalysis>(F);
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
   auto &TLI = AM.getResult<TargetLibraryAnalysis>(F);
@@ -4631,6 +4639,8 @@ void InstructionCombiningPass::getAnalysisUsage(AnalysisUsage &AU) const {
 }
 
 bool InstructionCombiningPass::runOnFunction(Function &F) {
+  if (DisablePeepholes)
+    return false;
   if (skipFunction(F))
     return false;
 

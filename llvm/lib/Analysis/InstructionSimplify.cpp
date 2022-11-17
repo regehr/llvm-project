@@ -44,6 +44,8 @@
 using namespace llvm;
 using namespace llvm::PatternMatch;
 
+bool DisablePeepholes;
+
 #define DEBUG_TYPE "instsimplify"
 
 enum { RecursionLimit = 3 };
@@ -632,6 +634,9 @@ static Value *simplifyAddInst(Value *Op0, Value *Op1, bool IsNSW, bool IsNUW,
   if (Constant *C = foldOrCommuteConstant(Instruction::Add, Op0, Op1, Q))
     return C;
 
+  if (DisablePeepholes)
+    return nullptr;
+  
   // X + poison -> poison
   if (isa<PoisonValue>(Op1))
     return Op1;
@@ -747,6 +752,9 @@ static Value *simplifySubInst(Value *Op0, Value *Op1, bool isNSW, bool isNUW,
                               const SimplifyQuery &Q, unsigned MaxRecurse) {
   if (Constant *C = foldOrCommuteConstant(Instruction::Sub, Op0, Op1, Q))
     return C;
+
+  if (DisablePeepholes)
+    return nullptr;
 
   // X - poison -> poison
   // poison - X -> poison
@@ -887,6 +895,9 @@ static Value *simplifyMulInst(Value *Op0, Value *Op1, const SimplifyQuery &Q,
   if (Constant *C = foldOrCommuteConstant(Instruction::Mul, Op0, Op1, Q))
     return C;
 
+  if (DisablePeepholes)
+    return nullptr;
+  
   // X * poison -> poison
   if (isa<PoisonValue>(Op1))
     return Op1;
@@ -1188,6 +1199,9 @@ static Value *simplifyRem(Instruction::BinaryOps Opcode, Value *Op0, Value *Op1,
 /// If not, this returns null.
 static Value *simplifySDivInst(Value *Op0, Value *Op1, const SimplifyQuery &Q,
                                unsigned MaxRecurse) {
+  if (DisablePeepholes)
+    return nullptr;
+  
   // If two operands are negated and no signed overflow, return -1.
   if (isKnownNegation(Op0, Op1, /*NeedNSW=*/true))
     return Constant::getAllOnesValue(Op0->getType());
@@ -1203,6 +1217,9 @@ Value *llvm::simplifySDivInst(Value *Op0, Value *Op1, const SimplifyQuery &Q) {
 /// If not, this returns null.
 static Value *simplifyUDivInst(Value *Op0, Value *Op1, const SimplifyQuery &Q,
                                unsigned MaxRecurse) {
+  if (DisablePeepholes)
+    return nullptr;
+  
   return simplifyDiv(Instruction::UDiv, Op0, Op1, Q, MaxRecurse);
 }
 
@@ -1214,6 +1231,9 @@ Value *llvm::simplifyUDivInst(Value *Op0, Value *Op1, const SimplifyQuery &Q) {
 /// If not, this returns null.
 static Value *simplifySRemInst(Value *Op0, Value *Op1, const SimplifyQuery &Q,
                                unsigned MaxRecurse) {
+  if (DisablePeepholes)
+    return nullptr;
+  
   // If the divisor is 0, the result is undefined, so assume the divisor is -1.
   // srem Op0, (sext i1 X) --> srem Op0, -1 --> 0
   Value *X;
@@ -1235,6 +1255,9 @@ Value *llvm::simplifySRemInst(Value *Op0, Value *Op1, const SimplifyQuery &Q) {
 /// If not, this returns null.
 static Value *simplifyURemInst(Value *Op0, Value *Op1, const SimplifyQuery &Q,
                                unsigned MaxRecurse) {
+  if (DisablePeepholes)
+    return nullptr;
+  
   return simplifyRem(Instruction::URem, Op0, Op1, Q, MaxRecurse);
 }
 
@@ -1373,6 +1396,9 @@ static Value *simplifyRightShift(Instruction::BinaryOps Opcode, Value *Op0,
 /// If not, this returns null.
 static Value *simplifyShlInst(Value *Op0, Value *Op1, bool isNSW, bool isNUW,
                               const SimplifyQuery &Q, unsigned MaxRecurse) {
+  if (DisablePeepholes)
+    return nullptr;
+  
   if (Value *V =
           simplifyShift(Instruction::Shl, Op0, Op1, isNSW, Q, MaxRecurse))
     return V;
@@ -1406,6 +1432,9 @@ Value *llvm::simplifyShlInst(Value *Op0, Value *Op1, bool isNSW, bool isNUW,
 /// If not, this returns null.
 static Value *simplifyLShrInst(Value *Op0, Value *Op1, bool isExact,
                                const SimplifyQuery &Q, unsigned MaxRecurse) {
+  if (DisablePeepholes)
+    return nullptr;
+  
   if (Value *V = simplifyRightShift(Instruction::LShr, Op0, Op1, isExact, Q,
                                     MaxRecurse))
     return V;
@@ -1443,6 +1472,9 @@ Value *llvm::simplifyLShrInst(Value *Op0, Value *Op1, bool isExact,
 /// If not, this returns null.
 static Value *simplifyAShrInst(Value *Op0, Value *Op1, bool isExact,
                                const SimplifyQuery &Q, unsigned MaxRecurse) {
+  if (DisablePeepholes)
+    return nullptr;
+  
   if (Value *V = simplifyRightShift(Instruction::AShr, Op0, Op1, isExact, Q,
                                     MaxRecurse))
     return V;
@@ -2046,6 +2078,9 @@ static Value *simplifyAndInst(Value *Op0, Value *Op1, const SimplifyQuery &Q,
   if (Constant *C = foldOrCommuteConstant(Instruction::And, Op0, Op1, Q))
     return C;
 
+  if (DisablePeepholes)
+    return nullptr;
+  
   // X & poison -> poison
   if (isa<PoisonValue>(Op1))
     return Op1;
@@ -2325,6 +2360,9 @@ static Value *simplifyOrInst(Value *Op0, Value *Op1, const SimplifyQuery &Q,
   if (Constant *C = foldOrCommuteConstant(Instruction::Or, Op0, Op1, Q))
     return C;
 
+  if (DisablePeepholes)
+    return nullptr;
+  
   // X | poison -> poison
   if (isa<PoisonValue>(Op1))
     return Op1;
@@ -2481,6 +2519,9 @@ static Value *simplifyXorInst(Value *Op0, Value *Op1, const SimplifyQuery &Q,
                               unsigned MaxRecurse) {
   if (Constant *C = foldOrCommuteConstant(Instruction::Xor, Op0, Op1, Q))
     return C;
+
+  if (DisablePeepholes)
+    return nullptr;
 
   // X ^ poison -> poison
   if (isa<PoisonValue>(Op1))
@@ -3597,6 +3638,9 @@ static Value *simplifyICmpInst(unsigned Predicate, Value *LHS, Value *RHS,
   }
   assert(!isa<UndefValue>(LHS) && "Unexpected icmp undef,%X");
 
+  if (DisablePeepholes)
+    return nullptr;
+
   Type *ITy = getCompareTy(LHS); // The return type.
 
   // icmp poison, X -> poison
@@ -3895,6 +3939,9 @@ static Value *simplifyFCmpInst(unsigned Predicate, Value *LHS, Value *RHS,
     std::swap(LHS, RHS);
     Pred = CmpInst::getSwappedPredicate(Pred);
   }
+
+  if (DisablePeepholes)
+    return nullptr;
 
   // Fold trivial predicates.
   Type *RetTy = getCompareTy(LHS);
@@ -4421,6 +4468,9 @@ static Value *simplifySelectInst(Value *Cond, Value *TrueVal, Value *FalseVal,
       return FalseVal;
   }
 
+  if (DisablePeepholes)
+    return nullptr;
+
   assert(Cond->getType()->isIntOrIntVectorTy(1) &&
          "Select must have bool or bool vector condition");
   assert(TrueVal->getType() == FalseVal->getType() &&
@@ -4522,6 +4572,9 @@ Value *llvm::simplifySelectInst(Value *Cond, Value *TrueVal, Value *FalseVal,
 static Value *simplifyGEPInst(Type *SrcTy, Value *Ptr,
                               ArrayRef<Value *> Indices, bool InBounds,
                               const SimplifyQuery &Q, unsigned) {
+  if (DisablePeepholes)
+    return nullptr;
+
   // The type of the GEP pointer operand.
   unsigned AS =
       cast<PointerType>(Ptr->getType()->getScalarType())->getAddressSpace();
@@ -4671,6 +4724,9 @@ static Value *simplifyInsertValueInst(Value *Agg, Value *Val,
     if (Constant *CVal = dyn_cast<Constant>(Val))
       return ConstantFoldInsertValueInstruction(CAgg, CVal, Idxs);
 
+  if (DisablePeepholes)
+    return nullptr;
+
   // insertvalue x, undef, n -> x
   if (Q.isUndefValue(Val))
     return Agg;
@@ -4706,6 +4762,9 @@ Value *llvm::simplifyInsertElementInst(Value *Vec, Value *Val, Value *Idx,
   if (VecC && ValC && IdxC)
     return ConstantExpr::getInsertElement(VecC, ValC, IdxC);
 
+  if (DisablePeepholes)
+    return nullptr;
+
   // For fixed-length vector, fold into poison if index is out of bounds.
   if (auto *CI = dyn_cast<ConstantInt>(Idx)) {
     if (isa<FixedVectorType>(Vec->getType()) &&
@@ -4738,6 +4797,9 @@ static Value *simplifyExtractValueInst(Value *Agg, ArrayRef<unsigned> Idxs,
                                        const SimplifyQuery &, unsigned) {
   if (auto *CAgg = dyn_cast<Constant>(Agg))
     return ConstantFoldExtractValueInstruction(CAgg, Idxs);
+
+  if (DisablePeepholes)
+    return nullptr;
 
   // extractvalue x, (insertvalue y, elt, n), n -> elt
   unsigned NumIdxs = Idxs.size();
@@ -4774,6 +4836,9 @@ static Value *simplifyExtractElementInst(Value *Vec, Value *Idx,
     if (Q.isUndefValue(Vec))
       return UndefValue::get(VecVTy->getElementType());
   }
+
+  if (DisablePeepholes)
+    return nullptr;
 
   // An undef extract index can be arbitrarily chosen to be an out-of-range
   // index value, which would result in the instruction being poison.
@@ -4850,6 +4915,9 @@ static Value *simplifyCastInst(unsigned CastOpc, Value *Op, Type *Ty,
                                const SimplifyQuery &Q, unsigned MaxRecurse) {
   if (auto *C = dyn_cast<Constant>(Op))
     return ConstantFoldCastOperand(CastOpc, C, Ty, Q.DL);
+
+  if (DisablePeepholes)
+    return nullptr;
 
   if (auto *CI = dyn_cast<CastInst>(Op)) {
     auto *Src = CI->getOperand(0);
@@ -4940,6 +5008,9 @@ static Value *simplifyShuffleVectorInst(Value *Op0, Value *Op1,
                                         ArrayRef<int> Mask, Type *RetTy,
                                         const SimplifyQuery &Q,
                                         unsigned MaxRecurse) {
+  if (DisablePeepholes)
+    return nullptr;
+
   if (all_of(Mask, [](int Elem) { return Elem == UndefMaskElem; }))
     return UndefValue::get(RetTy);
 
@@ -5072,6 +5143,9 @@ static Value *simplifyFNegInst(Value *Op, FastMathFlags FMF,
   if (Constant *C = foldConstant(Instruction::FNeg, Op, Q))
     return C;
 
+  if (DisablePeepholes)
+    return nullptr;
+  
   Value *X;
   // fneg (fneg X) ==> X
   if (match(Op, m_FNeg(m_Value(X))))
@@ -5142,6 +5216,9 @@ simplifyFAddInst(Value *Op0, Value *Op1, FastMathFlags FMF,
     if (Constant *C = foldOrCommuteConstant(Instruction::FAdd, Op0, Op1, Q))
       return C;
 
+  if (DisablePeepholes)
+    return nullptr;
+  
   if (Constant *C = simplifyFPOp({Op0, Op1}, FMF, Q, ExBehavior, Rounding))
     return C;
 
@@ -5204,6 +5281,9 @@ simplifyFSubInst(Value *Op0, Value *Op1, FastMathFlags FMF,
     if (Constant *C = foldOrCommuteConstant(Instruction::FSub, Op0, Op1, Q))
       return C;
 
+  if (DisablePeepholes)
+    return nullptr;
+  
   if (Constant *C = simplifyFPOp({Op0, Op1}, FMF, Q, ExBehavior, Rounding))
     return C;
 
@@ -5255,6 +5335,9 @@ static Value *simplifyFMAFMul(Value *Op0, Value *Op1, FastMathFlags FMF,
                               const SimplifyQuery &Q, unsigned MaxRecurse,
                               fp::ExceptionBehavior ExBehavior,
                               RoundingMode Rounding) {
+  if (DisablePeepholes)
+    return nullptr;
+  
   if (Constant *C = simplifyFPOp({Op0, Op1}, FMF, Q, ExBehavior, Rounding))
     return C;
 
@@ -5299,6 +5382,9 @@ simplifyFMulInst(Value *Op0, Value *Op1, FastMathFlags FMF,
     if (Constant *C = foldOrCommuteConstant(Instruction::FMul, Op0, Op1, Q))
       return C;
 
+  if (DisablePeepholes)
+    return nullptr;
+  
   // Now apply simplifications that do not require rounding.
   return simplifyFMAFMul(Op0, Op1, FMF, Q, MaxRecurse, ExBehavior, Rounding);
 }
@@ -5344,6 +5430,9 @@ simplifyFDivInst(Value *Op0, Value *Op1, FastMathFlags FMF,
     if (Constant *C = foldOrCommuteConstant(Instruction::FDiv, Op0, Op1, Q))
       return C;
 
+  if (DisablePeepholes)
+    return nullptr;
+  
   if (Constant *C = simplifyFPOp({Op0, Op1}, FMF, Q, ExBehavior, Rounding))
     return C;
 
@@ -5399,6 +5488,9 @@ simplifyFRemInst(Value *Op0, Value *Op1, FastMathFlags FMF,
     if (Constant *C = foldOrCommuteConstant(Instruction::FRem, Op0, Op1, Q))
       return C;
 
+  if (DisablePeepholes)
+    return nullptr;
+  
   if (Constant *C = simplifyFPOp({Op0, Op1}, FMF, Q, ExBehavior, Rounding))
     return C;
 
@@ -6233,6 +6325,9 @@ Value *llvm::simplifyCall(CallBase *Call, const SimplifyQuery &Q) {
   if (Value *V = tryConstantFoldCall(Call, Q))
     return V;
 
+  if (DisablePeepholes)
+    return nullptr;
+
   auto *F = dyn_cast<Function>(Callee);
   if (F && F->isIntrinsic())
     if (Value *Ret = simplifyIntrinsic(Call, Q))
@@ -6252,6 +6347,9 @@ Value *llvm::simplifyConstrainedFPCall(CallBase *Call, const SimplifyQuery &Q) {
 
 /// Given operands for a Freeze, see if we can fold the result.
 static Value *simplifyFreezeInst(Value *Op0, const SimplifyQuery &Q) {
+  if (DisablePeepholes)
+    return nullptr;
+
   // Use a utility function defined in ValueTracking.
   if (llvm::isGuaranteedNotToBeUndefOrPoison(Op0, Q.AC, Q.CxtI, Q.DT))
     return Op0;
