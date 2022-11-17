@@ -150,7 +150,6 @@ static cl::opt<unsigned> LimitMaxIterations(
 extern bool DisablePeepholes;
 cl::opt<bool, true> DisablePeepholesOption("disable-peepholes",
                                            cl::desc("Disable InstCombine and InstSimplify"),
-                                           cl::init(false),
                                            cl::location(DisablePeepholes));
 
 static cl::opt<unsigned> InfiniteLoopDetectionThreshold(

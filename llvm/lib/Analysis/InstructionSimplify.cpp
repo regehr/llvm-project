@@ -44,7 +44,7 @@
 using namespace llvm;
 using namespace llvm::PatternMatch;
 
-bool DisablePeepholes;
+bool DisablePeepholes = false;
 
 #define DEBUG_TYPE "instsimplify"
 
@@ -636,7 +636,7 @@ static Value *simplifyAddInst(Value *Op0, Value *Op1, bool IsNSW, bool IsNUW,
 
   if (DisablePeepholes)
     return nullptr;
-  
+
   // X + poison -> poison
   if (isa<PoisonValue>(Op1))
     return Op1;
