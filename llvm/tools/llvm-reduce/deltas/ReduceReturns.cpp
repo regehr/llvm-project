@@ -1,4 +1,4 @@
-//===- ReduceReturns.cpp - Specialized Delta Pass -----------------------===//
+//===- ReduceArguments.cpp - Specialized Delta Pass -----------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,13 +6,12 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file implements a function which calls the Generic Delta pass
-// in order to return various values in hopes of creating dead
-// instructions further down in the function.
+// This file implements a function which calls the Generic Delta pass in order
+// to reduce uninteresting Arguments from declared and defined functions.
 //
 //===----------------------------------------------------------------------===//
 
-#include "ReduceReturns.h"
+#include "ReduceArguments.h"
 #include "Delta.h"
 #include "Utils.h"
 #include "llvm/ADT/SmallVector.h"
@@ -51,19 +50,19 @@ static void replaceFunctionCalls(Function &OldF, Function &NewF,
 /// argument removal. Currently, functions with no arguments and intrinsics are
 /// not considered. Intrinsics aren't considered because their signatures are
 /// fixed.
-static bool shouldRemoveReturns(const Function &F) {
+static bool shouldRemoveArguments(const Function &F) {
   return !F.arg_empty() && !F.isIntrinsic();
 }
 
 /// Removes out-of-chunk arguments from functions, and modifies their calls
 /// accordingly. It also removes allocations of out-of-chunk arguments.
-static void extractReturnsFromModule(Oracle &O, ReducerWorkItem &WorkItem) {
+static void extractArgumentsFromModule(Oracle &O, ReducerWorkItem &WorkItem) {
   Module &Program = WorkItem.getModule();
   std::vector<Argument *> InitArgsToKeep;
   std::vector<Function *> Funcs;
   // Get inside-chunk arguments, as well as their parent function
   for (auto &F : Program)
-    if (shouldRemoveReturns(F)) {
+    if (shouldRemoveArguments(F)) {
       Funcs.push_back(&F);
       for (auto &A : F.args())
         if (O.shouldKeep())
@@ -120,6 +119,6 @@ static void extractReturnsFromModule(Oracle &O, ReducerWorkItem &WorkItem) {
   }
 }
 
-void llvm::reduceReturnsDeltaPass(TestRunner &Test) {
-  runDeltaPass(Test, extractReturnsFromModule, "Reducing Returns");
+void llvm::reduceArgumentsDeltaPass(TestRunner &Test) {
+  runDeltaPass(Test, extractArgumentsFromModule, "Reducing Arguments");
 }

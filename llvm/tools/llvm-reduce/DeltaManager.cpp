@@ -43,6 +43,7 @@
 #include "deltas/ReduceRegisterDefs.h"
 #include "deltas/ReduceRegisterMasks.h"
 #include "deltas/ReduceRegisterUses.h"
+#include "deltas/ReduceReturns.h"
 #include "deltas/ReduceSpecialGlobals.h"
 #include "deltas/ReduceUsingSimplifyCFG.h"
 #include "deltas/ReduceVirtualRegisters.h"
@@ -108,6 +109,7 @@ static cl::list<std::string>
     DELTA_PASS("atomic-ordering", reduceAtomicOrderingDeltaPass)               \
     DELTA_PASS("syncscopes", reduceAtomicSyncScopesDeltaPass)                  \
     DELTA_PASS("instruction-flags", reduceInstructionFlagsDeltaPass)           \
+    DELTA_PASS("returns", reduceReturnsDeltaPass)                              \
 } while (false)
 
 #define DELTA_PASSES_MIR                                                       \
