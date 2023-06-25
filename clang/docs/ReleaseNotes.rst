@@ -231,7 +231,12 @@ Non-comprehensive list of changes in this release
 - Added ``__builtin_elementwise_round`` for  builtin for floating
   point types. This allows access to ``llvm.round`` for
   arbitrary floating-point and vector of floating-point types.
-
+- Added ``__builtin_elementwise_rint`` for floating point types. This
+  allows access to ``llvm.rint`` for arbitrary floating-point and
+  vector of floating-point types.
+- Added ``__builtin_elementwise_nearbyint`` for floating point
+  types. This allows access to ``llvm.nearbyint`` for arbitrary
+  floating-point and vector of floating-point types.
 
 New Compiler Flags
 ------------------
@@ -359,6 +364,8 @@ Improvements to Clang's diagnostics
 - The Fix-It emitted for unused labels used to expand to the next line, which caused
   visual oddities now that Clang shows more than one line of code snippet. This has
   been fixed and the Fix-It now only spans to the end of the ``:``.
+- Clang now underlines the parameter list of function declaration when emitting
+  a note about the mismatch in the number of arguments.
 
 Bug Fixes in This Version
 -------------------------
