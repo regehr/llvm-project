@@ -30,7 +30,7 @@ static bool shouldRemoveReturns(const Function &F) {
   return !F.isDeclaration();
 }
 
-void rewriteReturns(Function &F, std::vector<ReturnInst *> &Rets) {
+void rewriteReturns(Function &F, std::vector<ReturnInst *> &ToRewrite) {
 }
 
 /// Removes out-of-chunk arguments from functions, and modifies their calls
