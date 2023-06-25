@@ -24,13 +24,28 @@
 
 using namespace llvm;
 
-/// FIXME: return false for functions that have a call in this module,
-/// or are address taken
+/// Try to remove returns from this funtion if it has a body and also
+/// it isn't called. FIXME: Of course we could relax the second
+/// condition.
 static bool shouldRemoveReturns(const Function &F) {
-  return !F.isDeclaration();
+  if (F.isDeclaration())
+        return false;
+  for (const User *U : F.users())
+    if (!isa<BlockAddress>(U))
+      return false;
+   return true;
 }
 
 void rewriteReturns(Function &F, std::vector<ReturnInst *> &ToRewrite) {
+  auto RetTy = ToRewrite.at(0)->getType();
+
+  // make a copy of the function, with the new return type
+
+  // rewrite the first return to actually return that value, and the
+  // others to return 0
+  
+  // run DCE on the function -- if this variant is interesting, we
+  // don't want to subsequently return a dead value
 }
 
 /// Removes out-of-chunk arguments from functions, and modifies their calls
@@ -43,7 +58,8 @@ static void extractReturnsFromModule(Oracle &O, ReducerWorkItem &WorkItem) {
       for (auto &BB : F) {
         for (auto &I : BB) {
           auto RI = dyn_cast<ReturnInst>(&I);
-          if (RI && !O.shouldKeep())
+          /// FIXME handle non-integer-typed returns
+          if (RI && RI->getType()->isIntegerTy() && !O.shouldKeep())
             RetsToRewrite.push_back(RI);
         }
       }
