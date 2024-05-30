@@ -112,6 +112,13 @@
 using namespace llvm;
 using namespace llvm::PatternMatch;
 
+extern bool DisablePeepholes;
+cl::opt<bool, true> DisablePeepholesOption("disable-peepholes",
+                                           cl::desc("Disable InstCombine and InstSimplify"),
+                                           cl::location(DisablePeepholes));
+
+bool DisablePeepholes;
+
 STATISTIC(NumWorklistIterations,
           "Number of instruction combining iterations performed");
 STATISTIC(NumOneIteration, "Number of functions with one iteration");
@@ -4835,6 +4842,11 @@ void InstCombinePass::printPipeline(
 
 PreservedAnalyses InstCombinePass::run(Function &F,
                                        FunctionAnalysisManager &AM) {
+  if (DisablePeepholes) {
+    PreservedAnalyses PA;
+    return PA;
+  }
+
   auto &AC = AM.getResult<AssumptionAnalysis>(F);
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
   auto &TLI = AM.getResult<TargetLibraryAnalysis>(F);
@@ -4882,6 +4894,9 @@ void InstructionCombiningPass::getAnalysisUsage(AnalysisUsage &AU) const {
 }
 
 bool InstructionCombiningPass::runOnFunction(Function &F) {
+  if (DisablePeepholes)
+    return false;
+
   if (skipFunction(F))
     return false;
 
