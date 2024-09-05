@@ -5379,7 +5379,7 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
     }
   }
   // END CAYDEN LUND
-  
+
   // BEGIN KHAGAN KARIMOV
   {
     ConstantInt *C = nullptr;
@@ -5421,7 +5421,7 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
   // But with num being bounded, an optimization
   // can be performed, reducing the instructions from
   // 10 to 3.
-  // 
+  //
   // Note: Tried to do this in IndVarSimplify pass,
   // But impossible to get Function pass info
   // (Lazy Value Info) while in a Loop pass,
@@ -5468,7 +5468,7 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
     }
   }
   // END STEFAN MADA
-  
+
   // BEGIN MD ASHFAQUR RAHAMAN
   // (0x7fffffff - x) ^ 0x7fffffff = x
   {
@@ -5513,7 +5513,50 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
   }
   // END TANMAY TIRPANKAR
 
- return nullptr;
+  {
+  // BEGIN LEE WEI
+  Value *A = nullptr;
+  if (match(I, m_SExt(m_Value(A)))) {
+    dbgs() << "match sext\n";
+    if (A && A->hasName()) {
+      dbgs() << A->getName() << "\n";
+      if (A->getType()->isIntegerTy() && I->getType()->isIntegerTy()) {
+        unsigned bitWidth = A->getType()->getIntegerBitWidth();
+        dbgs() << bitWidth << " bits extends to " << I->getType()->getIntegerBitWidth() << "\n";
+      }
+    }
+
+    ConstantInt *C = nullptr;
+    Instruction *Next = I->getNextNode();
+    if (match(Next, m_c_And(m_Specific(I), m_ConstantInt(C)))) {
+      dbgs() << "match and\n";
+      auto INT_MIN_ADD_ONE = APInt::getSignedMinValue(C->getUniqueInteger().getBitWidth()) + 1;
+      const APInt& CVal = C->getValue();
+      if (INT_MIN_ADD_ONE == CVal) {
+        dbgs() << "match and value!\n";
+      }
+      Value *AndRes = Next;
+      Next = Next->getNextNode();
+      ICmpInst::Predicate Pred;
+      if (match(Next, m_ICmp(Pred, m_Specific(AndRes), m_One()))) {
+        if (Pred == ICmpInst::ICMP_EQ) {
+	        log_optzn("Lee Wei");
+          dbgs() << "match icmp eq with 1\n";
+          auto MAGIC = APInt::getSignedMinValue(A->getType()->getIntegerBitWidth()) + 1;
+          dbgs() << MAGIC << "\n";
+          // TODO:
+          // 1. Create new instructions
+          // 2. Insert into BB
+          // 3. Remove original instructions
+          // Instruction *NewI = BinaryOperator::CreateAnd(A, ConstantInt::get(I->getContext(), MAGIC));
+          return nullptr;
+        }
+      }
+    }
+  }
+  // END LEE WEI
+
+  return nullptr;
 }
 
 bool InstCombinerImpl::run() {
