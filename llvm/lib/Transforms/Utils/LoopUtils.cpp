@@ -1479,6 +1479,52 @@ static bool checkIsIndPhi(PHINode *Phi, Loop *L, ScalarEvolution *SE,
   return InductionDescriptor::isInductionPHI(Phi, L, SE, ID);
 }
 
+namespace {
+
+// for.body:                                         ; preds = %for.body.preheader, %for.body
+//   %i.08 = phi i32 [ %inc, %for.body ], [ 1, %for.body.preheader ]
+//   %sum.07 = phi i32 [ %add, %for.body ], [ 0, %for.body.preheader ]
+//   %add = add i32 %i.08, %sum.07
+//   %inc = add nuw nsw i32 %i.08, 1
+//   %cmp1.not.not = icmp ult i32 %i.08, %num
+//   br i1 %cmp1.not.not, label %for.body, label %cleanup.loopexit, !llvm.loop !5
+
+
+Value *expandCodeForSimpleBoundedSum(Loop *L, ScalarEvolution *SE) {
+  // Check if can instantiate induction descriptor
+  InductionDescriptor IndDesc;
+  if (!L->getInductionDescriptor(*SE, IndDesc))
+    return nullptr;
+
+  // Check to see if induction variable starts at 1
+  ConstantInt *Init = dyn_cast_or_null<ConstantInt>(IndDesc.getStartValue());
+  if (!Init || !Init->isOne())
+    return nullptr;
+
+  // Ensure induction variable increments through addition
+  if (IndDesc.getInductionOpcode() != Instruction::Add)
+    return nullptr;
+
+  // Ensure that the induction variable increments by only one
+  ConstantInt *Step = IndDesc.getConstIntStepValue();
+  if (!Step || !Step->isOne())
+    return nullptr;
+
+  Value *IndVar = L->getInductionVariable(*SE);
+  errs() << "INDUCTION VAR IS: " << *IndVar << "\n";
+
+  std::optional<Loop::LoopBounds> Bounds = L->getBounds(*SE);
+  if(!Bounds)
+    return nullptr;
+  Value &FinalIVValue = Bounds->getFinalIVValue();
+  errs() << "FINAL IV VALUE IS: " << FinalIVValue << "\n";
+
+  return nullptr;
+} 
+
+} // end anonymous namespace
+
+
 int llvm::rewriteLoopExitValues(Loop *L, LoopInfo *LI, TargetLibraryInfo *TLI,
                                 ScalarEvolution *SE,
                                 const TargetTransformInfo *TTI,
@@ -1643,7 +1689,11 @@ int llvm::rewriteLoopExitValues(Loop *L, LoopInfo *LI, TargetLibraryInfo *TLI,
         !LoopCanBeDel && Phi.HighCost)
       continue;
 
-    Value *ExitVal = Rewriter.expandCodeFor(
+    // Attempt to simplify the expression with SCEV Expander
+    Value *ExitVal = expandCodeForSimpleBoundedSum(L, SE);
+
+    if(!ExitVal)
+      ExitVal = Rewriter.expandCodeFor(
         Phi.ExpansionSCEV, Phi.PN->getType(), Phi.ExpansionPoint);
 
     LLVM_DEBUG(dbgs() << "rewriteLoopExitValues: AfterLoopVal = " << *ExitVal
