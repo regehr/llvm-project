@@ -5070,7 +5070,7 @@ Instruction* cs6475_optimizer(Instruction *I) {
   // BEGIN LEE WEI
   Value *A = nullptr;
   // %conv = sext i8 %a to i32
-  if (match(I, m_SExt(m_Value(A))) && A && A->getType()->isIntegerTy() ) {
+  if (match(I, m_SExt(m_Value(A))) && A && A->getType()->isIntegerTy() && A->getType()->getIntegerBitWidth() > 2) {
     cs6475_debug("match sext\n");
     ConstantInt *C = nullptr;
     Instruction *Next = I->getNextNode();
