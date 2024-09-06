@@ -1510,15 +1510,28 @@ Value *expandCodeForSimpleBoundedSum(Loop *L, ScalarEvolution *SE) {
   if (!Step || !Step->isOne())
     return nullptr;
 
+  // Get the actual induction variable
   Value *IndVar = L->getInductionVariable(*SE);
   errs() << "INDUCTION VAR IS: " << *IndVar << "\n";
 
+  // Now make sure the loop is bounded, and find the upper bound
   std::optional<Loop::LoopBounds> Bounds = L->getBounds(*SE);
   if(!Bounds)
     return nullptr;
   Value &FinalIVValue = Bounds->getFinalIVValue();
   errs() << "FINAL IV VALUE IS: " << FinalIVValue << "\n";
 
+  // Ensure the upper bound is a loop invariant so we can hoist it out
+  if(!L->isLoopInvariant(&FinalIVValue))
+    return nullptr;
+
+  // Get loop latch cmp instruction
+  CmpInst *CmpInst = L->getLatchCmpInst();
+  if(!CmpInst)
+    return nullptr;
+
+  // Find the possible range of induction variable value
+  // TODO: Do that here
   return nullptr;
 } 
 
