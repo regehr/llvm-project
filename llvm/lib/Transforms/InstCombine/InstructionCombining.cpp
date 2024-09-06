@@ -48,6 +48,7 @@
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/LazyBlockFrequencyInfo.h"
+#include "llvm/Analysis/LazyValueInfo.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ProfileSummaryInfo.h"
@@ -5045,7 +5046,7 @@ void cs6475_debug(std::string DbgString) {
     dbgs() << DbgString;
 }
 
-Instruction* cs6475_optimizer(Instruction *I) {
+Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInfo *LVI) {
   cs6475_debug("\nCS 6475 matcher: running now\n");
 
   // BEGIN JOHN REGEHR
@@ -5066,6 +5067,46 @@ Instruction* cs6475_optimizer(Instruction *I) {
     }
   }
   // END JOHN REGEHR
+
+  // BEGIN STEFAN MADA
+  {
+    Value *Z = nullptr;
+    Value *A = nullptr;
+    Value *B = nullptr;
+    Value *C = nullptr;
+    Value *D = nullptr;
+    Value *E = nullptr;
+    Value *F = nullptr;
+    Value *Bound = nullptr;
+    if(match(I, m_c_Add(m_Value(X), m_ConstantInt<-1>()))) {
+      if(match(X, m_c_Add(m_Value(Y), m_Value(Z)))) {
+        if(match(Z, m_Trunc(m_Value(A)))) { // extension check
+          if(match(A, m_LShr(m_Value(B), m_ConstantInt<1>()))) {
+            if(match(B, m_c_Mul(m_Value(E), m_Value(C)))) {
+              if(match(C, m_ZExt(m_Value(D)))) { // extension check
+                if(match(D, m_c_Add(m_Value(Bound), m_ConstantInt<-2>()))) {
+                  if(match(E, m_ZExt(m_Value(F)))) { // extension check
+                    if(match(F, m_c_Add(m_Specific(Bound), m_ConstantInt<-1>()))) {
+                      if(match(Y, m_Shl(m_Specific(Bound), m_ConstantInt<1>()))) {
+                        if(LVI->getConstantRange(Bound, I, false).getUpper().ult(65536)) {
+                          errs() << "This is valid!\n";
+                          auto OneAPInt = APInt(32, 1);
+                          auto *IncBound = IC.Builder.CreateAdd(Bound, ConstantInt::get(I->getContext(), OneAPInt));
+                          auto *MulVal = IC.Builder.CreateMul(Bound, IncBound);
+                          return BinaryOperator::CreateLShr(MulVal, ConstantInt::get(I->getContext(), OneAPInt));
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  // END STEFAN MADA
 
  return nullptr;
 }
@@ -5193,7 +5234,7 @@ bool InstCombinerImpl::run() {
     LLVM_DEBUG(dbgs() << "IC: Visiting: " << OrigI << '\n');
 
     Instruction *Result = nullptr;
-    if ((Result = visit(*I)) || (Result = cs6475_optimizer(I))) {
+    if ((Result = visit(*I)) || (Result = cs6475_optimizer(I, *this, LVI))) {
       ++NumCombined;
       // Should we replace the old instruction with a new one?
       if (Result != I) {
@@ -5462,7 +5503,7 @@ static bool combineInstructionsOverFunction(
     AssumptionCache &AC, TargetLibraryInfo &TLI, TargetTransformInfo &TTI,
     DominatorTree &DT, OptimizationRemarkEmitter &ORE, BlockFrequencyInfo *BFI,
     BranchProbabilityInfo *BPI, ProfileSummaryInfo *PSI,
-    const InstCombineOptions &Opts) {
+    const InstCombineOptions &Opts, LazyValueInfo *LVI = nullptr) {
   auto &DL = F.getDataLayout();
 
   /// Builder - This is an IRBuilder that automatically inserts new
@@ -5500,7 +5541,7 @@ static bool combineInstructionsOverFunction(
                       << F.getName() << "\n");
 
     InstCombinerImpl IC(Worklist, Builder, F.hasMinSize(), AA, AC, TLI, TTI, DT,
-                        ORE, BFI, BPI, PSI, DL, RPOT);
+                        ORE, BFI, BPI, PSI, DL, RPOT, LVI);
     IC.MaxArraySizeForCombine = MaxArraySize;
     bool MadeChangeInThisIteration = IC.prepareWorklist(F);
     MadeChangeInThisIteration |= IC.run();
@@ -5548,6 +5589,7 @@ PreservedAnalyses InstCombinePass::run(Function &F,
   auto &TLI = AM.getResult<TargetLibraryAnalysis>(F);
   auto &ORE = AM.getResult<OptimizationRemarkEmitterAnalysis>(F);
   auto &TTI = AM.getResult<TargetIRAnalysis>(F);
+  auto *LVI = &AM.getResult<LazyValueAnalysis>(F);
 
   auto *AA = &AM.getResult<AAManager>(F);
   auto &MAMProxy = AM.getResult<ModuleAnalysisManagerFunctionProxy>(F);
@@ -5558,7 +5600,7 @@ PreservedAnalyses InstCombinePass::run(Function &F,
   auto *BPI = AM.getCachedResult<BranchProbabilityAnalysis>(F);
 
   if (!combineInstructionsOverFunction(F, Worklist, AA, AC, TLI, TTI, DT, ORE,
-                                       BFI, BPI, PSI, Options))
+                                       BFI, BPI, PSI, Options, LVI))
     // No changes, all analyses are preserved.
     return PreservedAnalyses::all();
 
