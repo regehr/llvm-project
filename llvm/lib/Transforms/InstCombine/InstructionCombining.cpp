@@ -5090,7 +5090,7 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
                   if(match(E, m_ZExt(m_Value(F))) && static_cast<ZExtInst*>(E)->getType()->isIntegerTy(EndBitWidth + 1)) {
                     if(match(F, m_c_Add(m_Specific(Bound), m_ConstantInt<-1>()))) {
                       if(match(Y, m_Shl(m_Specific(Bound), m_ConstantInt<1>()))) {
-                        if(LVI->getConstantRange(Bound, I, false).getUpper().ult(std::pow(2, EndBitWidth / 2) - 1)) {
+                        if(LVI->getConstantRange(Bound, I, false).getUpper().ult(std::pow(2, EndBitWidth / 2))) {
                           log_optzn("Stefan Mada");
                           auto OneAPInt = APInt(EndBitWidth, 1);
                           auto *IncBound = IC.Builder.CreateAdd(Bound, ConstantInt::get(I->getContext(), OneAPInt));
