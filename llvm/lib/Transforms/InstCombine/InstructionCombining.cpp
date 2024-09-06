@@ -5155,9 +5155,9 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
 	  return NewI;
 	}
       }
+      cs6475_debug("[matcher] constants don't look right; no optimization");
     }
   }
-  // END JOHN REGEHR
 
   //BEGIN ZEYUAN WANG
   {
