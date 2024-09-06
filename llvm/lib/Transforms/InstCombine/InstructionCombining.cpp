@@ -5073,32 +5073,86 @@ void cs6475_debug(std::string DbgString) {
 Instruction* cs6475_optimizer(Instruction *I) {
   cs6475_debug("\nCS 6475 ashton314 matcher: running now\n");
 
-  // x^2 + c₁ >= c₂ and c₁ >= c₂ → true
+  // x^2 + c₁ > c₂ and c₁ > c₂ → true
   ConstantInt *C1 = nullptr;
   ConstantInt *C2 = nullptr;
+  CmpInst::Predicate Pred;
   Value *X1 = nullptr;
   Value *X2 = nullptr;
+  Value *LiteralTrue = ConstantInt::getTrue(I->getContext());
 
   if (match(I,
-            m_SpecificCmp(CmpInst::Predicate(CmpInst::ICMP_ULT),
-                          m_Add(m_Mul(m_Value(X1), m_Value(X2)),
-                                m_ConstantInt(C1)), m_ConstantInt(C2)))) {
-    cs6475_debug("[matcher] x1 * x2 + c1 >= c2 matched!\n");
+            m_ICmp(Pred,
+                   m_Add(m_Mul(m_Value(X1), m_Value(X2)),
+                         m_ConstantInt(C1)), m_ConstantInt(C2)))) {
+    cs6475_debug("[matcher] x1 * x2 + c1 ? c2 matched!\n");
     if (match(X1, m_Specific(X2))) {
-      // LLM usage: I used Claude-3.5 to help me figure out how to build the expression I wanted.
-      // Good first attempt; not correct, but the idea is there
-      // Instruction *NewI = new ICmpInst(ICmpInst::ICMP_SGE, C1, C2, "cmp");
-      // return NewI;
+      cs6475_debug("[matcher] x1 and x2 are the same; found a square\n");
 
-      if (C1->getValue().uge(C2->getValue())) {
-        cs6475_debug("[matcher] constants look right\n");
-        Value *LiteralTrue = ConstantInt::getTrue(I->getContext());
-        Instruction *NewI = new ICmpInst(ICmpInst::ICMP_EQ, LiteralTrue, LiteralTrue, "cmp");
-        return NewI;
+      bool TheConst = false;
+      switch (Pred) {
+      case CmpInst::ICMP_UGT:
+        TheConst = C1->getValue().ugt(C2->getValue());
+        break;
+      case CmpInst::ICMP_UGE:
+        TheConst = C1->getValue().uge(C2->getValue());
+        break;
+      case CmpInst::ICMP_ULT:
+        TheConst = C1->getValue().ult(C2->getValue());
+        break;
+      case CmpInst::ICMP_ULE:
+        TheConst = C1->getValue().ule(C2->getValue());
+        break;
+      // case CmpInst::ICMP_SGT:
+      //   TheConst = C1->getValue().sgt(C2->getValue());
+      //   break;
+      // case CmpInst::ICMP_SGE:
+      //   TheConst = C1->getValue().sge(C2->getValue());
+      //   break;
+      // case CmpInst::ICMP_SLT:
+      //   TheConst = C1->getValue().slt(C2->getValue());
+      //   break;
+      // case CmpInst::ICMP_SLE:
+      //   TheConst = C1->getValue().sle(C2->getValue());
+      //   break;
+      default:
+        return nullptr;
       }
-      cs6475_debug("[matcher] constants don't look right; no optimization");
+
+      return new ICmpInst(TheConst ? ICmpInst::ICMP_EQ : ICmpInst::ICMP_NE, LiteralTrue, LiteralTrue);
     }
   }
+
+  // if (match(I,
+  //           m_SpecificCmp(CmpInst::Predicate(CmpInst::ICMP_ULT),
+  //                         m_Add(m_Mul(m_Value(X1), m_Value(X2)),
+  //                               m_ConstantInt(C1)), m_ConstantInt(C2)))) {
+  //   cs6475_debug("[matcher] x1 * x2 + c1 > c2 matched!\n");
+  //   if (match(X1, m_Specific(X2))) {
+  //     // LLM usage: I used Claude-3.5 to help me figure out how to build the expression I wanted.
+
+  //     if (C1->getValue().ult(C2->getValue())) {
+  //       // Make true
+  //       return new ICmpInst(ICmpInst::ICMP_EQ, LiteralTrue, LiteralTrue, "cmp");
+  //     }
+  //     // Make false
+  //     return new ICmpInst(ICmpInst::ICMP_NE, LiteralTrue, LiteralTrue, "cmp");
+  //   }
+  // } else if (match(I,
+  //                  m_SpecificCmp(CmpInst::Predicate(CmpInst::ICMP_UGT),
+  //                                m_Add(m_Mul(m_Value(X1), m_Value(X2)),
+  //                                      m_ConstantInt(C1)), m_ConstantInt(C2)))) {
+  //   if (match(X1, m_Specific(X2))) {
+  //     // LLM usage: I used Claude-3.5 to help me figure out how to build the expression I wanted.
+
+  //     if (C1->getValue().ugt(C2->getValue())) {
+  //       // Make true
+  //       return new ICmpInst(ICmpInst::ICMP_EQ, LiteralTrue, LiteralTrue, "cmp");
+  //     }
+  //     // Make false
+  //     return new ICmpInst(ICmpInst::ICMP_NE, LiteralTrue, LiteralTrue, "cmp");
+  //   }
+  // }
 
   return nullptr;
 }
