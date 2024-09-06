@@ -5058,8 +5058,8 @@ void cs6475_debug(std::string DbgString) {
     dbgs() << DbgString;
 }
 
-Instruction* cs6475_optimizer(Instruction *I) {
-  cs6475_debug("\nCS 6475 matcher: running now\n");
+// Instruction* cs6475_optimizer(Instruction *I) {
+//   cs6475_debug("\nCS 6475 matcher: running now\n");
 
   // BEGIN JOHN REGEHR
   // x & (0x7FFFFFFF - x) → x & 0x80000000
@@ -5095,9 +5095,9 @@ Instruction* cs6475_optimizer(Instruction *I) {
 	  return NewI;
 	}
       }
+      cs6475_debug("[matcher] constants don't look right; no optimization");
     }
   }
-  // END JOHN REGEHR
 
   // BEGIN KHAGAN KARIMOV
   {
