@@ -5079,18 +5079,19 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
     Value *F = nullptr;
     Value *Bound = nullptr;
     if(match(I, m_c_Add(m_Value(X), m_ConstantInt<-1>()))) {
+      unsigned EndBitWidth = static_cast<BinaryOperator*>(I)->getType()->getIntegerBitWidth();
       if(match(X, m_c_Add(m_Value(Y), m_Value(Z)))) {
-        if(match(Z, m_Trunc(m_Value(A)))) { // extension check
+        if(match(Z, m_Trunc(m_Value(A))) && static_cast<TruncInst*>(Z)->getType()->isIntegerTy(EndBitWidth)) {
           if(match(A, m_LShr(m_Value(B), m_ConstantInt<1>()))) {
             if(match(B, m_c_Mul(m_Value(E), m_Value(C)))) {
-              if(match(C, m_ZExt(m_Value(D)))) { // extension check
+              if(match(C, m_ZExt(m_Value(D))) && static_cast<ZExtInst*>(C)->getType()->isIntegerTy(EndBitWidth + 1)) {
                 if(match(D, m_c_Add(m_Value(Bound), m_ConstantInt<-2>()))) {
-                  if(match(E, m_ZExt(m_Value(F)))) { // extension check
+                  if(match(E, m_ZExt(m_Value(F))) && static_cast<ZExtInst*>(E)->getType()->isIntegerTy(EndBitWidth + 1)) {
                     if(match(F, m_c_Add(m_Specific(Bound), m_ConstantInt<-1>()))) {
                       if(match(Y, m_Shl(m_Specific(Bound), m_ConstantInt<1>()))) {
                         if(LVI->getConstantRange(Bound, I, false).getUpper().ult(65536)) {
-                          errs() << "This is valid!\n";
-                          auto OneAPInt = APInt(32, 1);
+                          log_optzn("Stefan Mada");
+                          auto OneAPInt = APInt(EndBitWidth, 1);
                           auto *IncBound = IC.Builder.CreateAdd(Bound, ConstantInt::get(I->getContext(), OneAPInt));
                           auto *MulVal = IC.Builder.CreateMul(Bound, IncBound);
                           return BinaryOperator::CreateLShr(MulVal, ConstantInt::get(I->getContext(), OneAPInt));
