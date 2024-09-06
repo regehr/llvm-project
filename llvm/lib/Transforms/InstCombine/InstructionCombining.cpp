@@ -5070,6 +5070,19 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
   // END JOHN REGEHR
 
   // BEGIN STEFAN MADA
+  // For IR generated from a C++ loop as such:
+  // for(unsigned i = 1; i <= num; ++i)
+  //   sum += i;
+  // return sum;
+  // But with num being bounded, an optimization
+  // can be performed, reducing the instructions from
+  // 10 to 3.
+  // 
+  // Note: Tried to do this in IndVarSimplify pass,
+  // But impossible to get Function pass info
+  // (Lazy Value Info) while in a Loop pass,
+  // so was not able to perform range analysis.
+  // So done here after IndVarsSimplify
   {
     Value *Z = nullptr;
     Value *A = nullptr;
