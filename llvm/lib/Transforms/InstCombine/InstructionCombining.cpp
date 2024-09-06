@@ -5041,12 +5041,84 @@ void log_optzn(std::string Name) {
 void cs6475_debug(std::string DbgString) {
   // set this to "false" to suppress debug output, before running "ninja test"
   // set this to "true" to see debug output, to help you understand your transformation
-  if (true)
+  if (false)
     dbgs() << DbgString;
 }
 
 Instruction* cs6475_optimizer(Instruction *I) {
   cs6475_debug("\nCS 6475 matcher: running now\n");
+  // BEGIN JOSHUA TLATELPA-AGUSTIN
+  // ((((x*2050) & 139536) ∣ ((x*32800) & 558144)) * 65793) ≫ 16 
+  // → (((x*2149582850) & 36578664720) * 4311810305) ≫ 32
+  Value *J0 = nullptr;
+  ConstantInt *J1 = nullptr;
+  Value *J2 = nullptr;
+  ConstantInt *J3 = nullptr;
+  Value *J4 = nullptr;
+  Value *J5 = nullptr;
+  Value *J6 = nullptr;
+  ConstantInt *J7 = nullptr;
+  Value *J8 = nullptr;
+  ConstantInt *J9 = nullptr;
+  Value *J10 = nullptr;
+  ConstantInt *J11 = nullptr;
+  Value *J12 = nullptr;
+  ConstantInt *J13 = nullptr;
+
+
+  // ((((x*2050) & 139536) ∣ ((x*32800) & 558144)) * 65793) ≫ 16 
+  if (match(I, m_Shr(m_Value(J0), m_ConstantInt(J1))) && J1->getZExtValue() == 16) {
+    // (((x*2050) & 139536) ∣ ((x*32800) & 558144)) * 65793
+    if (match(J0, m_Mul(m_Value(J2), m_ConstantInt(J3))) && J3->getZExtValue() == 65793) {
+      // ((x*2050) & 139536) ∣ ((x*32800) & 558144)
+      if(match(J2, m_Or(m_Value(J4),m_Value(J5) ) ) ){
+        // ((x*2050) & 139536)
+        if(match(J4,m_And(m_Value(J6), m_ConstantInt(J7) )) && J7->getZExtValue() == 139536){
+          // (x*2050) 
+          if(match(J6, m_Mul(m_Value(J8), m_ConstantInt(J9))) && J9->getZExtValue() == 2050 ){
+            //J8 should be our x
+
+            //((x*32800) & 558144)
+            if(match(J5, m_And(m_Value(J10),m_ConstantInt(J11) ) ) && J11->getZExtValue()== 558144){
+              //(x*32800) 
+              if(match(J10, m_Mul(m_Value(J12),m_ConstantInt(J13))) && J13->getZExtValue()==32800 ){
+                //J12 should be our x
+                if(J12 == J8){
+                  dbgs() << "Josh triggered test\n";
+                  return nullptr;
+                }
+              }
+            }
+          }
+        }       
+      }
+    }
+  }
+  //     if (C->getValue() == 65793) {
+  //       if (match(Y, m_And(m_Value(Z), m_ConstantInt(C)))) {
+  //         if (C->getValue() == 558144) {
+  //           if (match(Z, m_Mul(m_Value(X), m_ConstantInt(C)))) {
+  //             if (C->getValue() == 32800) {
+  //               // Found the pattern,now transform it to our proven alive2 refinement 
+  //               auto NewConstant = ConstantInt::get(I->getContext(), APInt(64, 2149582850));
+  //               Instruction *NewMul = BinaryOperator::CreateMul(X, NewConstant);
+  //               auto AndConstant = ConstantInt::get(I->getContext(), APInt(64, 36578664720));
+  //               Instruction *NewAnd = BinaryOperator::CreateAnd(NewMul, AndConstant);
+  //               auto FinalMulConstant = ConstantInt::get(I->getContext(), APInt(64, 4311810305));
+  //               Instruction *FinalMul = BinaryOperator::CreateMul(NewAnd, FinalMulConstant);
+  //               auto ShiftConstant = ConstantInt::get(I->getContext(), APInt(32, 32));
+  //               Instruction *FinalShift = BinaryOperator::CreateLShr(FinalMul, ShiftConstant);
+
+  //               return FinalShift;
+  //             }
+  //           }
+  //         }
+  //       }
+  //     }
+  //   }
+  // }
+
+  // END JOSHUA TLATELPA-AGUSTIN
 
   // BEGIN JOHN REGEHR
   // x & (0x7FFFFFFF - x) → x & 0x80000000
