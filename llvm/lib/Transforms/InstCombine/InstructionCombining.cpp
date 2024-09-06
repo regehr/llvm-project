@@ -5095,7 +5095,8 @@ void cs6475_debug(std::string DbgString) {
 	  return NewI;
 	}
       }
-      cs6475_debug("[matcher] constants don't look right; no optimization");
+
+      return new ICmpInst(TheConst ? ICmpInst::ICMP_EQ : ICmpInst::ICMP_NE, LiteralTrue, LiteralTrue);
     }
   }
 
