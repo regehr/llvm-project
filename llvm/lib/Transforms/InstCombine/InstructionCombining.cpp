@@ -5045,29 +5045,62 @@ void cs6475_debug(std::string DbgString) {
     dbgs() << DbgString;
 }
 
-Instruction* cs6475_optimizer(Instruction *I) {
-  cs6475_debug("\nCS 6475 matcher: running now\n");
+// Instruction* cs6475_optimizer(Instruction *I) {
+//   cs6475_debug("\nCS 6475 matcher: running now\n");
 
-  // BEGIN JOHN REGEHR
-  // x & (0x7FFFFFFF - x) → x & 0x80000000
-  ConstantInt *C = nullptr;
-  Value *X = nullptr;
-  Value *Y = nullptr;
-  if (match(I, m_And(m_Value(X), m_Value(Y)))) {
-    cs6475_debug("JDR: matched the 'and'\n");
-    if (match(Y, m_Sub(m_ConstantInt(C), m_Specific(X)))) {
-      cs6475_debug("JDR: matched the 'sub'\n");
-      if (C->getUniqueInteger().isMaxSignedValue()) {
-	log_optzn("John Regehr");
-	auto SMin = APInt::getSignedMinValue(C->getUniqueInteger().getBitWidth());
-	Instruction *NewI = BinaryOperator::CreateAnd(X, ConstantInt::get(I->getContext(), SMin));
-	return NewI;
+//   // BEGIN JOHN REGEHR
+//   // x & (0x7FFFFFFF - x) → x & 0x80000000
+//   ConstantInt *C = nullptr;
+//   Value *X = nullptr;
+//   Value *Y = nullptr;
+//   if (match(I, m_And(m_Value(X), m_Value(Y)))) {
+//     cs6475_debug("JDR: matched the 'and'\n");
+//     if (match(Y, m_Sub(m_ConstantInt(C), m_Specific(X)))) {
+//       cs6475_debug("JDR: matched the 'sub'\n");
+//       if (C->getUniqueInteger().isMaxSignedValue()) {
+// 	log_optzn("John Regehr");
+// 	auto SMin = APInt::getSignedMinValue(C->getUniqueInteger().getBitWidth());
+// 	Instruction *NewI = BinaryOperator::CreateAnd(X, ConstantInt::get(I->getContext(), SMin));
+// 	return NewI;
+//       }
+//     }
+//   }
+//   // END JOHN REGEHR
+
+//  return nullptr;
+// }
+
+Instruction* cs6475_optimizer(Instruction *I) {
+  cs6475_debug("\nCS 6475 ashton314 matcher: running now\n");
+
+  // x^2 + c₁ >= c₂ and c₁ >= c₂ → true
+  ConstantInt *C1 = nullptr;
+  ConstantInt *C2 = nullptr;
+  Value *X1 = nullptr;
+  Value *X2 = nullptr;
+
+  if (match(I,
+            m_SpecificCmp(CmpInst::Predicate(CmpInst::ICMP_ULT),
+                          m_Add(m_Mul(m_Value(X1), m_Value(X2)),
+                                m_ConstantInt(C1)), m_ConstantInt(C2)))) {
+    cs6475_debug("[matcher] x1 * x2 + c1 >= c2 matched!\n");
+    if (match(X1, m_Specific(X2))) {
+      // LLM usage: I used Claude-3.5 to help me figure out how to build the expression I wanted.
+      // Good first attempt; not correct, but the idea is there
+      // Instruction *NewI = new ICmpInst(ICmpInst::ICMP_SGE, C1, C2, "cmp");
+      // return NewI;
+
+      if (C1->getValue().uge(C2->getValue())) {
+        cs6475_debug("[matcher] constants look right\n");
+        Value *LiteralTrue = ConstantInt::getTrue(I->getContext());
+        Instruction *NewI = new ICmpInst(ICmpInst::ICMP_EQ, LiteralTrue, LiteralTrue, "cmp");
+        return NewI;
       }
+      cs6475_debug("[matcher] constants don't look right; no optimization");
     }
   }
-  // END JOHN REGEHR
 
- return nullptr;
+  return nullptr;
 }
 
 bool InstCombinerImpl::run() {
