@@ -5070,6 +5070,31 @@ Instruction* cs6475_optimizer(Instruction *I) {
  return nullptr;
 }
 
+Instruction* cs6475_sub_xor_ident(Instruction *I) {
+  cs6475_debug("\nCS 6475 sub_xor_ident matcher: running now\n");
+
+  // BEGIN TANMAY TIRPANKAR
+  // (0x7FFFFFFF - x) ⊕ 0x7FFFFFFF → x
+  Constant *C = nullptr;
+  Value *X = nullptr;
+  Value *Y = nullptr;
+  if(match(I, m_Xor(m_Value(Y), m_Constant(C))) ||
+      match(I, m_Xor(m_Constant(C), m_Value(Y)))) {
+    cs6475_debug("TT: matched the 'xor'\n");
+    if(match(Y, m_Sub(m_Specific(C), m_Value(X)))) {
+      cs6475_debug("TT: matched the 'sub'\n");
+      if(C->getUniqueInteger().isMaxSignedValue()) {
+        log_optzn("Tanmay Tirpankar");
+        I->replaceAllUsesWith(X);
+      }
+    }
+  }
+  // END TANMAY TIRPANKAR
+
+  return nullptr;
+}
+
+
 bool InstCombinerImpl::run() {
   while (!Worklist.isEmpty()) {
     // Walk deferred instructions in reverse order, and push them to the
@@ -5193,7 +5218,7 @@ bool InstCombinerImpl::run() {
     LLVM_DEBUG(dbgs() << "IC: Visiting: " << OrigI << '\n');
 
     Instruction *Result = nullptr;
-    if ((Result = visit(*I)) || (Result = cs6475_optimizer(I))) {
+    if ((Result = visit(*I)) || (Result = cs6475_optimizer(I)) || (Result = cs6475_sub_xor_ident(I))) {
       ++NumCombined;
       // Should we replace the old instruction with a new one?
       if (Result != I) {
