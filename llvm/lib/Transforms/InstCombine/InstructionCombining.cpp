@@ -5516,41 +5516,37 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
   {
   // BEGIN LEE WEI
   Value *A = nullptr;
-  if (match(I, m_SExt(m_Value(A)))) {
-    dbgs() << "match sext\n";
-    if (A && A->hasName()) {
-      dbgs() << A->getName() << "\n";
-      if (A->getType()->isIntegerTy() && I->getType()->isIntegerTy()) {
-        unsigned bitWidth = A->getType()->getIntegerBitWidth();
-        dbgs() << bitWidth << " bits extends to " << I->getType()->getIntegerBitWidth() << "\n";
-      }
-    }
-
+  // %conv = sext i8 %a to i32
+  if (match(I, m_SExt(m_Value(A))) && A && A->getType()->isIntegerTy() ) {
+    cs6475_debug("match sext\n");
     ConstantInt *C = nullptr;
     Instruction *Next = I->getNextNode();
+    // %0 = and i32 %conv, -2147483647
     if (match(Next, m_c_And(m_Specific(I), m_ConstantInt(C)))) {
-      dbgs() << "match and\n";
+      cs6475_debug("match and\n");
       auto INT_MIN_ADD_ONE = APInt::getSignedMinValue(C->getUniqueInteger().getBitWidth()) + 1;
-      const APInt& CVal = C->getValue();
-      if (INT_MIN_ADD_ONE == CVal) {
-        dbgs() << "match and value!\n";
+      if (INT_MIN_ADD_ONE != C->getValue()) {
+        return nullptr;
       }
       Value *AndRes = Next;
       Next = Next->getNextNode();
       ICmpInst::Predicate Pred;
-      if (match(Next, m_ICmp(Pred, m_Specific(AndRes), m_One()))) {
-        if (Pred == ICmpInst::ICMP_EQ) {
-	        log_optzn("Lee Wei");
-          dbgs() << "match icmp eq with 1\n";
-          auto MAGIC = APInt::getSignedMinValue(A->getType()->getIntegerBitWidth()) + 1;
-          dbgs() << MAGIC << "\n";
-          // TODO:
-          // 1. Create new instructions
-          // 2. Insert into BB
-          // 3. Remove original instructions
-          // Instruction *NewI = BinaryOperator::CreateAnd(A, ConstantInt::get(I->getContext(), MAGIC));
-          return nullptr;
-        }
+      // %cmp = icmp eq i32 %0, 1
+      if (match(Next, m_c_ICmp(Pred, m_Specific(AndRes), m_One())) && Pred == ICmpInst::ICMP_EQ) {
+        cs6475_debug("match icmp eq with 1\n");
+	      log_optzn("Lee Wei");
+        Instruction *Cmp = Next;
+        Type* InputType = A->getType();
+        BasicBlock *BB = I->getParent();
+        IRBuilder<> Builder(BB);
+        Builder.SetInsertPoint(BB->begin());
+        auto INPUT_SMIN_ADD_ONE = APInt::getSignedMinValue(InputType->getIntegerBitWidth()) + 1;
+        Value *AndInst = Builder.CreateAnd(A, ConstantInt::get(InputType, INPUT_SMIN_ADD_ONE));
+        Value *CmpInst = Builder.CreateICmpEQ(AndInst, ConstantInt::get(InputType, 1));
+        // %and = and i8 %a, -127
+        // %cmp = icmp eq i8 %and, 1
+        Cmp->replaceAllUsesWith(CmpInst);
+        return nullptr;
       }
     }
   }
