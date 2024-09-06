@@ -5155,7 +5155,8 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
 	  return NewI;
 	}
       }
-      cs6475_debug("[matcher] constants don't look right; no optimization");
+
+      return new ICmpInst(TheConst ? ICmpInst::ICMP_EQ : ICmpInst::ICMP_NE, LiteralTrue, LiteralTrue);
     }
   }
 
