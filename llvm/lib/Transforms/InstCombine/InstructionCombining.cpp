@@ -5041,7 +5041,7 @@ void log_optzn(std::string Name) {
 void cs6475_debug(std::string DbgString) {
   // set this to "false" to suppress debug output, before running "ninja test"
   // set this to "true" to see debug output, to help you understand your transformation
-  if (true)
+  if (false)
     dbgs() << DbgString;
 }
 
@@ -5066,6 +5066,10 @@ Instruction* cs6475_optimizer(Instruction *I) {
     }
   }
   // END JOHN REGEHR
+
+  // BEGIN SURAJ YADAV
+
+  // END SURAJ YADAV
 
  return nullptr;
 }
