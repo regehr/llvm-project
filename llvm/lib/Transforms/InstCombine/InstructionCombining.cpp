@@ -5082,6 +5082,7 @@ Instruction* cs6475_optimizer(Instruction *I) {
               auto Mul2 = dyn_cast<BinaryOperator>(X1);
               if (Mul2->hasNoSignedWrap()) {
                 if (C->getUniqueInteger().isNonNegative()) {
+                  log_optzn("Jacob Knowlton");
                   ICmpInst::Predicate Pred3 = ICmpInst::ICMP_EQ; 
                   return new ICmpInst(Pred3, ConstantInt::getTrue(I->getContext()), ConstantInt::getTrue(I->getContext()));
                 }
@@ -5104,6 +5105,7 @@ Instruction* cs6475_optimizer(Instruction *I) {
               auto Mul2 = dyn_cast<BinaryOperator>(X1);
               if (Mul2->hasNoSignedWrap()) {
                 if (C->getUniqueInteger().isNonNegative()) {
+                  log_optzn("Jacob Knowlton");
                   ICmpInst::Predicate Pred3 = ICmpInst::ICMP_EQ; 
                   return new ICmpInst(Pred3, ConstantInt::getTrue(I->getContext()), ConstantInt::getTrue(I->getContext()));
                 }
