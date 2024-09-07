@@ -5066,8 +5066,57 @@ Instruction* cs6475_optimizer(Instruction *I) {
     }
   }
   // END JOHN REGEHR
+  
+  // BEGIN JACOB KNOWLTON
+  Value *X1 = nullptr;
+  Value *X2 = nullptr;
+  // >= case
+  ICmpInst::Predicate Pred1 = ICmpInst::ICMP_SGE; 
+  if (match(I, m_ICmp(Pred1, m_Value(X), m_Value(Y)))) {
+    if (match(Y, m_ConstantInt(C))) {
+      if (C->isZero()) {
+        if (match(X, m_Mul(m_Value(X1), m_Value(X2)))) {
+          auto Mul1 = dyn_cast<BinaryOperator>(X);
+          if (Mul1->hasNoSignedWrap()) {
+            if (match(X1, m_Mul(m_Specific(X2), m_ConstantInt(C))) || match(X1, m_Shl(m_Specific(X2), m_ConstantInt(C)))) {
+              auto Mul2 = dyn_cast<BinaryOperator>(X1);
+              if (Mul2->hasNoSignedWrap()) {
+                if (C->getUniqueInteger().isNonNegative()) {
+                  ICmpInst::Predicate Pred3 = ICmpInst::ICMP_EQ; 
+                  return new ICmpInst(Pred3, ConstantInt::getTrue(I->getContext()), ConstantInt::getTrue(I->getContext()));
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  // > case
+  ICmpInst::Predicate Pred2 = ICmpInst::ICMP_SGT; 
+  if (match(I, m_ICmp(Pred2, m_Value(X), m_Value(Y)))) {
+    if (match(Y, m_ConstantInt(C))) {
+      if (C->isMinusOne()) {
+        if (match(X, m_Mul(m_Value(X1), m_Value(X2)))) {
+          auto Mul1 = dyn_cast<BinaryOperator>(X);
+          if (Mul1->hasNoSignedWrap()) {
+            if (match(X1, m_Mul(m_Specific(X2), m_ConstantInt(C))) || match(X1, m_Shl(m_Specific(X2), m_ConstantInt(C)))) {
+              auto Mul2 = dyn_cast<BinaryOperator>(X1);
+              if (Mul2->hasNoSignedWrap()) {
+                if (C->getUniqueInteger().isNonNegative()) {
+                  ICmpInst::Predicate Pred3 = ICmpInst::ICMP_EQ; 
+                  return new ICmpInst(Pred3, ConstantInt::getTrue(I->getContext()), ConstantInt::getTrue(I->getContext()));
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  // END JACOB KNOWLTON
 
- return nullptr;
+return nullptr;
 }
 
 bool InstCombinerImpl::run() {
