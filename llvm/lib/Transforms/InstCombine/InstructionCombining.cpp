@@ -5046,7 +5046,6 @@ void cs6475_debug(std::string DbgString) {
 }
 
 Instruction* cs6475_optimizer_brensen(Instruction *I) {
-  cs6475_debug("\nCS6475 matcher - Brensen Villegas: running now\n");
   // BEGIN BRENSEN VILLEGAS
   Value *XorLhs = nullptr;
 
@@ -5116,9 +5115,12 @@ Instruction* cs6475_optimizer(Instruction *I) {
     }
   }
   // END JOHN REGEHR
+
+  // BEGIN BRENSEN VILLEGAS
   Instruction *BV_I = cs6475_optimizer_brensen(I);
   if (BV_I != nullptr)
     return BV_I;
+  // END BRENSEN VILLEGAS
 
  return nullptr;
 }
