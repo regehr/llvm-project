@@ -5118,7 +5118,7 @@ Instruction* cs6475_optimizer(Instruction *I) {
   }
   // END JACOB KNOWLTON
 
-return nullptr;
+ return nullptr;
 }
 
 bool InstCombinerImpl::run() {
