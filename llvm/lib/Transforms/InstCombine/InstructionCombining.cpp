@@ -5041,10 +5041,46 @@ void log_optzn(std::string Name) {
 void cs6475_debug(std::string DbgString) {
   // set this to "false" to suppress debug output, before running "ninja test"
   // set this to "true" to see debug output, to help you understand your transformation
-  if (false)
+  if (true)
     dbgs() << DbgString;
 }
 
+Instruction *cs6475_optimizer_suraj(Instruction *I) {
+  // Converts
+  // if x is even, return x+1 else return x-1
+  // to
+  // return x^1
+
+  Value *INPUT, *A, *B, *C;
+
+  if (!match(I, m_c_Add(m_Value(C), m_Value(INPUT)))) {
+    return nullptr;
+  }
+  cs6475_debug("Add Expression Matched\n");
+
+  if (!match(C, m_Select(m_Value(B), m_One(), m_ConstantInt<-1>()))) {
+    return nullptr;
+  }
+  cs6475_debug("Select Expression Matched\n");
+
+  if (!match(B, m_SpecificICmp(ICmpInst::ICMP_EQ, m_Value(A), m_ZeroInt()))) {
+    return nullptr;
+  }
+  cs6475_debug("Compare Expression Matched\n");
+
+  if (!match(A, m_And(m_Specific(INPUT), m_One()))) {
+    return nullptr;
+  }
+  cs6475_debug("And Expression Matched\n");
+
+  cs6475_debug("Suraj: Optimization Possible\n");
+  auto bitwidth = A->getType()->getIntegerBitWidth();
+  auto one = APInt(bitwidth, 1);
+
+  auto *OptIns =
+      BinaryOperator::CreateXor(INPUT, ConstantInt::get(I->getContext(), one));
+  return OptIns;
+}
 Instruction* cs6475_optimizer(Instruction *I) {
   cs6475_debug("\nCS 6475 matcher: running now\n");
 
@@ -5068,7 +5104,7 @@ Instruction* cs6475_optimizer(Instruction *I) {
   // END JOHN REGEHR
 
   // BEGIN SURAJ YADAV
-
+  return cs6475_optimizer_suraj(I);
   // END SURAJ YADAV
 
  return nullptr;
