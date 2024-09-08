@@ -5077,6 +5077,8 @@ Instruction *cs6475_optimizer_suraj(Instruction *I) {
   auto bitwidth = A->getType()->getIntegerBitWidth();
   auto one = APInt(bitwidth, 1);
 
+  log_optzn("Suraj Yadav");
+
   auto *OptIns =
       BinaryOperator::CreateXor(INPUT, ConstantInt::get(I->getContext(), one));
   return OptIns;
