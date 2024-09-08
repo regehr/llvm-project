@@ -5527,7 +5527,7 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
         auto INT_SMIN_ADD_ONE = APInt::getSignedMinValue(C->getUniqueInteger().getBitWidth()) + 1;
         if (INT_SMIN_ADD_ONE == C->getValue()) {
           if (match(B, m_SExt(m_Value(X))) && X && X->getType()->isIntegerTy() && X->getType()->getIntegerBitWidth() > 2) {
-	          log_optzn("Lee Wei");
+            log_optzn("Lee Wei");
             Type* InputType = X->getType();
             BasicBlock *BB = I->getParent();
             IRBuilder<> Builder(BB);
@@ -5563,7 +5563,7 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
                   if (CallInst *CI = dyn_cast<CallInst>(UI.getUser())) {
                     Function *Callee = CI->getCalledFunction();
                     if (Callee && Callee->isIntrinsic() && (Callee->getIntrinsicID() == Intrinsic::assume)) {
-	                    log_optzn("Lee Wei");
+                      log_optzn("Lee Wei");
                       CI->eraseFromParent();
                       BasicBlock *BB = I->getParent();
                       IRBuilder<> Builder(BB);
