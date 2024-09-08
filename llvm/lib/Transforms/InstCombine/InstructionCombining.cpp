@@ -5156,7 +5156,9 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
 	}
       }
 
-      return new ICmpInst(TheConst ? ICmpInst::ICMP_EQ : ICmpInst::ICMP_NE, LiteralTrue, LiteralTrue);
+      if (Decidable) {
+        return new ICmpInst(TheConst ? ICmpInst::ICMP_EQ : ICmpInst::ICMP_NE, LiteralTrue, LiteralTrue);
+      }
     }
   }
 
