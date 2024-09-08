@@ -5133,7 +5133,6 @@ Instruction *cs6475_optimizer(Instruction *I) {
   return nullptr;
 }
 
-
 bool InstCombinerImpl::run() {
   while (!Worklist.isEmpty()) {
     // Walk deferred instructions in reverse order, and push them to the
