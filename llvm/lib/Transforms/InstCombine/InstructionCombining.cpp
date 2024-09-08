@@ -5096,7 +5096,9 @@ void cs6475_debug(std::string DbgString) {
 	}
       }
 
-      return new ICmpInst(TheConst ? ICmpInst::ICMP_EQ : ICmpInst::ICMP_NE, LiteralTrue, LiteralTrue);
+      if (Decidable) {
+        return new ICmpInst(TheConst ? ICmpInst::ICMP_EQ : ICmpInst::ICMP_NE, LiteralTrue, LiteralTrue);
+      }
     }
   }
 
