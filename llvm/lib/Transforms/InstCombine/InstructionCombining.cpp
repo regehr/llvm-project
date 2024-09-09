@@ -5046,7 +5046,7 @@ void cs6475_debug(std::string DbgString) {
 }
 
 // BEGIN YEASEEN ARAFAT
-static Instruction* cs6745_yeaseen_opt(Instruction* I){
+static Instruction* cs6475_yeaseen_opt(Instruction* I){
   //0x7FFFFFFF - (x ⊕ c) → x ⊕ (0x7FFFFFFF - c)
   ConstantInt *C1 = nullptr;
   ConstantInt *C2 = nullptr;
@@ -5213,7 +5213,7 @@ bool InstCombinerImpl::run() {
     LLVM_DEBUG(dbgs() << "IC: Visiting: " << OrigI << '\n');
 
     Instruction *Result = nullptr;
-    if ((Result = visit(*I)) || (Result = cs6475_optimizer(I)) || (Result = cs6745_yeaseen_opt(I))) {
+    if ((Result = visit(*I)) || (Result = cs6475_optimizer(I)) || (Result = cs6475_yeaseen_opt(I))) {
       ++NumCombined;
       // Should we replace the old instruction with a new one?
       if (Result != I) {
