@@ -5071,73 +5071,87 @@ void cs6475_debug(std::string DbgString) {
 // }
 
 Instruction* cs6475_optimizer(Instruction *I) {
-  cs6475_debug("\nCS 6475 ashton314 matcher: running now\n");
-
-  // x^2 + c₁ > c₂ and c₁ > c₂ → true
-  ConstantInt *C1 = nullptr;
-  ConstantInt *C2 = nullptr;
+  // x : float; c1, c2 are literal constants
+  // x * x + c1 > c2 && c1 > c2 ⇒ is_nan(x)
+  // x * x + c1 < c2 && c1 > c2 ⇒ false
+  ConstantFP *C1 = nullptr;
+  ConstantFP *C2 = nullptr;
   CmpInst::Predicate Pred;
   Value *X1 = nullptr;
   Value *X2 = nullptr;
   Value *LiteralTrue = ConstantInt::getTrue(I->getContext());
 
   if (match(I,
-            m_ICmp(Pred,
-                   m_Add(m_Mul(m_Value(X1), m_Value(X2)),
-                         m_ConstantInt(C1)), m_ConstantInt(C2)))) {
-    cs6475_debug("[matcher] x1 * x2 + c1 ? c2 matched!\n");
-    if (match(X1, m_Specific(X2))) {
-      cs6475_debug("[matcher] x1 and x2 are the same; found a square\n");
+            m_FCmp(Pred, m_FAdd(m_FMul(m_Value(X1), m_Value(X2)),
+                               m_ConstantFP(C1)), m_ConstantFP(C2)))) {
 
+    if (match(X1, m_Specific(X2))) {
       bool Decidable = false;
       bool TheConst = false;
-      switch (Pred) {
-      case CmpInst::ICMP_UGT:
-        Decidable = C1->getValue().ugt(C2->getValue());
-        cs6475_debug("inst is >; c1 > c2 is");
-        cs6475_debug(Decidable ? "true \n" : "unknown \n");
-        TheConst = true;
+      APFloatBase::cmpResult Ord = C1->getValue().compare(C2->getValue());
+
+      switch(Pred) {
+      case CmpInst::FCMP_OGT:
+        switch (Ord) {
+        case APFloatBase::cmpResult::cmpGreaterThan:
+          Decidable = true;
+          TheConst = true;
+          break;
+        default:
+          return nullptr;
+        }
         break;
-      case CmpInst::ICMP_UGE:
-        Decidable = C1->getValue().uge(C2->getValue());
-        cs6475_debug("inst is >=; c1 >= c2 is");
-        cs6475_debug(Decidable ? "true \n" : "unknown \n");
-        TheConst = true;
+      case CmpInst::FCMP_OGE:
+        switch (Ord) {
+        case APFloatBase::cmpResult::cmpEqual:
+        case APFloatBase::cmpResult::cmpGreaterThan:
+          Decidable = true;
+          TheConst = true;
+          break;
+        default:
+          return nullptr;
+        }
         break;
-      case CmpInst::ICMP_ULT:
-        Decidable = C1->getValue().uge(C2->getValue());
-        cs6475_debug("inst is <; c1 >= c2 is");
-        cs6475_debug(Decidable ? "decidable \n" : "unknown \n");
-        TheConst = false;
+      case CmpInst::FCMP_OLT:
+        switch (Ord) {
+        case APFloatBase::cmpResult::cmpEqual:
+        case APFloatBase::cmpResult::cmpGreaterThan:
+          Decidable = true;
+          TheConst = false;
+          break;
+        default:
+          return nullptr;
+        }
         break;
-      case CmpInst::ICMP_ULE:
-        Decidable = C1->getValue().ugt(C2->getValue());
-        cs6475_debug("inst is <=; c1 > c2 is");
-        cs6475_debug(Decidable ? "decidable \n" : "unknown \n");
-        TheConst = false;
+      case CmpInst::FCMP_OLE:
+        switch (Ord) {
+        case APFloatBase::cmpResult::cmpGreaterThan:
+          Decidable = true;
+          TheConst = false;
+          break;
+        default:
+          return nullptr;
+        }
         break;
-      // case CmpInst::ICMP_SGT:
-      //   TheConst = C1->getValue().sgt(C2->getValue());
-      //   break;
-      // case CmpInst::ICMP_SGE:
-      //   TheConst = C1->getValue().sge(C2->getValue());
-      //   break;
-      // case CmpInst::ICMP_SLT:
-      //   TheConst = C1->getValue().slt(C2->getValue());
-      //   break;
-      // case CmpInst::ICMP_SLE:
-      //   TheConst = C1->getValue().sle(C2->getValue());
-      //   break;
       default:
-        return nullptr;
+        return nullptr;         // undecidable
       }
 
       if (Decidable) {
-        return new ICmpInst(TheConst ? ICmpInst::ICMP_EQ : ICmpInst::ICMP_NE, LiteralTrue, LiteralTrue);
+        log_optzn("Ashton Wiersdorf");
+        if (TheConst) {
+          // We only know that this might be true if x*x isn't NaN, so
+          // we generate code that checks if x = x; if x is NaN, x = x
+          // returns false, which matches what the original expression
+          // would return.
+          return new FCmpInst(FCmpInst::FCMP_OEQ, X1, X1);
+        }
+        // In this case, we know that the condition will always return
+        // false, even if x is Nan.
+        return new ICmpInst(ICmpInst::ICMP_NE, LiteralTrue, LiteralTrue);
       }
     }
   }
-
   return nullptr;
 }
 
