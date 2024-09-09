@@ -57,7 +57,6 @@
 #include "llvm/Analysis/Utils/Local.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Analysis/VectorUtils.h"
-#include "llvm/DebugInfo/CodeView/CodeView.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constant.h"
@@ -5042,7 +5041,7 @@ void log_optzn(std::string Name) {
 void cs6475_debug(std::string DbgString) {
   // set this to "false" to suppress debug output, before running "ninja test"
   // set this to "true" to see debug output, to help you understand your transformation
-  if (false)
+  if (true)
     dbgs() << DbgString;
 }
 
