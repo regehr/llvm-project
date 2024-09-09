@@ -5070,6 +5070,71 @@ Instruction* cs6475_optimizer(Instruction *I) {
  return nullptr;
 }
 
+
+Instruction *cs6475_sameeran(Instruction *I) {
+  // dbgs() << "\nCS 6475 Sameeran matcher: running now\n" << *I << "\n";
+
+  // Define placeholders for values
+  Value *LHS = nullptr;
+  Value *RHS = nullptr;
+  Value *X_PLUS_ONE = nullptr;
+  Value *X = nullptr;
+  ConstantInt *C = nullptr;
+  ConstantInt *C2 = nullptr;
+  ConstantInt *C_minus_one = nullptr;
+  Value *something = nullptr;
+  Value *x_sq = nullptr;
+  Value *TWO_X = nullptr;
+  Value *X_PLUS_ONE_SQUARE = nullptr;
+  Value *B_neg = nullptr;
+
+  if (match(I, m_Add(m_Value(X_PLUS_ONE_SQUARE), m_Value(B_neg)))) {
+          // Match the instruction for the pattern (x + 1) * (x + 1)
+          if (match(X_PLUS_ONE_SQUARE, m_Mul(m_Value(X_PLUS_ONE), m_Value(X_PLUS_ONE)))) {
+            if (match(X_PLUS_ONE, m_Add(m_Value(X), m_ConstantInt(C)))) {
+              if (C->getUniqueInteger().isOne()) {
+                // LHS MATCHED NOW TRY RHS
+                if (match(B_neg, m_Xor(m_Value(LHS), m_ConstantInt(C_minus_one)))) {
+                  if (C_minus_one->isMinusOne()) {  // -1
+                    if (match(LHS, m_Mul(m_Value(TWO_X),  m_Value(X)))) { // (TWOX*X) = (x+2)*x
+                      if (match(TWO_X, m_Add(m_Specific(X), m_ConstantInt(C2)))) { // TWOX = X+2
+                        if (C2->equalsInt(2)) {
+                          dbgs() << "SJJ: Matched pattern " << *I << "\n";
+                          IRBuilder<> Builder(I);
+                          // create a new Instruction which returns a 0
+                          auto zerovalue = APInt(I->getType()->getScalarSizeInBits(), 0);
+                          ConstantInt *zero = ConstantInt::get(I->getContext(), zerovalue);
+                          // Builder.CreateRet(zero);
+                          Instruction *newInst = Builder.CreateRet(zero);
+                          I->replaceAllUsesWith(newInst);
+                        }
+                      }
+                    }  
+                  }
+                }
+              }
+            }
+          }
+  }
+
+  // Match the instruction for the pattern x^2 + 2x + 1
+  // if (match(I, m_Add(m_Value(something), m_Constant(C2)))) {
+  //   if (C2->isOneValue()) {
+  //     dbgs() << "\n + C2=1" << *I;
+  // if (match(I, m_Add(m_Value(x_sq), m_Value(two_x)))) {
+  //   dbgs() << "\n '+' found = " << *I;
+  //   if (match(x_sq, m_Mul(m_Value(X), m_Specific(X)))) {
+  //     dbgs() << "\n x**2 found = " << *I;
+  //     if (match(two_x, m_Add(m_Specific(X), m_Specific(X)))) {
+  //       dbgs() << "\n 2x found = " << *I;
+  //     }
+  //   }
+  // }
+  // match a xor 
+
+  return nullptr;
+}
+
 bool InstCombinerImpl::run() {
   while (!Worklist.isEmpty()) {
     // Walk deferred instructions in reverse order, and push them to the
@@ -5193,7 +5258,7 @@ bool InstCombinerImpl::run() {
     LLVM_DEBUG(dbgs() << "IC: Visiting: " << OrigI << '\n');
 
     Instruction *Result = nullptr;
-    if ((Result = visit(*I)) || (Result = cs6475_optimizer(I))) {
+    if ((Result = visit(*I)) || (Result = cs6475_sameeran(I))) {
       ++NumCombined;
       // Should we replace the old instruction with a new one?
       if (Result != I) {
