@@ -5045,6 +5045,15 @@ void cs6475_debug(std::string DbgString) {
     dbgs() << DbgString;
 }
 
+// BEGIN YEASEEN ARAFAT
+static Instruction* yeaseen_opt(Instruction* I){
+  //0x7FFFFFFF - (x ⊕ c) → x ⊕ (0x7FFFFFFF - c)
+
+  cs6475_debug("YA:TESTING");
+  return I;
+}
+//END YEASEEN ARAFAT
+
 Instruction* cs6475_optimizer(Instruction *I) {
   cs6475_debug("\nCS 6475 matcher: running now\n");
 
@@ -5066,6 +5075,10 @@ Instruction* cs6475_optimizer(Instruction *I) {
     }
   }
   // END JOHN REGEHR
+
+  // BEGIN YEASEEN ARAFAT
+  
+  // END YEASEEN ARFAT
 
  return nullptr;
 }
