@@ -5067,6 +5067,32 @@ Instruction* cs6475_optimizer(Instruction *I) {
   }
   // END JOHN REGEHR
 
+  // BEGIN CAYDEN LUND
+  // 0xFFFFFFFE - (x | 0x7FFFFFFF) → x | 0x7FFFFFFF
+  {
+    // Opening new block to allow binding variables of the same name,
+    // in order to prevent collisions with other optimizations.
+    ConstantInt *C1 = nullptr; // (-2)
+    ConstantInt *C2 = nullptr; // (IntMax)
+    Value *X = nullptr;        // (x)
+    Value *Y = nullptr;        // (x | IntMax)
+    if (match(I, m_Sub(m_ConstantInt(C1), m_Value(Y)))) {
+      if (match(Y, m_Or(m_Value(X), m_ConstantInt(C2)))) {
+        cs6475_debug("CML: matched 'C1 - (X | C2)'\n");
+        if (C1->getValue() == APInt::getMaxValue(C2->getBitWidth()) - 1) {
+          cs6475_debug("CML: C1 == -2\n");
+          if (C2->getValue() == APInt::getSignedMaxValue(C2->getBitWidth())) {
+            cs6475_debug("CML: C2 == IntMax\n");
+            log_optzn("Cayden Lund");
+            // (x | IntMax)
+            return BinaryOperator::CreateOr(X, C2);
+          }
+        }
+      }
+    }
+  }
+  // END CAYDEN LUND
+
  return nullptr;
 }
 
