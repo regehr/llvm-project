@@ -5045,32 +5045,29 @@ void cs6475_debug(std::string DbgString) {
     dbgs() << DbgString;
 }
 
-// Instruction* cs6475_optimizer(Instruction *I) {
-//   cs6475_debug("\nCS 6475 matcher: running now\n");
-
-//   // BEGIN JOHN REGEHR
-//   // x & (0x7FFFFFFF - x) → x & 0x80000000
-//   ConstantInt *C = nullptr;
-//   Value *X = nullptr;
-//   Value *Y = nullptr;
-//   if (match(I, m_And(m_Value(X), m_Value(Y)))) {
-//     cs6475_debug("JDR: matched the 'and'\n");
-//     if (match(Y, m_Sub(m_ConstantInt(C), m_Specific(X)))) {
-//       cs6475_debug("JDR: matched the 'sub'\n");
-//       if (C->getUniqueInteger().isMaxSignedValue()) {
-// 	log_optzn("John Regehr");
-// 	auto SMin = APInt::getSignedMinValue(C->getUniqueInteger().getBitWidth());
-// 	Instruction *NewI = BinaryOperator::CreateAnd(X, ConstantInt::get(I->getContext(), SMin));
-// 	return NewI;
-//       }
-//     }
-//   }
-//   // END JOHN REGEHR
-
-//  return nullptr;
-// }
-
 Instruction* cs6475_optimizer(Instruction *I) {
+  cs6475_debug("\nCS 6475 matcher: running now\n");
+
+  // BEGIN JOHN REGEHR
+  // x & (0x7FFFFFFF - x) → x & 0x80000000
+  ConstantInt *C = nullptr;
+  Value *X = nullptr;
+  Value *Y = nullptr;
+  if (match(I, m_And(m_Value(X), m_Value(Y)))) {
+    cs6475_debug("JDR: matched the 'and'\n");
+    if (match(Y, m_Sub(m_ConstantInt(C), m_Specific(X)))) {
+      cs6475_debug("JDR: matched the 'sub'\n");
+      if (C->getUniqueInteger().isMaxSignedValue()) {
+	log_optzn("John Regehr");
+	auto SMin = APInt::getSignedMinValue(C->getUniqueInteger().getBitWidth());
+	Instruction *NewI = BinaryOperator::CreateAnd(X, ConstantInt::get(I->getContext(), SMin));
+	return NewI;
+      }
+    }
+  }
+  // END JOHN REGEHR
+
+  // BEGIN ASHTON WIERSDORF
   // x : float; c1, c2 are literal constants
   // x * x + c1 > c2 && c1 > c2 ⇒ is_nan(x)
   // x * x + c1 < c2 && c1 > c2 ⇒ false
@@ -5091,17 +5088,17 @@ Instruction* cs6475_optimizer(Instruction *I) {
       APFloatBase::cmpResult Ord = C1->getValue().compare(C2->getValue());
 
       switch(Pred) {
-      case CmpInst::FCMP_OGT:
+      case CmpInst::FCMP_OGT:   // x*x + c1 > c2 ⇒ true if c1 > c2
         switch (Ord) {
         case APFloatBase::cmpResult::cmpGreaterThan:
           Decidable = true;
           TheConst = true;
           break;
         default:
-          return nullptr;
+          Decidable = false;
         }
         break;
-      case CmpInst::FCMP_OGE:
+      case CmpInst::FCMP_OGE:   // x*x + c1 ≥ c2 ⇒ true if c1 ≥ c2
         switch (Ord) {
         case APFloatBase::cmpResult::cmpEqual:
         case APFloatBase::cmpResult::cmpGreaterThan:
@@ -5109,10 +5106,10 @@ Instruction* cs6475_optimizer(Instruction *I) {
           TheConst = true;
           break;
         default:
-          return nullptr;
+          Decidable = false;
         }
         break;
-      case CmpInst::FCMP_OLT:
+      case CmpInst::FCMP_OLT:   // x*x + c1 < c2 ⇒ false if c1 ≥ c2
         switch (Ord) {
         case APFloatBase::cmpResult::cmpEqual:
         case APFloatBase::cmpResult::cmpGreaterThan:
@@ -5120,21 +5117,21 @@ Instruction* cs6475_optimizer(Instruction *I) {
           TheConst = false;
           break;
         default:
-          return nullptr;
+          Decidable = false;
         }
         break;
-      case CmpInst::FCMP_OLE:
+      case CmpInst::FCMP_OLE:   // x*x + c1 ≤ c2 ⇒ false if c1 > c2
         switch (Ord) {
         case APFloatBase::cmpResult::cmpGreaterThan:
           Decidable = true;
           TheConst = false;
           break;
         default:
-          return nullptr;
+          Decidable = false;
         }
         break;
       default:
-        return nullptr;         // undecidable
+        Decidable = false;
       }
 
       if (Decidable) {
@@ -5152,7 +5149,9 @@ Instruction* cs6475_optimizer(Instruction *I) {
       }
     }
   }
-  return nullptr;
+  // END ASHTON WIERSDORF
+
+ return nullptr;
 }
 
 bool InstCombinerImpl::run() {
