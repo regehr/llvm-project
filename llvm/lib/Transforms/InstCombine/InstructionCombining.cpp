@@ -5069,7 +5069,7 @@ Instruction* cs6475_optimizer(Instruction *I) {
   // END JOHN REGEHR
 
   // BEGIN SINA MAHDIPOUR SARAVANI
-  
+  /*
   Value *S1 = nullptr;
   ConstantInt *C4 = nullptr;
   ConstantInt *C1 = nullptr;
@@ -5150,40 +5150,59 @@ Instruction* cs6475_optimizer(Instruction *I) {
       }
     }
   }
-  /*
+  */
+  
   // Match the pattern in src
-  Value *X = nullptr;
-  Value *A = nullptr, *B = nullptr, *D = nullptr, *E = nullptr;
+  Value *Z = nullptr;
+  Value *E = nullptr, *D = nullptr, *B = nullptr, *A = nullptr;
   ICmpInst::Predicate Pred;
+  ConstantInt *C02 = nullptr;
+  ConstantInt *C0 = nullptr;
+  ConstantInt *C1 = nullptr;
   ConstantInt *C4 = nullptr;
 
+
+  // if (auto *BinOp = dyn_cast<BinaryOperator>(I->getNextNode()->getNextNode())) {
+            // if (BinOp->hasNoSignedWrap()) {
   // Match the initial lshr and and instructions
-  if (match(&I, m_ICmp(Pred, m_And(m_Value(B), m_Value(D)), m_Zero())) &&
-      match(D, m_Sub(m_ConstantInt(), m_Specific(A))) &&
-      match(B, m_And(m_Specific(A), m_One())) &&
-      match(A, m_LShr(m_Value(X), m_ConstantInt(C4))) &&
-      (C4->getValue() == 4)
+  if (
+        match(I, m_ICmp(Pred, m_Value(E), m_ConstantInt(C02))) &&
+          (C02->getValue() == 0) &&
+        match(E, m_And(m_Value(B), m_Value(D))) &&
+        match(D, m_Sub(m_ConstantInt(C0), m_Value(A))) &&
+          (C0->getValue() == 0) &&
+          // ((auto *Dtype = dyn_cast<BinaryOperator>(D)) && Dtype->hasNoSignedWrap()) &&
+        match(B, m_And(m_Specific(A), m_ConstantInt(C1))) &&
+          (C1->getValue() == 1) &&
+        match(A, m_LShr(m_Value(Z), m_ConstantInt(C4))) &&
+          (C4->getValue() == 4)
       ) {
 
     // We have matched all the required patterns
     // Create the replacement instructions
-    IRBuilder<> Builder(I->getContext());
-    Value *NewAnd = Builder.CreateAnd(X, ConstantInt::get(X->getType(), 16));
-    Value *NewICmp = Builder.CreateICmpNE(NewAnd, ConstantInt::get(X->getType(), 0));
+    IRBuilder<> Builder(I);
+    Value *NewAnd = Builder.CreateAnd(Z, ConstantInt::get(Z->getType(), 16));
+    Value *NewICmp = Builder.CreateICmpNE(NewAnd, ConstantInt::get(Z->getType(), 0));
 
     // Replace all uses of the original instruction with the new instruction
     I->replaceAllUsesWith(NewICmp);
 
     // Erase the old instructions
-    I->eraseFromParent();
-    cast<Instruction>(A)->eraseFromParent();
-    cast<Instruction>(B)->eraseFromParent();
-    cast<Instruction>(D)->eraseFromParent();
-    cast<Instruction>(E)->eraseFromParent();
-
+    // I->eraseFromParent();
+    // cast<Instruction>(E)->eraseFromParent();
+    // cast<Instruction>(D)->eraseFromParent();
+    // cast<Instruction>(B)->eraseFromParent();
+    // cast<Instruction>(A)->eraseFromParent();
+    // Safely erase the old instructions, ensuring no multiple deletions
+    Instruction *ToErase[] = {cast<Instruction>(E), cast<Instruction>(D), cast<Instruction>(B), cast<Instruction>(A), I};
+    for (Instruction *Inst : ToErase) {
+      if (Inst->use_empty())  // Ensure no dangling uses exist
+        Inst->eraseFromParent();
+    }
+    log_optzn("\nSinaMpS\n");
     return nullptr;  // Since we've deleted the original instruction
   }
-  */
+  
   // END SINA MAHDIPOUR SARAVANI
 
  return nullptr;
