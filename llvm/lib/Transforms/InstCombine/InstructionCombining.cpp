@@ -5036,6 +5036,7 @@ void InstCombinerImpl::tryToSinkInstructionDbgVariableRecords(
 
 void log_optzn(std::string Name) {
   // TODO-- John will fill in the missing code here
+  dbgs() << Name;
 }
 
 void cs6475_debug(std::string DbgString) {
@@ -5054,9 +5055,9 @@ Instruction* cs6475_optimizer(Instruction *I) {
   Value *X = nullptr;
   Value *Y = nullptr;
   if (match(I, m_And(m_Value(X), m_Value(Y)))) {
-    cs6475_debug("JDR: matched the 'and'\n");
+    // cs6475_debug("JDR: matched the 'and'\n");
     if (match(Y, m_Sub(m_ConstantInt(C), m_Specific(X)))) {
-      cs6475_debug("JDR: matched the 'sub'\n");
+      // cs6475_debug("JDR: matched the 'sub'\n");
       if (C->getUniqueInteger().isMaxSignedValue()) {
 	log_optzn("John Regehr");
 	auto SMin = APInt::getSignedMinValue(C->getUniqueInteger().getBitWidth());
@@ -5066,6 +5067,124 @@ Instruction* cs6475_optimizer(Instruction *I) {
     }
   }
   // END JOHN REGEHR
+
+  // BEGIN SINA MAHDIPOUR SARAVANI
+  
+  Value *S1 = nullptr;
+  ConstantInt *C4 = nullptr;
+  ConstantInt *C1 = nullptr;
+  ConstantInt *C0 = nullptr;
+  ConstantInt *C02 = nullptr;
+  ICmpInst::Predicate NEPred;
+  if (match(I, m_LShr(m_Value(S1), m_ConstantInt(C4)))) {
+    if (C4->getValue() == 4) {  // Match the right shift by 4
+      cs6475_debug("\nSMPS: matched lshr with 4\n");
+      // Match the pattern: %b = and i16 %a, 1
+      if (match(I->getNextNode(), m_And(m_Specific(I), m_ConstantInt(C1))) &&
+          C1->getValue() == 1) {
+        cs6475_debug("SMPS: matched and after lshr\n");
+
+        // Match the pattern: %d = sub nsw i16 0, %a
+        if (match(I->getNextNode()->getNextNode(),
+                  m_Sub(m_ConstantInt(C0), m_Specific(I)))) {
+          if (auto *BinOp = dyn_cast<BinaryOperator>(I->getNextNode()->getNextNode())) {
+            if (BinOp->hasNoSignedWrap()) {
+              cs6475_debug("SMPS: matched sub after and\n");
+              if (C0->getValue() == 0) {
+                cs6475_debug("SMPS: sub is with zero\n");
+
+                // Match the pattern: %e = and i16 %b, %d
+                auto EInst = I->getNextNode()->getNextNode()->getNextNode();
+                if (match(EInst, m_And(m_Specific(I->getNextNode()),
+                                      m_Specific(I->getNextNode()->getNextNode())))) {
+                  cs6475_debug("SMPS: matched 2nd and after sub\n");
+
+                  // Match the pattern: %f = icmp ne i16 %e, 0
+                  auto FInst = EInst->getNextNode();
+                  // auto ne = new ICmpInst();
+                  if (match(FInst, m_ICmp(NEPred, m_Specific(EInst), m_ConstantInt(C02)))) {
+                    cs6475_debug("SMPS: matched icmp after 2nd and\n");
+                    if (C02->getValue() == 0 && NEPred == ICmpInst::ICMP_NE) {
+                      cs6475_debug("SMPS: icmp is ne with zero\n");
+                      // Perform the transformation: %x = and i16 16, %0
+                      // auto And16 = ConstantInt::get(S1->getType(), 16);
+                      // int16_t value = 16;
+                      // auto rw16 = APInt(C02->getUniqueInteger().getBitWidth(), 16, false);
+                      auto rw16 = APInt(S1->getType()->getIntegerBitWidth(), 16);
+                      Instruction *NewAnd = BinaryOperator::CreateAnd(S1, ConstantInt::get(FInst->getContext(), rw16));
+                      // Instruction *NewAnd = BinaryOperator::CreateAnd(S1, ConstantInt::get(FInst->getContext(), rw16), "", FInst);
+                      // Replace the original %f with: %f = icmp ne i16 %x, 0
+                      // Instruction *NewF = new ICmpInst(ICmpInst::ICMP_NE, NewAnd, ConstantInt::get(FInst->getContext(), APInt(S1->getType()->getIntegerBitWidth(), 0)));
+                      // Instruction *NewF = Operator::CreateICmpNE(NewAnd, C02);
+
+                      auto newzero = APInt(S1->getType()->getIntegerBitWidth(), 0);
+                      Instruction *NewF = new ICmpInst(ICmpInst::ICMP_NE, NewAnd, ConstantInt::get(FInst->getContext(), newzero));
+                      assert(I->getType() == NewAnd->getType() && "Type mismatch!");
+                      // Perform the transformation: %a = and i16 16, %0
+                      // IRBuilder<> Builder(ICmpInst);
+                      // IRBuilder<> Builder(FInst->getContext());
+                      // Builder.SetInsertPoint(FInst);
+                      // Value *AndValue = Builder.CreateAnd(S1, ConstantInt::get(S1->getType(), 16));
+                            
+                      // Create new comparison: %b = icmp ne i16 %a, 0
+                      // Value *CmpValue = Builder.CreateICmpNE(AndValue, ConstantInt::get(S1->getType(), 0));
+                      // ICmpInst::
+                      // FInst->replaceAllUsesWith(NewF);
+                      log_optzn("\nSinaMpS\n");
+                      // Ensure the type matches the original ICmpInst's type
+                      // assert(CmpValue->getType() == FInst->getType() && "Type mismatch!");
+                      // FInst->replaceAllUsesWith(NewF);
+                      // FInst->eraseFromParent();
+
+                      // return NewF;  // Return the new optimized instruction
+                      // return nullptr;
+                      // return cast<Instruction>(CmpValue);
+                      return NewF;
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  /*
+  // Match the pattern in src
+  Value *X = nullptr;
+  Value *A = nullptr, *B = nullptr, *D = nullptr, *E = nullptr;
+  ICmpInst::Predicate Pred;
+  ConstantInt *C4 = nullptr;
+
+  // Match the initial lshr and and instructions
+  if (match(&I, m_ICmp(Pred, m_And(m_Value(B), m_Value(D)), m_Zero())) &&
+      match(D, m_Sub(m_ConstantInt(), m_Specific(A))) &&
+      match(B, m_And(m_Specific(A), m_One())) &&
+      match(A, m_LShr(m_Value(X), m_ConstantInt(C4))) &&
+      (C4->getValue() == 4)
+      ) {
+
+    // We have matched all the required patterns
+    // Create the replacement instructions
+    IRBuilder<> Builder(I->getContext());
+    Value *NewAnd = Builder.CreateAnd(X, ConstantInt::get(X->getType(), 16));
+    Value *NewICmp = Builder.CreateICmpNE(NewAnd, ConstantInt::get(X->getType(), 0));
+
+    // Replace all uses of the original instruction with the new instruction
+    I->replaceAllUsesWith(NewICmp);
+
+    // Erase the old instructions
+    I->eraseFromParent();
+    cast<Instruction>(A)->eraseFromParent();
+    cast<Instruction>(B)->eraseFromParent();
+    cast<Instruction>(D)->eraseFromParent();
+    cast<Instruction>(E)->eraseFromParent();
+
+    return nullptr;  // Since we've deleted the original instruction
+  }
+  */
+  // END SINA MAHDIPOUR SARAVANI
 
  return nullptr;
 }
