@@ -5046,17 +5046,28 @@ void cs6475_debug(std::string DbgString) {
 }
 
 // BEGIN YEASEEN ARAFAT
-static Instruction* yeaseen_opt(Instruction* I){
+static Instruction* cs6745_yeaseen_opt(Instruction* I){
   //0x7FFFFFFF - (x ⊕ c) → x ⊕ (0x7FFFFFFF - c)
-
-  cs6475_debug("YA:TESTING");
-  return I;
+  ConstantInt *C1 = nullptr;
+  ConstantInt *C2 = nullptr;
+  Value *X = nullptr;
+  if(match(I, m_Sub(m_ConstantInt(C1), m_Xor(m_Value(X), m_ConstantInt(C2))))){
+      cs6475_debug("YA: Matched the left-side pattern 'MaxSignedValue - (x ⊕ c)'\n");
+      if(C1->getUniqueInteger().isMaxSignedValue()){
+        auto MaxSignedValue = APInt::getSignedMaxValue(C1->getUniqueInteger().getBitWidth());
+        auto NewConstant = MaxSignedValue - C2->getValue();
+        Instruction *NewI = BinaryOperator::CreateXor(X, ConstantInt::get(I->getContext(), NewConstant));
+        cs6475_debug("YA: Applied the optimization 'x ⊕ (MaxSignedValue - c)'\n");
+        log_optzn("Yeaseen Arafat");
+        return NewI;
+      }
+  }
+  return nullptr;
 }
 //END YEASEEN ARAFAT
 
 Instruction* cs6475_optimizer(Instruction *I) {
-  cs6475_debug("\nCS 6475 matcher: running now\n");
-
+  //cs6475_debug("\nCS 6475 matcher: running now\n");
   // BEGIN JOHN REGEHR
   // x & (0x7FFFFFFF - x) → x & 0x80000000
   ConstantInt *C = nullptr;
@@ -5075,10 +5086,6 @@ Instruction* cs6475_optimizer(Instruction *I) {
     }
   }
   // END JOHN REGEHR
-
-  // BEGIN YEASEEN ARAFAT
-  
-  // END YEASEEN ARFAT
 
  return nullptr;
 }
@@ -5206,7 +5213,7 @@ bool InstCombinerImpl::run() {
     LLVM_DEBUG(dbgs() << "IC: Visiting: " << OrigI << '\n');
 
     Instruction *Result = nullptr;
-    if ((Result = visit(*I)) || (Result = cs6475_optimizer(I))) {
+    if ((Result = visit(*I)) || (Result = cs6475_optimizer(I)) || (Result = cs6745_yeaseen_opt(I))) {
       ++NumCombined;
       // Should we replace the old instruction with a new one?
       if (Result != I) {
