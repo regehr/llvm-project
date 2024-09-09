@@ -5107,6 +5107,7 @@ void cs6475_debug(std::string DbgString) {
         }
         // In this case, we know that the condition will always return
         // false, even if x is Nan.
+        Value *LiteralTrue = ConstantInt::getTrue(I->getContext());
         return new ICmpInst(ICmpInst::ICMP_NE, LiteralTrue, LiteralTrue);
       }
     }
