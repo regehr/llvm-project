@@ -5048,9 +5048,10 @@ void cs6475_debug(std::string DbgString) {
 Instruction* cs6475_optimizer(Instruction *I) {
   
   cs6475_debug("\nCS 6475 matcher: running now\n");
+  
   // BEGIN JOSHUA TLATELPA-AGUSTIN
-  // trunc^8( ((((x'*2050) & 139536) ∣ ((x'*32800) & 558144)) * 65793) ≫ 16 ), x'-> zext64(i8)
-  // → trunc^8((((x'*2149582850) & 36578664720) * 4311810305) ≫ 32), x' -> zext64(i8)
+  // trunc( ((((z*2050) & 139536) ∣ ((z*32800) & 558144)) * 65793) ≫ 16 ), z → zext64(i8)
+  // → trunc((((z*2149582850) & 36578664720) * 4311810305) ≫ 32), z → zext64(i8)
   Value *J15 = nullptr;
   Value *J0 = nullptr;
   ConstantInt *J1 = nullptr;
@@ -5067,54 +5068,47 @@ Instruction* cs6475_optimizer(Instruction *I) {
   Value *J12 = nullptr;
   ConstantInt *J13 = nullptr;
   Value *J14 = nullptr;
-  // trunc^8(((((x'*2050) & 139536) ∣ ((x'*32800) & 558144)) * 65793) ≫ 16) 
-  if(match(I, m_Trunc(m_Value(J15))) && J15->getType()->isIntegerTy(64) ) {
-    // ((((x'*2050) & 139536) ∣ ((x'*32800) & 558144)) * 65793) ≫ 16 
+
+  if (match(I, m_Trunc(m_Value(J15))) && J15->getType()->isIntegerTy(64)) {
+    cs6475_debug("JT: matched the 'trunc'\n");
     if (match(J15, m_Shr(m_Value(J0), m_ConstantInt(J1))) && J1->getZExtValue() == 16) {
-      // (((x'*2050) & 139536) ∣ ((x'*32800) & 558144)) * 65793
+      cs6475_debug("JT: matched the 'lshr'\n");
       if (match(J0, m_Mul(m_Value(J2), m_ConstantInt(J3))) && J3->getZExtValue() == 65793) {
-        // ((x'*2050) & 139536) ∣ ((x'*32800) & 558144)
-        if(match(J2, m_Or(m_Value(J4),m_Value(J5) ) ) ){
-          // LHS: ((x'*2050) & 139536)
-          if(match(J4,m_And(m_Value(J6), m_ConstantInt(J7) )) && J7->getZExtValue() == 139536){
-            // (x'*2050), J8 should be x'
-            if(match(J6, m_Mul(m_Value(J8), m_ConstantInt(J9))) && J9->getZExtValue() == 2050 ){
-              //RHS: ((x'*32800) & 558144) 
-              if(match(J5, m_And(m_Value(J10),m_ConstantInt(J11) ) ) && J11->getZExtValue() == 558144){
-                //(x'*32800), J12 should also be x', which is i64
-                if(match(J10, m_Mul(m_Value(J12),m_ConstantInt(J13))) && J13->getZExtValue()==32800 ){
-                  if(J12 == J8 && J12->getType()->isIntegerTy(64) ){
-                  //Assure our x' was zext from i8
-                    if (match(J12, m_ZExt(m_Value(J14))) && J14->getType()->isIntegerTy(8)) {     
-                      log_optzn("Joshua Tlatelpa-Agustin\n");                          
-                      // Create an IR Builder at the location of instruction I
-                      IRBuilder<> Builder(I);
-                      // 1. zext i8 to i64
-                      Value *ZExt = Builder.CreateZExt(J14, Type::getInt64Ty(I->getContext()));
-                      // 2. First mul: %first = mul i64 %n64, 2149582850
-                      Value *FirstMul = Builder.CreateMul(ZExt, Builder.getInt64(2149582850));
-                      // 3. First and: %second = and i64 %first, 36578664720
-                      Value *FirstAnd = Builder.CreateAnd(FirstMul, Builder.getInt64(36578664720));
-                      // 4. Second mul: %third = mul i64 %second, 4311810305
-                      Value *SecondMul = Builder.CreateMul(FirstAnd, Builder.getInt64(4311810305));
-                      // 5. Logical shift right: %shifted = lshr i64 %third, 32
-                      Value *Shifted = Builder.CreateLShr(SecondMul, 32);
-                      // 6. Truncate: %result = trunc i64 %shifted to i8
-                      Value *TruncResult = Builder.CreateTrunc(Shifted, Type::getInt8Ty(I->getContext()));
-                      // Replace the original trunc instruction with the new one
-                      I->replaceAllUsesWith(TruncResult);                                       
-                      // Return the new instruction for the pass
-                       return nullptr;                       
-                    }                              
+        cs6475_debug("JT: matched the 'mul'\n");
+        if (match(J2, m_Or(m_Value(J4),m_Value(J5)))) {
+          cs6475_debug("JT: matched the 'or'\n");
+          if (match(J4,m_And(m_Value(J6), m_ConstantInt(J7))) && J7->getZExtValue() == 139536) {
+            cs6475_debug("JT: matched the 'and'\n");
+            if (match(J6, m_Mul(m_Value(J8), m_ConstantInt(J9))) && J9->getZExtValue() == 2050) {
+              cs6475_debug("JT: matched the 'mul'\n");
+              if (match(J5, m_And(m_Value(J10),m_ConstantInt(J11))) && J11->getZExtValue() == 558144) {
+                cs6475_debug("JT: matched the 'and'\n");
+                if (match(J10, m_Mul(m_Value(J12),m_ConstantInt(J13))) && J13->getZExtValue()==32800) {
+                  cs6475_debug("JT: matched the 'mul'\n");
+                  if (J12 == J8 && J12->getType()->isIntegerTy(64)) {
+                    cs6475_debug("JT: verify z\n");
+                    if (match(J12, m_ZExt(m_Value(J14))) && J14->getType()->isIntegerTy(8)) {
+                    cs6475_debug("JT: matched the 'zext'\n");    
+  log_optzn("Joshua Tlatelpa-Agustin\n");                                             
+  IRBuilder<> Builder(I);
+  Value *first = Builder.CreateZExt(J14, Type::getInt64Ty(I->getContext()));
+  Value *second = Builder.CreateMul(first, Builder.getInt64(2149582850));
+  Value *third = Builder.CreateAnd(second, Builder.getInt64(36578664720));
+  Value *forth = Builder.CreateMul(third, Builder.getInt64(4311810305));
+  Value *fifth = Builder.CreateLShr(forth, 32);
+  Value *sixth = Builder.CreateTrunc(fifth, Type::getInt8Ty(I->getContext()));
+  I->replaceAllUsesWith(sixth);                                       
+  return nullptr;                       
+                    }
                   }
                 }
               }
             }
-          }       
+          }
         }
       }
     }
-  }
+  }                             
   // END JOSHUA TLATELPA-AGUSTIN
 
   // BEGIN JOHN REGEHR
