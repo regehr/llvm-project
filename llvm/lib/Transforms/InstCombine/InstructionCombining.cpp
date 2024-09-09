@@ -5076,7 +5076,6 @@ Instruction* cs6475_optimizer(Instruction *I) {
   CmpInst::Predicate Pred;
   Value *X1 = nullptr;
   Value *X2 = nullptr;
-  Value *LiteralTrue = ConstantInt::getTrue(I->getContext());
 
   if (match(I,
             m_FCmp(Pred, m_FAdd(m_FMul(m_Value(X1), m_Value(X2)),
@@ -5145,6 +5144,7 @@ Instruction* cs6475_optimizer(Instruction *I) {
         }
         // In this case, we know that the condition will always return
         // false, even if x is Nan.
+        Value *LiteralTrue = ConstantInt::getTrue(I->getContext());
         return new ICmpInst(ICmpInst::ICMP_NE, LiteralTrue, LiteralTrue);
       }
     }
