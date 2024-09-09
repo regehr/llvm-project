@@ -5097,7 +5097,17 @@ void cs6475_debug(std::string DbgString) {
       }
 
       if (Decidable) {
-        return new ICmpInst(TheConst ? ICmpInst::ICMP_EQ : ICmpInst::ICMP_NE, LiteralTrue, LiteralTrue);
+        log_optzn("Ashton Wiersdorf");
+        if (TheConst) {
+          // We only know that this might be true if x*x isn't NaN, so
+          // we generate code that checks if x = x; if x is NaN, x = x
+          // returns false, which matches what the original expression
+          // would return.
+          return new FCmpInst(FCmpInst::FCMP_OEQ, X1, X1);
+        }
+        // In this case, we know that the condition will always return
+        // false, even if x is Nan.
+        return new ICmpInst(ICmpInst::ICMP_NE, LiteralTrue, LiteralTrue);
       }
     }
   }
