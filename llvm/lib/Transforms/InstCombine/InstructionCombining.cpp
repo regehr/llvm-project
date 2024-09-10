@@ -5052,13 +5052,15 @@ Instruction *cs6475_optimizer_suraj(Instruction *I) {
   // return x^1
 
   Value *INPUT, *A, *B, *C;
+  ConstantInt *CI = nullptr;
 
   if (!match(I, m_c_Add(m_Value(C), m_Value(INPUT)))) {
     return nullptr;
   }
   cs6475_debug("Add Expression Matched\n");
 
-  if (!match(C, m_Select(m_Value(B), m_One(), m_ConstantInt<-1>()))) {
+  if (!(match(C, m_Select(m_Value(B), m_One(), m_ConstantInt(CI))) &&
+        CI->isMinusOne())) {
     return nullptr;
   }
   cs6475_debug("Select Expression Matched\n");
