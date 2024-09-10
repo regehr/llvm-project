@@ -5085,30 +5085,30 @@ Instruction* cs6475_optimizer(Instruction *I) {
   }
   // END JOHN REGEHR
 
-  // BEGIN DOMINIC KENNEDY
-  X = nullptr;
-  Y = nullptr;
-  ConstantInt *CmpInt = nullptr;
-  ConstantInt *OrInt = nullptr;
-  ConstantInt *AddInt = nullptr;
-  Value *Input = nullptr;
-  if (match(I, m_ICmp(m_Value(X), m_ConstantInt(CmpInt)))) {
-    if (dyn_cast<ICmpInst>(I) != nullptr &&
-        dyn_cast<ICmpInst>(I)->getPredicate() == ICmpInst::ICMP_ULT) {
-      if(match(X, m_c_Add(m_Value(Y), m_ConstantInt(AddInt)))) {
-        if(match(Y, m_c_Or(m_Value(Input), m_ConstantInt(OrInt)))) {
-          uint64_t max_cmp = get_max_cmp(extract_rounded_int(AddInt), extract_rounded_int(OrInt));
-          if (max_cmp >= CmpInt->getZExtValue()) {
-            log_optzn("Dominic Kennedy\n");
-            Value *RetVal = ConstantInt::get(I->getContext(), APInt::getMinValue(1));
-            Instruction *NewI = BinaryOperator::CreateAnd(RetVal, RetVal);
-            return NewI;
+  { // BEGIN DOMINIC KENNEDY
+    Value *X = nullptr;
+    Value *Y = nullptr;
+    ConstantInt *CmpInt = nullptr;
+    ConstantInt *OrInt = nullptr;
+    ConstantInt *AddInt = nullptr;
+    Value *Input = nullptr;
+    if (match(I, m_ICmp(m_Value(X), m_ConstantInt(CmpInt)))) {
+      if (dyn_cast<ICmpInst>(I) != nullptr &&
+          dyn_cast<ICmpInst>(I)->getPredicate() == ICmpInst::ICMP_ULT) {
+        if(match(X, m_c_Add(m_Value(Y), m_ConstantInt(AddInt)))) {
+          if(match(Y, m_c_Or(m_Value(Input), m_ConstantInt(OrInt)))) {
+            uint64_t max_cmp = get_max_cmp(extract_rounded_int(AddInt), extract_rounded_int(OrInt));
+            if (max_cmp >= CmpInt->getZExtValue()) {
+              log_optzn("Dominic Kennedy\n");
+              Value *RetVal = ConstantInt::get(I->getContext(), APInt::getMinValue(1));
+              Instruction *NewI = BinaryOperator::CreateAnd(RetVal, RetVal);
+              return NewI;
+            }
           }
         }
       }
     }
-  }
-  // END DOMINIC KENNEDY
+  } // END DOMINIC KENNEDY
 
  return nullptr;
 }
