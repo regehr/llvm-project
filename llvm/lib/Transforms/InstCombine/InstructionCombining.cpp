@@ -5590,7 +5590,6 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
   }
   // END TANMAY TIRPANKAR
 
-  {
   // BEGIN LEE WEI
   {
     // 1 input
@@ -5607,10 +5606,9 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
             log_optzn("Lee Wei");
             Type* InputType = X->getType();
             BasicBlock *BB = I->getParent();
-            IRBuilder<> Builder(BB);
-            Builder.SetInsertPoint(BB->begin());
+            IC.Builder.SetInsertPoint(BB->begin());
             auto INPUT_SMIN_ADD_ONE = APInt::getSignedMinValue(InputType->getIntegerBitWidth()) + 1;
-            Value *AndInst = Builder.CreateAnd(X, ConstantInt::get(InputType, INPUT_SMIN_ADD_ONE));
+            Value *AndInst = IC.Builder.CreateAnd(X, ConstantInt::get(InputType, INPUT_SMIN_ADD_ONE));
             return CmpInst::Create(Instruction::OtherOps::ICmp, Pred, AndInst, ConstantInt::get(InputType, 1));
           }
         }
@@ -5643,10 +5641,9 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
                       log_optzn("Lee Wei");
                       CI->eraseFromParent();
                       BasicBlock *BB = I->getParent();
-                      IRBuilder<> Builder(BB);
-                      Builder.SetInsertPoint(BB->begin());
-                      Value *AndInst = Builder.CreateAnd(D, E);
-                      Value *TruncInst = Builder.CreateTrunc(A, D->getType());
+                      IC.Builder.SetInsertPoint(BB->begin());
+                      Value *AndInst = IC.Builder.CreateAnd(D, E);
+                      Value *TruncInst = IC.Builder.CreateTrunc(A, D->getType());
                       return CmpInst::Create(Instruction::OtherOps::ICmp, Pred, AndInst, TruncInst);
                     }
                   }
