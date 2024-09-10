@@ -5338,7 +5338,6 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
     Value *Y = nullptr;
     Value *LHS = nullptr;
     Value *RHS = nullptr;
-    IRBuilder<> Builder(I);
     // X - Y + Y * C = X + Y * (C - 1)
     if (match(I, m_c_Add(m_Value(LHS), m_Value(RHS)))) {
       // cs6475_debug("KK: matched the 'add'\n");
@@ -5347,8 +5346,8 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
         // cs6475_debug("KK: matched the 'sub'\n");
         // cs6475_debug("KK: matched the 'mul'\n");
         log_optzn("Khagan Karimov");
-        Value *NewMul = Builder.CreateMul(
-            Y, Builder.CreateSub(C, ConstantInt::get(C->getType(), 1)));
+        Value *NewMul = IC.Builder.CreateMul(
+            Y, IC.Builder.CreateSub(C, ConstantInt::get(C->getType(), 1)));
         Instruction *NewAdd = BinaryOperator::CreateAdd(X, NewMul);
         return NewAdd;
       }
