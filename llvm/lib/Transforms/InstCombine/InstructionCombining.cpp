@@ -5070,76 +5070,48 @@ Instruction* cs6475_optimizer(Instruction *I) {
  return nullptr;
 }
 
-
 Instruction *cs6475_sameeran(Instruction *I) {
-  cs6475_debug("\nCS 6475 Sameeran: running now\n");
+    cs6475_debug("\nCS 6475 Sameeran: running now\n");
 
-  // Define placeholders for values
-  Value *LHS = nullptr;
-  Value *RHS = nullptr;
-  Value *X_PLUS_ONE = nullptr;
-  Value *X_PLUS_ONE_RHS = nullptr;
-  Value *X = nullptr;
-  ConstantInt *C = nullptr;
-  ConstantInt *C2 = nullptr;
-  ConstantInt *C_minus_one = nullptr;
-  Value *something = nullptr;
-  Value *x_sq = nullptr;
-  Value *TWO_X = nullptr;
-  Value *X_PLUS_ONE_SQUARE = nullptr;
-  Value *B_neg = nullptr;
+    Value *X_PLUS_ONE_SQUARE = nullptr;
+    Value *B_neg = nullptr;
+    Value *X_PLUS_ONE = nullptr;
+    Value *X_PLUS_ONE_AGAIN = nullptr;
+    Value *X = nullptr;
+    ConstantInt *C = nullptr;
+    ConstantInt *C_minus_one = nullptr;
+    Value *LHS = nullptr;
+    Value *TWO_X = nullptr;
+    ConstantInt *C2 = nullptr;
 
-  if (match(I, m_Add(m_Value(X_PLUS_ONE_SQUARE), m_Value(B_neg)))) {
-      cs6475_debug("Sam: Found 'add'\n");
-          // Match the instruction for the pattern (x + 1) * (x + 1)
-          if (match(X_PLUS_ONE_SQUARE, m_Mul(m_Value(X_PLUS_ONE), m_Value(X_PLUS_ONE_RHS)))) {
-            if (match(X_PLUS_ONE, m_Add(m_Value(X), m_ConstantInt(C)))) {
-              if (C->getUniqueInteger().isOne()) {
-                  if (match(X_PLUS_ONE_RHS, m_Add(m_Value(X), m_ConstantInt(C)))) {
-                    if (C->getUniqueInteger().isOne()) {
-                      cs6475_debug("Sam: matched the '(X+1)**2'\n");
-                            // LHS MATCHED NOW TRY RHS
-                            if (match(B_neg, m_Xor(m_Value(LHS), m_ConstantInt(C_minus_one)))) {
-                              if (C_minus_one->isMinusOne()) {  // -1
-                                if (match(LHS, m_Mul(m_Value(TWO_X),  m_Value(X)))) { // (TWOX*X) = (x+2)*x
-                                  if (match(TWO_X, m_Add(m_Specific(X), m_ConstantInt(C2)))) { // TWOX = X+2
-                                    if (C2->equalsInt(2)) {
-                                      cs6475_debug("Sam: matched the 'RHS expression'\n");
-                                      // dbgs() << "SJJ: Matched pattern " << *I << "\n";
-                                      IRBuilder<> Builder(I);
-                                      // create a new instruction called add 0, 0
-                                      auto zerovalue = APInt(I->getType()->getScalarSizeInBits(), 0);
-                                      // ConstantInt *zero = ConstantInt::get(I->getContext(), zerovalue);
-                                      // Value *newInst = Builder.CreateAdd(zero, zero); 
+    if (match(I, m_Add(m_Value(X_PLUS_ONE_SQUARE), m_Value(B_neg)))) {
+        cs6475_debug("Sam: Found 'add'\n");
 
-                                      ConstantInt *cintzero = Builder.getInt(zerovalue);
-                                      // return newInst;
-                                      
-                                      I->replaceAllUsesWith(cintzero);
-                                      cs6475_debug("Sam: Applied optimization\n");
-                                      // dbgs() << "SJJ: New:  " << *cintzero << "\n";
+        if (match(X_PLUS_ONE_SQUARE, m_Mul(m_Value(X_PLUS_ONE), m_Value(X_PLUS_ONE_AGAIN)))) {
+            if (match(X_PLUS_ONE, m_Add(m_Value(X), m_ConstantInt(C))) && C->getUniqueInteger().isOne() && 
+                match(X_PLUS_ONE_AGAIN, m_Add(m_Value(X), m_ConstantInt(C))) && C->getUniqueInteger().isOne()) {
+                cs6475_debug("Sam: matched the '(X+1)**2'\n");
 
-                                      // dbgs() << "SJJ: new " << *newInst << "\n";
-                                      
-                                      // // create a new Instruction which returns a 0
-                                      // auto zerovalue = APInt(I->getType()->getScalarSizeInBits(), 0);
-                                      // ConstantInt *zero = ConstantInt::get(I->getContext(), zerovalue);
-                                      // // Builder.CreateRet(zero);
-                                      // Instruction *newInst = Builder.CreateRet(zero);
-                                      // I->replaceAllUsesWith(newInst);
-                                    }
-                                  }
-                                }  
-                              }
-                            }
+                if (match(B_neg, m_Xor(m_Value(LHS), m_ConstantInt(C_minus_one))) && C_minus_one->isMinusOne()) {
+                    if (match(LHS, m_Mul(m_Value(TWO_X), m_Value(X))) && 
+                        match(TWO_X, m_Add(m_Specific(X), m_ConstantInt(C2))) && C2->equalsInt(2)) {
+                        cs6475_debug("Sam: matched the 'RHS expression'\n");
+
+                        IRBuilder<> Builder(I);
+                        auto zerovalue = APInt(I->getType()->getScalarSizeInBits(), 0);
+                        ConstantInt *cintzero = Builder.getInt(zerovalue);
+
+                        I->replaceAllUsesWith(cintzero);
+                        cs6475_debug("Sam: Applied optimization\n");
+
+                        return I;
                     }
-                  }
-              }
+                }
             }
-          }
-  }
+        }
+    }
 
-  return nullptr;
+    return nullptr;
 }
 
 bool InstCombinerImpl::run() {
