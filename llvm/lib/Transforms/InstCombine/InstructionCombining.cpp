@@ -5159,6 +5159,92 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
   }
   // END JOHN REGEHR
 
+  // BEGIN ASHTON WIERSDORF
+  // x : float; c1, c2 are literal constants
+  // x * x + c1 > c2 && c1 > c2 ⇒ is_nan(x)
+  // x * x + c1 < c2 && c1 > c2 ⇒ false
+  {
+    ConstantFP *C1 = nullptr;
+    ConstantFP *C2 = nullptr;
+    CmpInst::Predicate Pred;
+    Value *X1 = nullptr;
+    Value *X2 = nullptr;
+
+    if (match(I,
+              m_FCmp(Pred, m_FAdd(m_FMul(m_Value(X1), m_Value(X2)),
+                                  m_ConstantFP(C1)), m_ConstantFP(C2)))) {
+
+      if (match(X1, m_Specific(X2))) {
+        bool Decidable = false;
+        bool TheConst = false;
+        APFloatBase::cmpResult Ord = C1->getValue().compare(C2->getValue());
+
+        switch(Pred) {
+        case CmpInst::FCMP_OGT:   // x*x + c1 > c2 ⇒ true if c1 > c2
+          switch (Ord) {
+          case APFloatBase::cmpResult::cmpGreaterThan:
+            Decidable = true;
+            TheConst = true;
+            break;
+          default:
+            Decidable = false;
+          }
+          break;
+        case CmpInst::FCMP_OGE:   // x*x + c1 ≥ c2 ⇒ true if c1 ≥ c2
+          switch (Ord) {
+          case APFloatBase::cmpResult::cmpEqual:
+          case APFloatBase::cmpResult::cmpGreaterThan:
+            Decidable = true;
+            TheConst = true;
+            break;
+          default:
+            Decidable = false;
+          }
+          break;
+        case CmpInst::FCMP_OLT:   // x*x + c1 < c2 ⇒ false if c1 ≥ c2
+          switch (Ord) {
+          case APFloatBase::cmpResult::cmpEqual:
+          case APFloatBase::cmpResult::cmpGreaterThan:
+            Decidable = true;
+            TheConst = false;
+            break;
+          default:
+            Decidable = false;
+          }
+          break;
+        case CmpInst::FCMP_OLE:   // x*x + c1 ≤ c2 ⇒ false if c1 > c2
+          switch (Ord) {
+          case APFloatBase::cmpResult::cmpGreaterThan:
+            Decidable = true;
+            TheConst = false;
+            break;
+          default:
+            Decidable = false;
+          }
+          break;
+        default:
+          Decidable = false;
+        }
+
+        if (Decidable) {
+          log_optzn("Ashton Wiersdorf");
+          if (TheConst) {
+            // We only know that this might be true if x*x isn't NaN, so
+            // we generate code that checks if x = x; if x is NaN, x = x
+            // returns false, which matches what the original expression
+            // would return.
+            return new FCmpInst(FCmpInst::FCMP_OEQ, X1, X1);
+          }
+          // In this case, we know that the condition will always return
+          // false, even if x is Nan.
+          Value *LiteralTrue = ConstantInt::getTrue(I->getContext());
+          return new ICmpInst(ICmpInst::ICMP_NE, LiteralTrue, LiteralTrue);
+        }
+      }
+    }
+  }
+  // END ASHTON WIERSDORF
+
   //BEGIN ZEYUAN WANG
   {
   // x*(x+2) + 1 -> (x+1)*(x+1)
