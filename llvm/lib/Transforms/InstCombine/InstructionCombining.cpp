@@ -5099,6 +5099,49 @@ Instruction* cs6475_optimizer(Instruction *I) {
   }
   // END JOHN REGEHR
 
+  // BEGIN SINA MAHDIPOUR SARAVANI
+  // Optimization for checking if fifth bit is zero
+  Value *Z = nullptr;
+  Value *E = nullptr, *D = nullptr, *B = nullptr, *A = nullptr;
+  ICmpInst::Predicate Pred;
+  ConstantInt *C02 = nullptr;
+  ConstantInt *C0 = nullptr;
+  ConstantInt *C1 = nullptr;
+  ConstantInt *C4 = nullptr;
+
+  if (
+        match(I, m_ICmp(Pred, m_Value(E), m_ConstantInt(C02))) &&
+          (C02->getValue() == 0) &&
+        match(E, m_And(m_Value(B), m_Value(D))) &&
+        match(D, m_Sub(m_ConstantInt(C0), m_Value(A))) &&
+          (C0->getValue() == 0) &&
+        match(B, m_And(m_Specific(A), m_ConstantInt(C1))) &&
+          (C1->getValue() == 1) &&
+        match(A, m_LShr(m_Value(Z), m_ConstantInt(C4))) &&
+          (C4->getValue() == 4)
+      ) {
+
+    // We have matched the required pattern
+    // Create the two replacement instructions
+    IRBuilder<> Builder(I);
+    Value *NewAnd = Builder.CreateAnd(Z, ConstantInt::get(Z->getType(), 16));
+    Value *NewICmp = Builder.CreateICmpNE(NewAnd, ConstantInt::get(Z->getType(), 0));
+
+    // Replace all uses of the original instruction with the new instruction
+    I->replaceAllUsesWith(NewICmp);
+    // NewICmp->takeName(I);
+    // Erase the old instructions
+    I->eraseFromParent();
+    cast<Instruction>(E)->eraseFromParent();
+    cast<Instruction>(D)->eraseFromParent();
+    cast<Instruction>(B)->eraseFromParent();
+    cast<Instruction>(A)->eraseFromParent();
+
+    log_optzn("\nSina Saravani\n");
+    return nullptr;  // Since we've deleted the original instruction
+  }
+  // END SINA MAHDIPOUR SARAVANI
+
  return nullptr;
 }
 
