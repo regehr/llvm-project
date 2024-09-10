@@ -5099,6 +5099,30 @@ Instruction* cs6475_optimizer(Instruction *I) {
   }
   // END JOHN REGEHR
 
+  // BEGIN KHAGAN KARIMOV
+  {
+    ConstantInt *C = nullptr;
+    Value *X = nullptr;
+    Value *Y = nullptr;
+    Value *LHS = nullptr;
+    Value *RHS = nullptr;
+    IRBuilder<> Builder(I);
+    // X - Y + Y * C = X + Y * (C - 1)
+    if (match(I, m_c_Add(m_Value(LHS), m_Value(RHS)))) {
+      // cs6475_debug("KK: matched the 'add'\n");
+      if (match(LHS, m_Sub(m_Value(X), m_Value(Y))) &&
+          match(RHS, m_c_Mul(m_Value(Y), m_ConstantInt(C)))) {
+        // cs6475_debug("KK: matched the 'sub'\n");
+        // cs6475_debug("KK: matched the 'mul'\n");
+        log_optzn("Khagan Karimov");
+        Value *NewMul = Builder.CreateMul(
+            Y, Builder.CreateSub(C, ConstantInt::get(C->getType(), 1)));
+        Instruction *NewAdd = BinaryOperator::CreateAdd(X, NewMul);
+        return NewAdd;
+      }
+    }
+  }
+  // END KHAGAN KARIMOV
  return nullptr;
 }
 
