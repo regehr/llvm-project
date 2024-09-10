@@ -5021,6 +5021,28 @@ Instruction* cs6475_optimizer(Instruction *I) {
   }
   // END JOHN REGEHR
 
+  {
+  // BEGIN DIBRI NSOFOR
+  // MAX - (x or MAX) → x and (MAX + 1)
+  Value *X = nullptr;
+  Value *Y = nullptr;
+  if (match(I, m_Sub(m_Constant(C), m_Value(Y)))) {
+    dbgs() << "DN: matched the 'sub'\n";
+    if (C->getUniqueInteger().isMaxSignedValue()) {
+      dbgs() << "JDR: found the max int const \n";
+      if (match(Y, m_Or(m_Value(X), m_Constant(C))) || match(Y, m_Or(m_Constant(C), m_Value(X)))) {
+        dbgs() << "DN: matched the 'or'\n";
+        dbgs() <<   "DN: applied the optimization\n";
+        unsigned bitWidth = X->getType()->getIntegerBitWidth(); // 16
+        auto SMax = APInt::getMaxValue(bitWidth); //getmaxsignedvalue
+        Instruction *NewI = BinaryOperator::CreateAnd(X, ConstantInt::get(I->getContext(), SMax + 1));
+        return NewI;
+      }
+    }
+  }
+  // END DIBRI NSOFOR
+  }
+
  return nullptr;
 }
 
