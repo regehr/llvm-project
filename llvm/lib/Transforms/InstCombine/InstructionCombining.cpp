@@ -5208,6 +5208,178 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
   }
   // END SURAJ YADAV
 
+  // BEGIN ASHTON WIERSDORF
+  // x : float; c1, c2 are literal constants
+  // x * x + c1 > c2 && c1 > c2 ⇒ is_nan(x)
+  // x * x + c1 < c2 && c1 > c2 ⇒ false
+  {
+    ConstantFP *C1 = nullptr;
+    ConstantFP *C2 = nullptr;
+    CmpInst::Predicate Pred;
+    Value *X1 = nullptr;
+    Value *X2 = nullptr;
+
+    if (match(I,
+              m_FCmp(Pred, m_FAdd(m_FMul(m_Value(X1), m_Value(X2)),
+                                  m_ConstantFP(C1)), m_ConstantFP(C2)))) {
+
+      if (match(X1, m_Specific(X2))) {
+        bool Decidable = false;
+        bool TheConst = false;
+        APFloatBase::cmpResult Ord = C1->getValue().compare(C2->getValue());
+
+        switch(Pred) {
+        case CmpInst::FCMP_OGT:   // x*x + c1 > c2 ⇒ true if c1 > c2
+          switch (Ord) {
+          case APFloatBase::cmpResult::cmpGreaterThan:
+            Decidable = true;
+            TheConst = true;
+            break;
+          default:
+            Decidable = false;
+          }
+          break;
+        case CmpInst::FCMP_OGE:   // x*x + c1 ≥ c2 ⇒ true if c1 ≥ c2
+          switch (Ord) {
+          case APFloatBase::cmpResult::cmpEqual:
+          case APFloatBase::cmpResult::cmpGreaterThan:
+            Decidable = true;
+            TheConst = true;
+            break;
+          default:
+            Decidable = false;
+          }
+          break;
+        case CmpInst::FCMP_OLT:   // x*x + c1 < c2 ⇒ false if c1 ≥ c2
+          switch (Ord) {
+          case APFloatBase::cmpResult::cmpEqual:
+          case APFloatBase::cmpResult::cmpGreaterThan:
+            Decidable = true;
+            TheConst = false;
+            break;
+          default:
+            Decidable = false;
+          }
+          break;
+        case CmpInst::FCMP_OLE:   // x*x + c1 ≤ c2 ⇒ false if c1 > c2
+          switch (Ord) {
+          case APFloatBase::cmpResult::cmpGreaterThan:
+            Decidable = true;
+            TheConst = false;
+            break;
+          default:
+            Decidable = false;
+          }
+          break;
+        default:
+          Decidable = false;
+        }
+
+        if (Decidable) {
+          log_optzn("Ashton Wiersdorf");
+          if (TheConst) {
+            // We only know that this might be true if x*x isn't NaN, so
+            // we generate code that checks if x = x; if x is NaN, x = x
+            // returns false, which matches what the original expression
+            // would return.
+            return new FCmpInst(FCmpInst::FCMP_OEQ, X1, X1);
+          }
+          // In this case, we know that the condition will always return
+          // false, even if x is Nan.
+          Value *LiteralTrue = ConstantInt::getTrue(I->getContext());
+          return new ICmpInst(ICmpInst::ICMP_NE, LiteralTrue, LiteralTrue);
+        }
+      }
+    }
+  }
+  // END ASHTON WIERSDORF
+
+  //BEGIN ZEYUAN WANG
+  {
+  // x*(x+2) + 1 -> (x+1)*(x+1)
+    Value *X1 = nullptr;
+    Value *Y1 = nullptr;
+    cs6475_debug("ZYW: begin\n");
+    if(match(I,m_Add(m_Value(X1), m_Value(Y1)))){
+      cs6475_debug("ZYW: matched the first 'add'\n");
+      ConstantInt* C1 = nullptr;
+      ConstantInt* C2 = nullptr;
+      Value* X2 = nullptr;
+      Value* X3 = nullptr;
+      Value* X4 = nullptr;
+      Value* X5 = nullptr;
+      if (match(Y1,m_ConstantInt(C1))&& C1->equalsInt(1)) {
+        cs6475_debug("ZYW: matched the constant '1' at Y1\n");
+        if(match(X1,m_Mul(m_Value(X2), m_Value(X3))))
+        {
+          cs6475_debug("ZYW: matched the 'mul'\n");
+          if(match(X3,m_Add(m_Value(X4), m_Value(X5))))
+          {
+            cs6475_debug("ZYW: matched the second 'add'\n");
+            if(match(X5,m_ConstantInt(C2)) && C2->equalsInt(2))
+            {
+              cs6475_debug("ZYW: matched the constant '2'\n");
+              if(match(X2,m_Specific(X4)))
+              {
+                cs6475_debug("ZYW: matched the specific 'x'\n");
+                log_optzn("Zeyuan Wang");
+                Instruction* NewAdd = BinaryOperator::CreateAdd(X4, C1);
+                NewAdd->insertBefore(I);
+                Instruction* NewMul =  BinaryOperator::CreateMul(NewAdd,NewAdd);
+                cs6475_debug("ZYW: new instructions created\n");
+                return NewMul;
+              }
+            }
+          }else if(match(X2,m_Add(m_Value(X4), m_Value(X5))))
+          {
+            cs6475_debug("ZYW: matched the second 'add'\n");
+            if(match(X5,m_ConstantInt(C2)) && C2->equalsInt(2))
+            {
+              cs6475_debug("ZYW: matched the constant '2'\n");
+              if(match(X3,m_Specific(X4)))
+              {
+                cs6475_debug("ZYW: matched the specific 'x'\n");
+                log_optzn("Zeyuan Wang");
+                Instruction* NewAdd = BinaryOperator::CreateAdd(X4, C1);
+                NewAdd->insertBefore(I);
+                Instruction* NewMul =  BinaryOperator::CreateMul(NewAdd,NewAdd);
+                cs6475_debug("ZYW: new instructions created\n");
+                return NewMul;
+                //END ZEYUAN WANG
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // BEGIN CAYDEN LUND
+  // 0xFFFFFFFE - (x | 0x7FFFFFFF) → x | 0x7FFFFFFF
+  {
+    // Opening new block to allow binding variables of the same name,
+    // in order to prevent collisions with other optimizations.
+    ConstantInt *C1 = nullptr; // (-2)
+    ConstantInt *C2 = nullptr; // (IntMax)
+    Value *X = nullptr;        // (x)
+    Value *Y = nullptr;        // (x | IntMax)
+    if (match(I, m_Sub(m_ConstantInt(C1), m_Value(Y)))) {
+      if (match(Y, m_Or(m_Value(X), m_ConstantInt(C2)))) {
+        cs6475_debug("CML: matched 'C1 - (X | C2)'\n");
+        if (C1->getValue() == APInt::getMaxValue(C2->getBitWidth()) - 1) {
+          cs6475_debug("CML: C1 == -2\n");
+          if (C2->getValue() == APInt::getSignedMaxValue(C2->getBitWidth())) {
+            cs6475_debug("CML: C2 == IntMax\n");
+            log_optzn("Cayden Lund");
+            // (x | IntMax)
+            return BinaryOperator::CreateOr(X, C2);
+          }
+        }
+      }
+    }
+  }
+  // END CAYDEN LUND
+  
   // BEGIN KHAGAN KARIMOV
   {
     ConstantInt *C = nullptr;
@@ -5297,6 +5469,50 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
     }
   }
   // END STEFAN MADA
+  
+  // BEGIN MD ASHFAQUR RAHAMAN
+  // (0x7fffffff - x) ^ 0x7fffffff = x
+  {
+    ConstantInt *C = nullptr;
+    Value *X = nullptr;
+    Value *Y = nullptr;
+
+    if (match(I, m_Xor(m_Value(Y), m_ConstantInt(C)))
+        || match(I, m_Xor(m_ConstantInt(C), m_Value(Y)))) {
+
+      cs6475_debug("cs6475Optimizer: instruction matched 'xor'\n");
+      if (match(Y, m_Sub(m_ConstantInt(C), m_Value(X)))) {
+        cs6475_debug("cs6475Optimizer: instruction matched 'sub'\n");
+
+        if (C->getUniqueInteger().isMaxSignedValue()) {
+          cs6475_debug("cs6475Optimizer: constant matched the '0x7fffffff'\n");
+          log_optzn("Md Ashfaqur Rahaman");
+          I->replaceAllUsesWith(X); // Suggestion from ChatGPT
+        }
+      }
+    }
+  }
+  // END MD ASHFAQUR RAHAMAN
+
+  // BEGIN TANMAY TIRPANKAR
+  // (0x7FFFFFFF - x) ⊕ 0x7FFFFFFF → x
+  {
+    Value *X = nullptr;
+    Value *Y = nullptr;
+    ConstantInt *C = nullptr;
+    if (match(I, m_Xor(m_Value(Y), m_ConstantInt(C))) ||
+        match(I, m_Xor(m_ConstantInt(C), m_Value(Y)))) {
+      cs6475_debug("TT: matched the 'xor'\n");
+      if (match(Y, m_Sub(m_Specific(C), m_Value(X)))) {
+        cs6475_debug("TT: matched the 'sub'\n");
+        if (C->getUniqueInteger().isMaxSignedValue()) {
+          log_optzn("Tanmay Tirpankar");
+          I->replaceAllUsesWith(X);
+        }
+      }
+    }
+  }
+  // END TANMAY TIRPANKAR
 
  return nullptr;
 }
