@@ -5170,7 +5170,7 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
       dbgs() << "JDR: found the max int const \n";
       if (match(Y, m_Or(m_Value(X), m_Constant(C))) || match(Y, m_Or(m_Constant(C), m_Value(X)))) {
         dbgs() << "DN: matched the 'or'\n";
-        dbgs() <<   "DN: applied the optimization\n";
+        log_optzn("Dibri Nsofor");
         unsigned bitWidth = X->getType()->getIntegerBitWidth(); // 16
         auto SMax = APInt::getMaxValue(bitWidth); //getmaxsignedvalue
         Instruction *NewI = BinaryOperator::CreateAnd(X, ConstantInt::get(I->getContext(), SMax + 1));
