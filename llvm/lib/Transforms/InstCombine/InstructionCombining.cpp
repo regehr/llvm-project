@@ -5159,6 +5159,51 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
   }
   // END JOHN REGEHR
 
+  // BEGIN SINA MAHDIPOUR SARAVANI
+  {
+    // Optimization for checking if fifth bit is zero
+    Value *X = nullptr;
+    Value *ICmpLeftOperand = nullptr, *And2RightOperand = nullptr, *And2LeftOperand = nullptr, *And1LeftOperand = nullptr;
+    ICmpInst::Predicate ICmpPredicate;
+    ConstantInt *ZeroConstant2 = nullptr;
+    ConstantInt *ZeroConstant = nullptr;
+    ConstantInt *OneConstant = nullptr;
+    ConstantInt *FourConstant = nullptr;
+
+    if (
+          match(I, m_ICmp(ICmpPredicate, m_Value(ICmpLeftOperand), m_ConstantInt(ZeroConstant2))) &&
+            (ZeroConstant2->getValue() == 0) &&
+          match(ICmpLeftOperand, m_And(m_Value(And2LeftOperand), m_Value(And2RightOperand))) &&
+          match(And2RightOperand, m_Sub(m_ConstantInt(ZeroConstant), m_Value(And1LeftOperand))) &&
+            (ZeroConstant->getValue() == 0) &&
+          match(And2LeftOperand, m_And(m_Specific(And1LeftOperand), m_ConstantInt(OneConstant))) &&
+            (OneConstant->getValue() == 1) &&
+          match(And1LeftOperand, m_LShr(m_Value(X), m_ConstantInt(FourConstant))) &&
+            (FourConstant->getValue() == 4)
+        ) {
+
+      // We have matched the required pattern
+      // Create the two replacement instructions
+      IRBuilder<> Builder(I);
+      Value *NewAnd = Builder.CreateAnd(X, ConstantInt::get(X->getType(), 16));
+      Value *NewICmp = Builder.CreateICmpNE(NewAnd, ConstantInt::get(X->getType(), 0));
+
+      // Replace all uses of the original instruction with the new instruction
+      I->replaceAllUsesWith(NewICmp);
+      // NewICmp->takeName(I);
+      // Erase the old instructions
+      I->eraseFromParent();
+      cast<Instruction>(ICmpLeftOperand)->eraseFromParent();
+      cast<Instruction>(And2RightOperand)->eraseFromParent();
+      cast<Instruction>(And2LeftOperand)->eraseFromParent();
+      cast<Instruction>(And1LeftOperand)->eraseFromParent();
+
+      log_optzn("\nSina Saravani\n");
+      return nullptr;  // Since we've deleted the original instruction
+    }
+  }
+  // END SINA MAHDIPOUR SARAVANI
+
   // BEGIN ASHTON WIERSDORF
   // x : float; c1, c2 are literal constants
   // x * x + c1 > c2 && c1 > c2 ⇒ is_nan(x)
