@@ -94,7 +94,6 @@
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
-#include "llvm/Transforms/InstCombine/InstCombiner.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include <algorithm>
@@ -5042,7 +5041,7 @@ void log_optzn(std::string Name) {
 void cs6475_debug(std::string DbgString) {
   // set this to "false" to suppress debug output, before running "ninja test"
   // set this to "true" to see debug output, to help you understand your transformation
-  if (false)
+  if (true)
     dbgs() << DbgString;
 }
 
@@ -5062,8 +5061,6 @@ Instruction* cs6475_optimizer(Instruction *I) {
 	log_optzn("John Regehr");
 	auto SMin = APInt::getSignedMinValue(C->getUniqueInteger().getBitWidth());
 	Instruction *NewI = BinaryOperator::CreateAnd(X, ConstantInt::get(I->getContext(), SMin));
-  NewI->print(dbgs());
-  cs6475_debug("\n");
 	return NewI;
       }
     }
