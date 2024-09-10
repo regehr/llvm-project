@@ -5149,9 +5149,11 @@ Instruction* cs6475_optimizer(Instruction *I) {
   // END JOHN REGEHR
 
   // BEGIN BRENSEN VILLEGAS
-  Instruction *BV_I = cs6475_optimizer_brensen(I);
-  if (BV_I != nullptr)
-    return BV_I;
+  {
+    Instruction *BV_I = cs6475_optimizer_brensen(I);
+    if (BV_I != nullptr)
+      return BV_I;
+  }
   // END BRENSEN VILLEGAS
 
   // BEGIN KHAGAN KARIMOV
