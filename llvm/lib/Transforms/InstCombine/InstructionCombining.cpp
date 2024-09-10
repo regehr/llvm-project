@@ -5209,6 +5209,7 @@ Instruction *cs6475_optimizer_tavakkoli(Instruction *I) {
 
 Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInfo *LVI) {
   cs6475_debug("\nCS 6475 matcher: running now\n");
+
   // BEGIN JOHN REGEHR
   // x & (0x7FFFFFFF - x) → x & 0x80000000
   {
@@ -5246,6 +5247,34 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
     }
   }
   // END JOHN REGEHR
+  
+  // BEGIN YEASEEN ARAFAT
+  {
+    //0x7FFFFFFF - (x ⊕ c) → x ⊕ (0x7FFFFFFF - c)
+    ConstantInt *C1 = nullptr;
+    ConstantInt *C2 = nullptr;
+    Value *X = nullptr;
+    if(match(I, m_Sub(m_ConstantInt(C1), m_Xor(m_Value(X), m_ConstantInt(C2))))){
+        cs6475_debug("YA: Matched the left-side pattern 'MaxSignedValue - (x ⊕ c)'\n");
+        if(C1->getUniqueInteger().isMaxSignedValue()){
+          auto MaxSignedValue = APInt::getSignedMaxValue(C1->getUniqueInteger().getBitWidth());
+          auto NewConstant = MaxSignedValue - C2->getValue();
+          Instruction *NewI = BinaryOperator::CreateXor(X, ConstantInt::get(I->getContext(), NewConstant));
+          cs6475_debug("YA: Applied the optimization 'x ⊕ (MaxSignedValue - c)'\n");
+          log_optzn("Yeaseen Arafat");
+          return NewI;
+        }
+    }
+  }
+  //END YEASEEN ARAFAT
+
+  // BEGIN BRENSEN VILLEGAS
+  {
+    Instruction *BV_I = cs6475_optimizer_brensen(I);
+    if (BV_I != nullptr)
+      return BV_I;
+  }
+  // END BRENSEN VILLEGAS
 
   // BEGIN SURAJ YADAV
   {
@@ -5435,7 +5464,6 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
     Value *Y = nullptr;
     Value *LHS = nullptr;
     Value *RHS = nullptr;
-    IRBuilder<> Builder(I);
     // X - Y + Y * C = X + Y * (C - 1)
     if (match(I, m_c_Add(m_Value(LHS), m_Value(RHS)))) {
       // cs6475_debug("KK: matched the 'add'\n");
@@ -5444,8 +5472,8 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
         // cs6475_debug("KK: matched the 'sub'\n");
         // cs6475_debug("KK: matched the 'mul'\n");
         log_optzn("Khagan Karimov");
-        Value *NewMul = Builder.CreateMul(
-            Y, Builder.CreateSub(C, ConstantInt::get(C->getType(), 1)));
+        Value *NewMul = IC.Builder.CreateMul(
+            Y, IC.Builder.CreateSub(C, ConstantInt::get(C->getType(), 1)));
         Instruction *NewAdd = BinaryOperator::CreateAdd(X, NewMul);
         return NewAdd;
       }
