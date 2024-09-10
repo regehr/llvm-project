@@ -5060,8 +5060,6 @@ void cs6475_debug(std::string DbgString) {
     dbgs() << DbgString;
 }
 
-
-
 Instruction *cs6475_optimizer_suraj(Instruction *I) {
   // Converts
   // if x is even, return x+1 else return x-1
@@ -5200,7 +5198,7 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
   }
   // END JOHN REGEHR
 
-   // BEGIN YEASEEN ARAFAT
+  // BEGIN YEASEEN ARAFAT
   {
     //0x7FFFFFFF - (x ⊕ c) → x ⊕ (0x7FFFFFFF - c)
     ConstantInt *C1 = nullptr;
