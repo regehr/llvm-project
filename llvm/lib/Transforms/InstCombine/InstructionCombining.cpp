@@ -5068,53 +5068,55 @@ Instruction* cs6475_optimizer(Instruction *I) {
   // END JOHN REGEHR
 
   //BEGIN ZEYUAN WANG
+  {
   // x*(x+2) + 1 -> (x+1)*(x+1)
-  Value *X1 = nullptr;
-  Value *Y1 = nullptr;
-  cs6475_debug("ZYW: begin\n");
-  if(match(I,m_Add(m_Value(X1), m_Value(Y1)))){
-    cs6475_debug("ZYW: matched the first 'add'\n");
-    ConstantInt* C1 = nullptr;
-    ConstantInt* C2 = nullptr;
-    Value* X2 = nullptr;
-    Value* X3 = nullptr;
-    Value* X4 = nullptr;
-    Value* X5 = nullptr;
-    if (match(Y1,m_ConstantInt(C1))&& C1->equalsInt(1)) {
-      cs6475_debug("ZYW: matched the constant '1' at Y1\n");
-      if(match(X1,m_Mul(m_Value(X2), m_Value(X3))))
-      {
-        cs6475_debug("ZYW: matched the 'mul'\n");
-        if(match(X3,m_Add(m_Value(X4), m_Value(X5))))
+    Value *X1 = nullptr;
+    Value *Y1 = nullptr;
+    cs6475_debug("ZYW: begin\n");
+    if(match(I,m_Add(m_Value(X1), m_Value(Y1)))){
+      cs6475_debug("ZYW: matched the first 'add'\n");
+      ConstantInt* C1 = nullptr;
+      ConstantInt* C2 = nullptr;
+      Value* X2 = nullptr;
+      Value* X3 = nullptr;
+      Value* X4 = nullptr;
+      Value* X5 = nullptr;
+      if (match(Y1,m_ConstantInt(C1))&& C1->equalsInt(1)) {
+        cs6475_debug("ZYW: matched the constant '1' at Y1\n");
+        if(match(X1,m_Mul(m_Value(X2), m_Value(X3))))
         {
-          cs6475_debug("ZYW: matched the second 'add'\n");
-          if(match(X5,m_ConstantInt(C2)) && C2->equalsInt(2))
+          cs6475_debug("ZYW: matched the 'mul'\n");
+          if(match(X3,m_Add(m_Value(X4), m_Value(X5))))
           {
-            cs6475_debug("ZYW: matched the constant '2'\n");
-            if(match(X2,m_Specific(X4)))
+            cs6475_debug("ZYW: matched the second 'add'\n");
+            if(match(X5,m_ConstantInt(C2)) && C2->equalsInt(2))
             {
-              cs6475_debug("ZYW: matched the specific 'x'\n");
-              Instruction* NewAdd = BinaryOperator::CreateAdd(X4, C1);
-              NewAdd->insertBefore(I);
-              Instruction* NewMul =  BinaryOperator::CreateMul(NewAdd,NewAdd);
-              cs6475_debug("ZYW: new instructions created\n");
-              return NewMul;
+              cs6475_debug("ZYW: matched the constant '2'\n");
+              if(match(X2,m_Specific(X4)))
+              {
+                cs6475_debug("ZYW: matched the specific 'x'\n");
+                Instruction* NewAdd = BinaryOperator::CreateAdd(X4, C1);
+                NewAdd->insertBefore(I);
+                Instruction* NewMul =  BinaryOperator::CreateMul(NewAdd,NewAdd);
+                cs6475_debug("ZYW: new instructions created\n");
+                return NewMul;
+              }
             }
-          }
-        }else if(match(X2,m_Add(m_Value(X4), m_Value(X5))))
-        {
-          cs6475_debug("ZYW: matched the second 'add'\n");
-          if(match(X5,m_ConstantInt(C2)) && C2->equalsInt(2))
+          }else if(match(X2,m_Add(m_Value(X4), m_Value(X5))))
           {
-            cs6475_debug("ZYW: matched the constant '2'\n");
-            if(match(X3,m_Specific(X4)))
+            cs6475_debug("ZYW: matched the second 'add'\n");
+            if(match(X5,m_ConstantInt(C2)) && C2->equalsInt(2))
             {
-              cs6475_debug("ZYW: matched the specific 'x'\n");
-              Instruction* NewAdd = BinaryOperator::CreateAdd(X4, C1);
-              NewAdd->insertBefore(I);
-              Instruction* NewMul =  BinaryOperator::CreateMul(NewAdd,NewAdd);
-              cs6475_debug("ZYW: new instructions created\n");
-              return NewMul;
+              cs6475_debug("ZYW: matched the constant '2'\n");
+              if(match(X3,m_Specific(X4)))
+              {
+                cs6475_debug("ZYW: matched the specific 'x'\n");
+                Instruction* NewAdd = BinaryOperator::CreateAdd(X4, C1);
+                NewAdd->insertBefore(I);
+                Instruction* NewMul =  BinaryOperator::CreateMul(NewAdd,NewAdd);
+                cs6475_debug("ZYW: new instructions created\n");
+                return NewMul;
+              }
             }
           }
         }
