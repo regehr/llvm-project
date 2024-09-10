@@ -5248,8 +5248,59 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
     }
   }
   // END STEFAN MADA
+  
+  // BEGIN MD ASHFAQUR RAHAMAN
+  // (0x7fffffff - x) ^ 0x7fffffff = x
+  {
+    ConstantInt *C = nullptr;
+    Value *X = nullptr;
+    Value *Y = nullptr;
+
+    if (match(I, m_Xor(m_Value(Y), m_ConstantInt(C)))
+        || match(I, m_Xor(m_ConstantInt(C), m_Value(Y)))) {
+
+      cs6475_debug("cs6475Optimizer: instruction matched 'xor'\n");
+      if (match(Y, m_Sub(m_ConstantInt(C), m_Value(X)))) {
+        cs6475_debug("cs6475Optimizer: instruction matched 'sub'\n");
+
+        if (C->getUniqueInteger().isMaxSignedValue()) {
+          cs6475_debug("cs6475Optimizer: constant matched the '0x7fffffff'\n");
+          log_optzn("Md Ashfaqur Rahaman");
+          I->replaceAllUsesWith(X); // Suggestion from ChatGPT
+        }
+      }
+    }
+  }
+  // END MD ASHFAQUR RAHAMAN
 
  return nullptr;
+}
+
+Instruction* cs6475Optimizer(Instruction *I) {
+  cs6475_debug("\ncs6475Optmizer fired\n");
+
+  // BEGIN MD ASHFAQUR RAHAMAN
+  // (0x7fffffff - x) ^ 0x7fffffff = x
+  ConstantInt *C = nullptr;
+  Value *X = nullptr;
+  Value *Y = nullptr;
+
+  if (match(I, m_Xor(m_Value(Y), m_ConstantInt(C)))
+      || match(I, m_Xor(m_ConstantInt(C), m_Value(Y)))) {
+
+    cs6475_debug("cs6475Optimizer: instruction matched 'xor'\n");
+    if (match(Y, m_Sub(m_ConstantInt(C), m_Value(X)))) {
+      cs6475_debug("cs6475Optimizer: instruction matched 'sub'\n");
+
+      if (C->getUniqueInteger().isMaxSignedValue()) {
+        cs6475_debug("cs6475Optimizer: constant matched the '0x7fffffff'\n");
+        log_optzn("Md Ashfaqur Rahaman");
+        I->replaceAllUsesWith(X); // Suggestion from ChatGPT
+      }
+    }
+  }
+
+  return nullptr;
 }
 
 bool InstCombinerImpl::run() {
