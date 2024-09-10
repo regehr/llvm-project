@@ -5178,7 +5178,6 @@ Instruction* cs6475_optimizer(Instruction *I) {
     }
   }
   // END KHAGAN KARIMOV
-
  return nullptr;
 }
 
