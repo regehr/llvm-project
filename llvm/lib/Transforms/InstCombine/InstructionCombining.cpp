@@ -5060,6 +5060,46 @@ void cs6475_debug(std::string DbgString) {
     dbgs() << DbgString;
 }
 
+Instruction *cs6475_optimizer_suraj(Instruction *I) {
+  // Converts
+  // if x is even, return x+1 else return x-1
+  // to
+  // return x^1
+
+  Value *INPUT, *A, *B, *C;
+  ConstantInt *CI = nullptr;
+
+  if (!match(I, m_c_Add(m_Value(C), m_Value(INPUT)))) {
+    return nullptr;
+  }
+  cs6475_debug("Add Expression Matched\n");
+
+  if (!(match(C, m_Select(m_Value(B), m_One(), m_ConstantInt(CI))) &&
+        CI->isMinusOne())) {
+    return nullptr;
+  }
+  cs6475_debug("Select Expression Matched\n");
+
+  if (!match(B, m_SpecificICmp(ICmpInst::ICMP_EQ, m_Value(A), m_ZeroInt()))) {
+    return nullptr;
+  }
+  cs6475_debug("Compare Expression Matched\n");
+
+  if (!match(A, m_And(m_Specific(INPUT), m_One()))) {
+    return nullptr;
+  }
+  cs6475_debug("And Expression Matched\n");
+
+  cs6475_debug("Suraj: Optimization Possible\n");
+  auto Bitwidth = A->getType()->getIntegerBitWidth();
+  auto One = APInt(Bitwidth, 1);
+
+  log_optzn("Suraj Yadav");
+
+  auto *OptIns =
+      BinaryOperator::CreateXor(INPUT, ConstantInt::get(I->getContext(), One));
+  return OptIns;
+}
 
 Instruction *cs6475_optimizer_tavakkoli(Instruction *I) {
   cs6475_debug("\nCS 6475 matcher: running now\n");
@@ -5158,6 +5198,15 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
     }
   }
   // END JOHN REGEHR
+
+  // BEGIN SURAJ YADAV
+  {
+    auto *NewI = cs6475_optimizer_suraj(I);
+    if (NewI != nullptr) {
+      return NewI;
+    }
+  }
+  // END SURAJ YADAV
 
   // BEGIN ASHTON WIERSDORF
   // x : float; c1, c2 are literal constants
