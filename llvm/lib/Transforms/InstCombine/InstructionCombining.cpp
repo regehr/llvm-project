@@ -5060,6 +5060,64 @@ void cs6475_debug(std::string DbgString) {
     dbgs() << DbgString;
 }
 
+
+Instruction *cs6475_optimizer_tavakkoli(Instruction *I) {
+  cs6475_debug("\nCS 6475 matcher: running now\n");
+
+  // Match the pattern: (x^2 + 1) * (x^2 - 1) with %x2_minus_1 = add i16 %x2,
+  // 65535
+  Value *X = nullptr;
+  Value *X2_1 = nullptr;
+  Value *X2_2 = nullptr;
+
+  if (match(I, m_Mul(m_Value(X2_1), m_Value(X2_2)))) {
+    cs6475_debug("AMT: Matched the 'mul'\n");
+
+    // Get the bit width dynamically from the operands
+    Type *Ty = X2_1->getType();
+    unsigned bitWidth = 0;
+
+    if (Ty->isIntegerTy()) {
+      bitWidth = cast<IntegerType>(Ty)->getBitWidth();
+    } else {
+      cs6475_debug("AMT: Operand is not an integer type\n");
+      return nullptr;
+    }
+
+    if (match(X2_1, m_Add(m_Value(X2_1), m_One()))) {
+      cs6475_debug("AMT: Matched the 'x^2 + 1'\n");
+
+      if (match(X2_2, m_Add(m_Value(X2_2),
+                            m_SpecificInt(APInt::getAllOnes(bitWidth))))) {
+        cs6475_debug(
+            "AMT: Matched the 'x^2 -1' (which is x^2 - 1 in unsigned)\n");
+
+        if (X2_1 == X2_2) {
+          X = dyn_cast<Instruction>(X2_1)->getOperand(0); // Get X from x^2
+          cs6475_debug(
+              "AMT: Matched the full pattern, applying optimization\n");
+
+          // Apply the optimization: x^4 - 1
+          IRBuilder<> Builder(I);
+
+          Value *X2 = Builder.CreateMul(X, X, "x2");
+          Value *X4 = Builder.CreateMul(X2, X2, "x4");
+          Instruction *NewI = BinaryOperator::CreateSub(
+              X4, ConstantInt::get(I->getContext(), APInt(bitWidth, 1)),
+              "result");
+
+          cs6475_debug("AMT: Optimization applied\n");
+          log_optzn("Amir Mohammad Tavakkoli");
+
+          return NewI;
+        }
+      }
+    }
+  }
+
+  return nullptr;
+}
+
 Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInfo *LVI) {
   cs6475_debug("\nCS 6475 matcher: running now\n");
 
@@ -5125,6 +5183,16 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
     }
   }
   // END KHAGAN KARIMOV
+
+  // BEGIN Amir Mohammad Tavakkoli
+  {
+    auto tavak_i = cs6475_optimizer_tavakkoli(I);
+    if (tavak_i != nullptr) {
+      return tavak_i;
+    }
+  }
+  // END Amir Mohammad Tavakkoli
+
   // BEGIN STEFAN MADA
   // For IR generated from a C++ loop as such:
   // for(unsigned i = 1; i <= num; ++i)
