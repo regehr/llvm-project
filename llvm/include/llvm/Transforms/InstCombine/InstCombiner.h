@@ -20,6 +20,7 @@
 
 #include "llvm/Analysis/DomConditionCache.h"
 #include "llvm/Analysis/InstructionSimplify.h"
+#include "llvm/Analysis/LazyValueInfo.h"
 #include "llvm/Analysis/TargetFolder.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/IRBuilder.h"
@@ -81,6 +82,7 @@ protected:
   DomConditionCache DC;
 
   ReversePostOrderTraversal<BasicBlock *> &RPOT;
+  LazyValueInfo *LVI;
 
   bool MadeIRChange = false;
 
@@ -103,12 +105,13 @@ public:
                DominatorTree &DT, OptimizationRemarkEmitter &ORE,
                BlockFrequencyInfo *BFI, BranchProbabilityInfo *BPI,
                ProfileSummaryInfo *PSI, const DataLayout &DL,
-               ReversePostOrderTraversal<BasicBlock *> &RPOT)
+               ReversePostOrderTraversal<BasicBlock *> &RPOT,
+               LazyValueInfo *LVI = nullptr)
       : TTI(TTI), Builder(Builder), Worklist(Worklist),
         MinimizeSize(MinimizeSize), AA(AA), AC(AC), TLI(TLI), DT(DT), DL(DL),
         SQ(DL, &TLI, &DT, &AC, nullptr, /*UseInstrInfo*/ true,
            /*CanUseUndef*/ true, &DC),
-        ORE(ORE), BFI(BFI), BPI(BPI), PSI(PSI), RPOT(RPOT) {}
+        ORE(ORE), BFI(BFI), BPI(BPI), PSI(PSI), RPOT(RPOT), LVI(LVI) {}
 
   virtual ~InstCombiner() = default;
 
