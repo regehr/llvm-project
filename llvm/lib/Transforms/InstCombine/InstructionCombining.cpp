@@ -5087,13 +5087,13 @@ Instruction* cs6475_optimizer(Instruction *I) {
     if (match(I, m_And(m_Value(X), m_Value(Y)))) {
       cs6475_debug("JDR: matched the 'and2'\n");
       if (match(X, m_Sub(m_APInt(C), m_Specific(Y)))) {
-        cs6475_debug("JDR: matched the 'sub2'\n");
-        if (C->isMaxSignedValue()) {
-          log_optzn("John Regehr 2");
-          auto SMin = APInt::getSignedMinValue(C->getBitWidth());
-          Instruction *NewI = BinaryOperator::CreateAnd(Y, ConstantInt::get(I->getContext(), SMin));
-          return NewI;
-        }
+	cs6475_debug("JDR: matched the 'sub2'\n");
+	if (C->isMaxSignedValue()) {
+	  log_optzn("John Regehr 2");
+	  auto SMin = APInt::getSignedMinValue(C->getBitWidth());
+	  Instruction *NewI = BinaryOperator::CreateAnd(Y, ConstantInt::get(I->getContext(), SMin));
+	  return NewI;
+	}
       }
     }
   }
@@ -5209,8 +5209,7 @@ Instruction* cs6475_optimizer(Instruction *I) {
     }
   }
   // END KHAGAN KARIMOV
-
-  return nullptr;
+ return nullptr;
 }
 
 bool InstCombinerImpl::run() {
