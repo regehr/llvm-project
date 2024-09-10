@@ -5074,13 +5074,13 @@ Instruction *cs6475_optimizer_suraj(Instruction *I) {
   cs6475_debug("And Expression Matched\n");
 
   cs6475_debug("Suraj: Optimization Possible\n");
-  auto bitwidth = A->getType()->getIntegerBitWidth();
-  auto one = APInt(bitwidth, 1);
+  auto Bitwidth = A->getType()->getIntegerBitWidth();
+  auto One = APInt(Bitwidth, 1);
 
   log_optzn("Suraj Yadav");
 
   auto *OptIns =
-      BinaryOperator::CreateXor(INPUT, ConstantInt::get(I->getContext(), one));
+      BinaryOperator::CreateXor(INPUT, ConstantInt::get(I->getContext(), One));
   return OptIns;
 }
 Instruction* cs6475_optimizer(Instruction *I) {
@@ -5106,7 +5106,12 @@ Instruction* cs6475_optimizer(Instruction *I) {
   // END JOHN REGEHR
 
   // BEGIN SURAJ YADAV
-  return cs6475_optimizer_suraj(I);
+  {
+    auto *NewI = cs6475_optimizer_suraj(I);
+    if (NewI != nullptr) {
+      return NewI;
+    }
+  }
   // END SURAJ YADAV
 
  return nullptr;
