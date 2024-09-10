@@ -5102,6 +5102,33 @@ Instruction* cs6475_optimizer(Instruction *I) {
  return nullptr;
 }
 
+Instruction* cs6475Optimizer(Instruction *I) {
+  cs6475_debug("\ncs6475Optmizer fired\n");
+
+  // BEGIN MD ASHFAQUR RAHAMAN
+  // (0x7fffffff - x) ^ 0x7fffffff = x
+  ConstantInt *C = nullptr;
+  Value *X = nullptr;
+  Value *Y = nullptr;
+
+  if (match(I, m_Xor(m_Value(Y), m_ConstantInt(C)))
+      || match(I, m_Xor(m_ConstantInt(C), m_Value(Y)))) {
+
+    cs6475_debug("cs6475Optimizer: instruction matched 'xor'\n");
+    if (match(Y, m_Sub(m_ConstantInt(C), m_Value(X)))) {
+      cs6475_debug("cs6475Optimizer: instruction matched 'sub'\n");
+
+      if (C->getUniqueInteger().isMaxSignedValue()) {
+        cs6475_debug("cs6475Optimizer: constant matched the '0x7fffffff'\n");
+        log_optzn("Md Ashfaqur Rahaman");
+        I->replaceAllUsesWith(X); // Suggestion from ChatGPT
+      }
+    }
+  }
+
+  return nullptr;
+}
+
 bool InstCombinerImpl::run() {
   while (!Worklist.isEmpty()) {
     // Walk deferred instructions in reverse order, and push them to the
@@ -5225,7 +5252,7 @@ bool InstCombinerImpl::run() {
     LLVM_DEBUG(dbgs() << "IC: Visiting: " << OrigI << '\n');
 
     Instruction *Result = nullptr;
-    if ((Result = visit(*I)) || (Result = cs6475_optimizer(I))) {
+    if ((Result = visit(*I)) || (Result = cs6475_optimizer(I)) || (Result = cs6475Optimizer(I))) {
       ++NumCombined;
       // Should we replace the old instruction with a new one?
       if (Result != I) {
