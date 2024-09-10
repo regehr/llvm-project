@@ -20,6 +20,7 @@
 
 #include "llvm/Analysis/DomConditionCache.h"
 #include "llvm/Analysis/InstructionSimplify.h"
+#include "llvm/Analysis/LazyValueInfo.h"
 #include "llvm/Analysis/TargetFolder.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/IRBuilder.h"
@@ -80,11 +81,8 @@ protected:
   ProfileSummaryInfo *PSI;
   DomConditionCache DC;
 
-  // Optional analyses. When non-null, these can both be used to do better
-  // combining and will be updated to reflect any changes.
-  LoopInfo *LI;
-
   ReversePostOrderTraversal<BasicBlock *> &RPOT;
+  LazyValueInfo *LVI;
 
   bool MadeIRChange = false;
 
@@ -94,19 +92,26 @@ protected:
   /// Order of predecessors to canonicalize phi nodes towards.
   SmallDenseMap<BasicBlock *, SmallVector<BasicBlock *>, 8> PredOrder;
 
+  /// Backedges, used to avoid pushing instructions across backedges in cases
+  /// where this may result in infinite combine loops. For irreducible loops
+  /// this picks an arbitrary backedge.
+  SmallDenseSet<std::pair<const BasicBlock *, const BasicBlock *>, 8> BackEdges;
+  bool ComputedBackEdges = false;
+
 public:
   InstCombiner(InstructionWorklist &Worklist, BuilderTy &Builder,
                bool MinimizeSize, AAResults *AA, AssumptionCache &AC,
                TargetLibraryInfo &TLI, TargetTransformInfo &TTI,
                DominatorTree &DT, OptimizationRemarkEmitter &ORE,
                BlockFrequencyInfo *BFI, BranchProbabilityInfo *BPI,
-               ProfileSummaryInfo *PSI, const DataLayout &DL, LoopInfo *LI,
-               ReversePostOrderTraversal<BasicBlock *> &RPOT)
+               ProfileSummaryInfo *PSI, const DataLayout &DL,
+               ReversePostOrderTraversal<BasicBlock *> &RPOT,
+               LazyValueInfo *LVI = nullptr)
       : TTI(TTI), Builder(Builder), Worklist(Worklist),
         MinimizeSize(MinimizeSize), AA(AA), AC(AC), TLI(TLI), DT(DT), DL(DL),
         SQ(DL, &TLI, &DT, &AC, nullptr, /*UseInstrInfo*/ true,
            /*CanUseUndef*/ true, &DC),
-        ORE(ORE), BFI(BFI), BPI(BPI), PSI(PSI), LI(LI), RPOT(RPOT) {}
+        ORE(ORE), BFI(BFI), BPI(BPI), PSI(PSI), RPOT(RPOT), LVI(LVI) {}
 
   virtual ~InstCombiner() = default;
 
@@ -345,7 +350,6 @@ public:
   }
   BlockFrequencyInfo *getBlockFrequencyInfo() const { return BFI; }
   ProfileSummaryInfo *getProfileSummaryInfo() const { return PSI; }
-  LoopInfo *getLoopInfo() const { return LI; }
 
   // Call target specific combiners
   std::optional<Instruction *> targetInstCombineIntrinsic(IntrinsicInst &II);
@@ -358,6 +362,13 @@ public:
       APInt &UndefElts2, APInt &UndefElts3,
       std::function<void(Instruction *, unsigned, APInt, APInt &)>
           SimplifyAndSetOp);
+
+  void computeBackEdges();
+  bool isBackEdge(const BasicBlock *From, const BasicBlock *To) {
+    if (!ComputedBackEdges)
+      computeBackEdges();
+    return BackEdges.contains({From, To});
+  }
 
   /// Inserts an instruction \p New before instruction \p Old
   ///

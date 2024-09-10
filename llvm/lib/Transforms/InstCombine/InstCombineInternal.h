@@ -18,6 +18,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/Analysis/InstructionSimplify.h"
+#include "llvm/Analysis/LazyValueInfo.h"
 #include "llvm/Analysis/TargetFolder.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/IRBuilder.h"
@@ -51,7 +52,6 @@ class DataLayout;
 class DominatorTree;
 class GEPOperator;
 class GlobalVariable;
-class LoopInfo;
 class OptimizationRemarkEmitter;
 class ProfileSummaryInfo;
 class TargetLibraryInfo;
@@ -66,10 +66,11 @@ public:
                    TargetLibraryInfo &TLI, TargetTransformInfo &TTI,
                    DominatorTree &DT, OptimizationRemarkEmitter &ORE,
                    BlockFrequencyInfo *BFI, BranchProbabilityInfo *BPI,
-                   ProfileSummaryInfo *PSI, const DataLayout &DL, LoopInfo *LI,
-                   ReversePostOrderTraversal<BasicBlock *> &RPOT)
+                   ProfileSummaryInfo *PSI, const DataLayout &DL,
+                   ReversePostOrderTraversal<BasicBlock *> &RPOT,
+                   LazyValueInfo *LVI = nullptr)
       : InstCombiner(Worklist, Builder, MinimizeSize, AA, AC, TLI, TTI, DT, ORE,
-                     BFI, BPI, PSI, DL, LI, RPOT) {}
+                     BFI, BPI, PSI, DL, RPOT, LVI) {}
 
   virtual ~InstCombinerImpl() = default;
 
