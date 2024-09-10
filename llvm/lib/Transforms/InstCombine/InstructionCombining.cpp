@@ -5060,6 +5060,55 @@ void cs6475_debug(std::string DbgString) {
     dbgs() << DbgString;
 }
 
+Instruction* cs6475_optimizer_brensen(Instruction *I) {
+  // BEGIN BRENSEN VILLEGAS
+  Value *XorLhs = nullptr;
+
+  Value *X = nullptr;
+  Value *Y = nullptr;
+
+  Value *Cond = nullptr;
+  CmpInst::Predicate Pred;
+
+  ConstantInt *RhsCond = nullptr;
+  Value *LhsCond = nullptr;
+
+  if (match(I, m_Xor(m_Value(XorLhs), m_Value(X)))) {
+    cs6475_debug("BV: matched 'xor'\n");
+    if (match(XorLhs, m_Select(
+      m_Value(Cond),
+      m_Value(Y),
+      m_ZeroInt()
+    ))) {
+      cs6475_debug("BV: matched 'select'\n");
+      if (match(Cond, m_ICmp(Pred, m_Value(LhsCond), m_ConstantInt(RhsCond)))) {
+        cs6475_debug("BV: matched 'condition of select'\n");
+        if (! (Pred == CmpInst::ICMP_EQ))
+          return nullptr;
+        cs6475_debug("BV: matched 'icmp eq'\n");
+
+        if (!RhsCond->getUniqueInteger().isAllOnes())
+          return nullptr;
+        cs6475_debug("BV: matched '-1 of eq rhs'\n");
+
+        if (match(LhsCond, m_Xor(m_Specific(Y), m_Value(X)))) {
+          cs6475_debug("BV: matched '(Y^X) of eq lhs'\n");
+          log_optzn("\nBrensen Villegas\n");
+          auto MinOne = APInt::getAllOnes(RhsCond->getUniqueInteger().getBitWidth());
+          return SelectInst::Create(
+            Cond,
+            ConstantInt::get(I->getContext(), MinOne),
+            X
+          );
+        }
+      }
+    }
+  }
+  return nullptr;
+  // END BRENSEN VILLEGAS
+}
+
+
 Instruction *cs6475_optimizer_suraj(Instruction *I) {
   // Converts
   // if x is even, return x+1 else return x-1
@@ -5198,6 +5247,14 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
     }
   }
   // END JOHN REGEHR
+
+  // BEGIN BRENSEN VILLEGAS
+  {
+    Instruction *BV_I = cs6475_optimizer_brensen(I);
+    if (BV_I != nullptr)
+      return BV_I;
+  }
+  // END BRENSEN VILLEGAS
 
   // BEGIN SURAJ YADAV
   {
