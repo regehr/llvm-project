@@ -5309,6 +5309,26 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
   }
   // END STEFAN MADA
 
+  // BEGIN TANMAY TIRPANKAR
+  // (0x7FFFFFFF - x) ⊕ 0x7FFFFFFF → x
+  {
+    Value *X = nullptr;
+    Value *Y = nullptr;
+    ConstantInt *C = nullptr;
+    if (match(I, m_Xor(m_Value(Y), m_ConstantInt(C))) ||
+        match(I, m_Xor(m_ConstantInt(C), m_Value(Y)))) {
+      cs6475_debug("TT: matched the 'xor'\n");
+      if (match(Y, m_Sub(m_Specific(C), m_Value(X)))) {
+        cs6475_debug("TT: matched the 'sub'\n");
+        if (C->getUniqueInteger().isMaxSignedValue()) {
+          log_optzn("Tanmay Tirpankar");
+          I->replaceAllUsesWith(X);
+        }
+      }
+    }
+  }
+  // END TANMAY TIRPANKAR
+
  return nullptr;
 }
 
