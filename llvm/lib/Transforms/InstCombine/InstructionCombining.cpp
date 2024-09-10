@@ -5036,13 +5036,13 @@ void InstCombinerImpl::tryToSinkInstructionDbgVariableRecords(
 
 void log_optzn(std::string Name) {
   // TODO-- John will fill in the missing code here
-  dbgs() << Name;
+  // dbgs() << Name;
 }
 
 void cs6475_debug(std::string DbgString) {
   // set this to "false" to suppress debug output, before running "ninja test"
   // set this to "true" to see debug output, to help you understand your transformation
-  if (true)
+  if (false)
     dbgs() << DbgString;
 }
 
@@ -5186,20 +5186,23 @@ Instruction* cs6475_optimizer(Instruction *I) {
 
     // Replace all uses of the original instruction with the new instruction
     I->replaceAllUsesWith(NewICmp);
-
+    // NewICmp->takeName(I);
     // Erase the old instructions
-    // I->eraseFromParent();
-    // cast<Instruction>(E)->eraseFromParent();
-    // cast<Instruction>(D)->eraseFromParent();
-    // cast<Instruction>(B)->eraseFromParent();
-    // cast<Instruction>(A)->eraseFromParent();
+    I->eraseFromParent();
+    cast<Instruction>(E)->eraseFromParent();
+    cast<Instruction>(D)->eraseFromParent();
+    cast<Instruction>(B)->eraseFromParent();
+    cast<Instruction>(A)->eraseFromParent();
+
     // Safely erase the old instructions, ensuring no multiple deletions
+    /*
     Instruction *ToErase[] = {cast<Instruction>(E), cast<Instruction>(D), cast<Instruction>(B), cast<Instruction>(A), I};
     for (Instruction *Inst : ToErase) {
       if (Inst->use_empty())  // Ensure no dangling uses exist
         Inst->eraseFromParent();
     }
-    log_optzn("\nSinaMpS\n");
+    */
+    log_optzn("\nSina Saravani\n");
     return nullptr;  // Since we've deleted the original instruction
   }
   
