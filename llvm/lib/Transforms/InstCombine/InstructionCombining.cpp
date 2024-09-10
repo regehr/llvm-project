@@ -5041,7 +5041,7 @@ void log_optzn(std::string Name) {
 void cs6475_debug(std::string DbgString) {
   // set this to "false" to suppress debug output, before running "ninja test"
   // set this to "true" to see debug output, to help you understand your transformation
-  if (true)
+  if (false)
     dbgs() << DbgString;
 }
 
@@ -5069,7 +5069,16 @@ Instruction* cs6475_optimizer(Instruction *I) {
 
  return nullptr;
 }
-
+/*
+The optimization is based on (x+1)**2 - (x**2 - 2*x + 1) --> 0
+The compiler using 
+-O2 - on the source IR changes it to IR which contains an XOR instruction
+This optimization is done somewhere in the O2 pipeline.
+I started with the input IR without the XOR instruction but later found that the code was doing something funky, 
+So I went on to use the optimized IR as input to my pass, so the IR with XOR instruction is the input to my pass.
+I could have changed it to the old style but just skipped as I would have to again rewrite the pass and that would 
+have failed if 02 was applied.
+ */
 Instruction *cs6475_sameeran(Instruction *I) {
     cs6475_debug("\nCS 6475 Sameeran: running now\n");
 
@@ -5103,6 +5112,7 @@ Instruction *cs6475_sameeran(Instruction *I) {
 
                         I->replaceAllUsesWith(cintzero);
                         cs6475_debug("Sam: Applied optimization\n");
+                        log_optzn("Sameeran");
 
                         return I;
                     }
