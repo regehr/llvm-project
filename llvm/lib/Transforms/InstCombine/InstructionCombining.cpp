@@ -5095,6 +5095,7 @@ Instruction* cs6475_optimizer(Instruction *I) {
               if(match(X2,m_Specific(X4)))
               {
                 cs6475_debug("ZYW: matched the specific 'x'\n");
+                log_optzn("Zeyuan Wang");
                 Instruction* NewAdd = BinaryOperator::CreateAdd(X4, C1);
                 NewAdd->insertBefore(I);
                 Instruction* NewMul =  BinaryOperator::CreateMul(NewAdd,NewAdd);
@@ -5111,6 +5112,7 @@ Instruction* cs6475_optimizer(Instruction *I) {
               if(match(X3,m_Specific(X4)))
               {
                 cs6475_debug("ZYW: matched the specific 'x'\n");
+                log_optzn("Zeyuan Wang");
                 Instruction* NewAdd = BinaryOperator::CreateAdd(X4, C1);
                 NewAdd->insertBefore(I);
                 Instruction* NewMul =  BinaryOperator::CreateMul(NewAdd,NewAdd);
