@@ -5041,7 +5041,7 @@ void log_optzn(std::string Name) {
 void cs6475_debug(std::string DbgString) {
   // set this to "false" to suppress debug output, before running "ninja test"
   // set this to "true" to see debug output, to help you understand your transformation
-  if (false)
+  if (true)
     dbgs() << DbgString;
 }
 
@@ -5067,20 +5067,11 @@ Instruction* cs6475_optimizer(Instruction *I) {
   }
   // END JOHN REGEHR
 
- return nullptr;
-}
-/*
-The optimization is based on (x+1)**2 - (x**2 - 2*x + 1) --> 0
-The compiler using 
--O2 - on the source IR changes it to IR which contains an XOR instruction
-This optimization is done somewhere in the O2 pipeline.
-I started with the input IR without the XOR instruction but later found that the code was doing something funky, 
-So I went on to use the optimized IR as input to my pass, so the IR with XOR instruction is the input to my pass.
-I could have changed it to the old style but just skipped as I would have to again rewrite the pass and that would 
-have failed if 02 was applied.
- */
-Instruction *cs6475_sameeran(Instruction *I) {
-    cs6475_debug("\nCS 6475 Sameeran: running now\n");
+  // BEGIN SAMEERAN
+  {
+    /*
+    The optimization is based on (x+1)**2 - (x**2 - 2*x + 1) --> 0
+    */
 
     Value *X_PLUS_ONE_SQUARE = nullptr;
     Value *B_neg = nullptr;
@@ -5120,8 +5111,10 @@ Instruction *cs6475_sameeran(Instruction *I) {
             }
         }
     }
+  } 
+  // END SAMEERAN
 
-    return nullptr;
+ return nullptr;
 }
 
 bool InstCombinerImpl::run() {
@@ -5247,7 +5240,7 @@ bool InstCombinerImpl::run() {
     LLVM_DEBUG(dbgs() << "IC: Visiting: " << OrigI << '\n');
 
     Instruction *Result = nullptr;
-    if ((Result = visit(*I)) || (Result = cs6475_sameeran(I))) {
+    if ((Result = visit(*I)) || (Result = cs6475_optimizer(I))) {
       ++NumCombined;
       // Should we replace the old instruction with a new one?
       if (Result != I) {
