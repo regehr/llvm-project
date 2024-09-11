@@ -5309,7 +5309,7 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
     Value *V4 = nullptr;
     ConstantInt *C1 = nullptr;
     // >= case
-    ICmpInst::Predicate Pred1 = ICmpInst::ICMP_SGE;
+    ICmpInst::Predicate Pred1 = ICmpInst::ICMP_SGE; 
     if (match(I, m_ICmp(Pred1, m_Value(V1), m_Value(V2)))) {
       if (match(V2, m_ConstantInt(C1))) {
         if (C1->isZero()) {
@@ -5321,7 +5321,7 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
                 if (Mul2->hasNoSignedWrap()) {
                   if (C1->getUniqueInteger().isNonNegative()) {
                     log_optzn("Jacob Knowlton");
-                    ICmpInst::Predicate Pred3 = ICmpInst::ICMP_EQ;
+                    ICmpInst::Predicate Pred3 = ICmpInst::ICMP_EQ; 
                     return new ICmpInst(Pred3, ConstantInt::getTrue(I->getContext()), ConstantInt::getTrue(I->getContext()));
                   }
                 }
@@ -5332,7 +5332,7 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
       }
     }
     // > case
-    ICmpInst::Predicate Pred2 = ICmpInst::ICMP_SGT;
+    ICmpInst::Predicate Pred2 = ICmpInst::ICMP_SGT; 
     if (match(I, m_ICmp(Pred2, m_Value(V1), m_Value(V2)))) {
       if (match(V2, m_ConstantInt(C1))) {
         if (C1->isMinusOne()) {
@@ -5344,7 +5344,7 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
                 if (Mul2->hasNoSignedWrap()) {
                   if (C1->getUniqueInteger().isNonNegative()) {
                     log_optzn("Jacob Knowlton");
-                    ICmpInst::Predicate Pred3 = ICmpInst::ICMP_EQ;
+                    ICmpInst::Predicate Pred3 = ICmpInst::ICMP_EQ; 
                     return new ICmpInst(Pred3, ConstantInt::getTrue(I->getContext()), ConstantInt::getTrue(I->getContext()));
                   }
                 }
@@ -5593,7 +5593,7 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
     }
   }
   // END CAYDEN LUND
-
+  
   // BEGIN KHAGAN KARIMOV
   {
     ConstantInt *C = nullptr;
@@ -5635,7 +5635,7 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
   // But with num being bounded, an optimization
   // can be performed, reducing the instructions from
   // 10 to 3.
-  //
+  // 
   // Note: Tried to do this in IndVarSimplify pass,
   // But impossible to get Function pass info
   // (Lazy Value Info) while in a Loop pass,
@@ -5682,7 +5682,7 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
     }
   }
   // END STEFAN MADA
-
+  
   // BEGIN MD ASHFAQUR RAHAMAN
   // (0x7fffffff - x) ^ 0x7fffffff = x
   {
