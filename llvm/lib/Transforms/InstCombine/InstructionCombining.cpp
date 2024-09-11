@@ -5060,6 +5060,95 @@ void cs6475_debug(std::string DbgString) {
     dbgs() << DbgString;
 }
 
+Instruction* cs6475_optimizer_brensen(Instruction *I) {
+  // BEGIN BRENSEN VILLEGAS
+  Value *XorLhs = nullptr;
+
+  Value *X = nullptr;
+  Value *Y = nullptr;
+
+  Value *Cond = nullptr;
+  CmpInst::Predicate Pred;
+
+  ConstantInt *RhsCond = nullptr;
+  Value *LhsCond = nullptr;
+
+  if (match(I, m_Xor(m_Value(XorLhs), m_Value(X)))) {
+    cs6475_debug("BV: matched 'xor'\n");
+    if (match(XorLhs, m_Select(
+      m_Value(Cond),
+      m_Value(Y),
+      m_ZeroInt()
+    ))) {
+      cs6475_debug("BV: matched 'select'\n");
+      if (match(Cond, m_ICmp(Pred, m_Value(LhsCond), m_ConstantInt(RhsCond)))) {
+        cs6475_debug("BV: matched 'condition of select'\n");
+        if (! (Pred == CmpInst::ICMP_EQ))
+          return nullptr;
+        cs6475_debug("BV: matched 'icmp eq'\n");
+
+        if (!RhsCond->getUniqueInteger().isAllOnes())
+          return nullptr;
+        cs6475_debug("BV: matched '-1 of eq rhs'\n");
+
+        if (match(LhsCond, m_Xor(m_Specific(Y), m_Value(X)))) {
+          cs6475_debug("BV: matched '(Y^X) of eq lhs'\n");
+          log_optzn("\nBrensen Villegas\n");
+          auto MinOne = APInt::getAllOnes(RhsCond->getUniqueInteger().getBitWidth());
+          return SelectInst::Create(
+            Cond,
+            ConstantInt::get(I->getContext(), MinOne),
+            X
+          );
+        }
+      }
+    }
+  }
+  return nullptr;
+  // END BRENSEN VILLEGAS
+}
+
+
+Instruction *cs6475_optimizer_suraj(Instruction *I) {
+  // Converts
+  // if x is even, return x+1 else return x-1
+  // to
+  // return x^1
+
+  Value *INPUT, *A, *B, *C;
+  ConstantInt *CI = nullptr;
+
+  if (!match(I, m_c_Add(m_Value(C), m_Value(INPUT)))) {
+    return nullptr;
+  }
+  cs6475_debug("Add Expression Matched\n");
+
+  if (!(match(C, m_Select(m_Value(B), m_One(), m_ConstantInt(CI))) &&
+        CI->isMinusOne())) {
+    return nullptr;
+  }
+  cs6475_debug("Select Expression Matched\n");
+
+  if (!match(B, m_SpecificICmp(ICmpInst::ICMP_EQ, m_Value(A), m_ZeroInt()))) {
+    return nullptr;
+  }
+  cs6475_debug("Compare Expression Matched\n");
+
+  if (!match(A, m_And(m_Specific(INPUT), m_One()))) {
+    return nullptr;
+  }
+  cs6475_debug("And Expression Matched\n");
+
+  cs6475_debug("Suraj: Optimization Possible\n");
+  auto Bitwidth = A->getType()->getIntegerBitWidth();
+  auto One = APInt(Bitwidth, 1);
+
+  log_optzn("Suraj Yadav");
+
+  auto *OptIns =
+      BinaryOperator::CreateXor(INPUT, ConstantInt::get(I->getContext(), One));
+  return OptIns;
+}
 
 Instruction *cs6475_optimizer_tavakkoli(Instruction *I) {
   cs6475_debug("\nCS 6475 matcher: running now\n");
@@ -5158,6 +5247,99 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
     }
   }
   // END JOHN REGEHR
+  
+  // BEGIN JACOB KNOWLTON
+  {
+    Value *V1 = nullptr;
+    Value *V2 = nullptr;
+    Value *V3 = nullptr;
+    Value *V4 = nullptr;
+    ConstantInt *C1 = nullptr;
+    // >= case
+    ICmpInst::Predicate Pred1 = ICmpInst::ICMP_SGE; 
+    if (match(I, m_ICmp(Pred1, m_Value(V1), m_Value(V2)))) {
+      if (match(V2, m_ConstantInt(C1))) {
+        if (C1->isZero()) {
+          if (match(V1, m_Mul(m_Value(V3), m_Value(V4)))) {
+            auto Mul1 = dyn_cast<BinaryOperator>(V1);
+            if (Mul1->hasNoSignedWrap()) {
+              if (match(V3, m_Mul(m_Specific(V4), m_ConstantInt(C1))) || match(V3, m_Shl(m_Specific(V4), m_ConstantInt(C1)))) {
+                auto Mul2 = dyn_cast<BinaryOperator>(V3);
+                if (Mul2->hasNoSignedWrap()) {
+                  if (C1->getUniqueInteger().isNonNegative()) {
+                    log_optzn("Jacob Knowlton");
+                    ICmpInst::Predicate Pred3 = ICmpInst::ICMP_EQ; 
+                    return new ICmpInst(Pred3, ConstantInt::getTrue(I->getContext()), ConstantInt::getTrue(I->getContext()));
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    // > case
+    ICmpInst::Predicate Pred2 = ICmpInst::ICMP_SGT; 
+    if (match(I, m_ICmp(Pred2, m_Value(V1), m_Value(V2)))) {
+      if (match(V2, m_ConstantInt(C1))) {
+        if (C1->isMinusOne()) {
+          if (match(V1, m_Mul(m_Value(V3), m_Value(V4)))) {
+            auto Mul1 = dyn_cast<BinaryOperator>(V1);
+            if (Mul1->hasNoSignedWrap()) {
+              if (match(V3, m_Mul(m_Specific(V4), m_ConstantInt(C1))) || match(V3, m_Shl(m_Specific(V4), m_ConstantInt(C1)))) {
+                auto Mul2 = dyn_cast<BinaryOperator>(V3);
+                if (Mul2->hasNoSignedWrap()) {
+                  if (C1->getUniqueInteger().isNonNegative()) {
+                    log_optzn("Jacob Knowlton");
+                    ICmpInst::Predicate Pred3 = ICmpInst::ICMP_EQ; 
+                    return new ICmpInst(Pred3, ConstantInt::getTrue(I->getContext()), ConstantInt::getTrue(I->getContext()));
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  // END JACOB KNOWLTON
+
+  // BEGIN YEASEEN ARAFAT
+  {
+    //0x7FFFFFFF - (x ⊕ c) → x ⊕ (0x7FFFFFFF - c)
+    ConstantInt *C1 = nullptr;
+    ConstantInt *C2 = nullptr;
+    Value *X = nullptr;
+    if(match(I, m_Sub(m_ConstantInt(C1), m_Xor(m_Value(X), m_ConstantInt(C2))))){
+        cs6475_debug("YA: Matched the left-side pattern 'MaxSignedValue - (x ⊕ c)'\n");
+        if(C1->getUniqueInteger().isMaxSignedValue()){
+          auto MaxSignedValue = APInt::getSignedMaxValue(C1->getUniqueInteger().getBitWidth());
+          auto NewConstant = MaxSignedValue - C2->getValue();
+          Instruction *NewI = BinaryOperator::CreateXor(X, ConstantInt::get(I->getContext(), NewConstant));
+          cs6475_debug("YA: Applied the optimization 'x ⊕ (MaxSignedValue - c)'\n");
+          log_optzn("Yeaseen Arafat");
+          return NewI;
+        }
+    }
+  }
+  //END YEASEEN ARAFAT
+
+  // BEGIN BRENSEN VILLEGAS
+  {
+    Instruction *BV_I = cs6475_optimizer_brensen(I);
+    if (BV_I != nullptr)
+      return BV_I;
+  }
+  // END BRENSEN VILLEGAS
+
+  // BEGIN SURAJ YADAV
+  {
+    auto *NewI = cs6475_optimizer_suraj(I);
+    if (NewI != nullptr) {
+      return NewI;
+    }
+  }
+  // END SURAJ YADAV
 
   {
   // BEGIN DIBRI NSOFOR
@@ -5366,7 +5548,6 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
     Value *Y = nullptr;
     Value *LHS = nullptr;
     Value *RHS = nullptr;
-    IRBuilder<> Builder(I);
     // X - Y + Y * C = X + Y * (C - 1)
     if (match(I, m_c_Add(m_Value(LHS), m_Value(RHS)))) {
       // cs6475_debug("KK: matched the 'add'\n");
@@ -5375,8 +5556,8 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
         // cs6475_debug("KK: matched the 'sub'\n");
         // cs6475_debug("KK: matched the 'mul'\n");
         log_optzn("Khagan Karimov");
-        Value *NewMul = Builder.CreateMul(
-            Y, Builder.CreateSub(C, ConstantInt::get(C->getType(), 1)));
+        Value *NewMul = IC.Builder.CreateMul(
+            Y, IC.Builder.CreateSub(C, ConstantInt::get(C->getType(), 1)));
         Instruction *NewAdd = BinaryOperator::CreateAdd(X, NewMul);
         return NewAdd;
       }
@@ -5493,7 +5674,74 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
   }
   // END TANMAY TIRPANKAR
 
- return nullptr;
+  // BEGIN LEE WEI
+  {
+    // 1 input
+    Value *A = nullptr;
+    Value *B = nullptr;
+    ConstantInt*C = nullptr;
+    Value *X = nullptr;
+    ICmpInst::Predicate Pred = ICmpInst::ICMP_EQ;
+    if (match(I, m_c_ICmp(Pred, m_Value(A), m_One()))) {
+      if (match(A, m_c_And(m_Value(B), m_ConstantInt(C)))) {
+        auto INT_SMIN_ADD_ONE = APInt::getSignedMinValue(C->getUniqueInteger().getBitWidth()) + 1;
+        if (INT_SMIN_ADD_ONE == C->getValue()) {
+          if (match(B, m_SExt(m_Value(X))) && X && X->getType()->isIntegerTy() && X->getType()->getIntegerBitWidth() > 2) {
+            log_optzn("Lee Wei");
+            Type* InputType = X->getType();
+            BasicBlock *BB = I->getParent();
+            IC.Builder.SetInsertPoint(BB->begin());
+            auto INPUT_SMIN_ADD_ONE = APInt::getSignedMinValue(InputType->getIntegerBitWidth()) + 1;
+            Value *AndInst = IC.Builder.CreateAnd(X, ConstantInt::get(InputType, INPUT_SMIN_ADD_ONE));
+            return CmpInst::Create(Instruction::OtherOps::ICmp, Pred, AndInst, ConstantInt::get(InputType, 1));
+          }
+        }
+      }
+    }
+  }
+
+  {
+    // 3 input
+    Value *A = nullptr;
+    Value *B = nullptr;
+    Value *C = nullptr;
+    Value *D = nullptr;
+    Value *E = nullptr;
+    ICmpInst::Predicate Pred = ICmpInst::ICMP_EQ;
+    if (match(I, m_c_ICmp(Pred, m_Value(A), m_Value(B)))) {
+      if (match(B, m_SExt(m_Value(C)))) {
+        if (match(C, m_c_And(m_Value(D), m_Value(E)))) {
+          BasicBlock *BB = I->getParent();
+          IRBuilder<> Builder(BB);
+          auto INPUT_SMAX = APInt::getSignedMaxValue(D->getType()->getIntegerBitWidth());
+          for (Use &U : A->uses()) {
+            if (Instruction* II = dyn_cast<Instruction>(U.getUser())) {
+              ICmpInst::Predicate PredULT = ICmpInst::ICMP_ULT;
+              if (match(II, m_c_ICmp(PredULT, m_Value(A), m_SpecificInt(INPUT_SMAX)))) {
+                for (Use &UI : II->uses()) {
+                  if (CallInst *CI = dyn_cast<CallInst>(UI.getUser())) {
+                    Function *Callee = CI->getCalledFunction();
+                    if (Callee && Callee->isIntrinsic() && (Callee->getIntrinsicID() == Intrinsic::assume)) {
+                      log_optzn("Lee Wei");
+                      CI->eraseFromParent();
+                      BasicBlock *BB = I->getParent();
+                      IC.Builder.SetInsertPoint(BB->begin());
+                      Value *AndInst = IC.Builder.CreateAnd(D, E);
+                      Value *TruncInst = IC.Builder.CreateTrunc(A, D->getType());
+                      return CmpInst::Create(Instruction::OtherOps::ICmp, Pred, AndInst, TruncInst);
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  // END LEE WEI
+
+  return nullptr;
 }
 
 bool InstCombinerImpl::run() {
