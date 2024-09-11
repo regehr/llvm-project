@@ -5108,6 +5108,50 @@ Instruction* cs6475_optimizer_brensen(Instruction *I) {
   // END BRENSEN VILLEGAS
 }
 
+// BEGIN DOMINIC KENNEDY
+uint64_t get_max_cmp(uint64_t add, uint64_t or_i) {
+  add -= 1;
+  uint64_t msb = 32 - __builtin_clz(add & or_i);
+  if (msb == 0) {
+    return 1;
+  }
+
+  uint64_t mask = (1UL << (msb - 1)) - 1;
+  return 1 + (mask & add) + (mask & or_i);
+}
+
+uint64_t extract_rounded_int(ConstantInt *x) {
+  uint64_t mask = (1UL << x->getUniqueInteger().getBitWidth()) - 1;
+  return x->getZExtValue() & mask;
+}
+
+Instruction* cs6475_dominic_kennedy_optimization(Instruction *I) {
+  Value *X = nullptr;
+  Value *Y = nullptr;
+  ConstantInt *CmpInt = nullptr;
+  ConstantInt *OrInt = nullptr;
+  ConstantInt *AddInt = nullptr;
+  Value *Input = nullptr;
+  if (match(I, m_ICmp(m_Value(X), m_ConstantInt(CmpInt)))) {
+    if (dyn_cast<ICmpInst>(I) != nullptr &&
+        dyn_cast<ICmpInst>(I)->getPredicate() == ICmpInst::ICMP_ULT) {
+      if(match(X, m_c_Add(m_Value(Y), m_ConstantInt(AddInt)))) {
+        if(match(Y, m_c_Or(m_Value(Input), m_ConstantInt(OrInt)))) {
+          uint64_t max_cmp = get_max_cmp(extract_rounded_int(AddInt), extract_rounded_int(OrInt));
+          if (max_cmp >= CmpInt->getZExtValue()) {
+            log_optzn("Dominic Kennedy\n");
+            Value *RetVal = ConstantInt::get(I->getContext(), APInt::getMinValue(1));
+            Instruction *NewI = BinaryOperator::CreateAnd(RetVal, RetVal);
+            return NewI;
+          }
+        }
+      }
+    }
+  }
+  return nullptr;
+}
+// END DOMINIC KENNEDY
+
 
 Instruction *cs6475_optimizer_suraj(Instruction *I) {
   // Converts
@@ -5296,7 +5340,16 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
     }
   }
   // END JOHN REGEHR
-  
+
+  // BEGIN DOMINIC KENNEDY
+  {
+    auto dk_i = cs6475_dominic_kennedy_optimization(I);
+    if (dk_i != nullptr) {
+      return dk_i;
+    }
+  }
+  // END DOMINIC KENNEDY
+
   // BEGIN JACOB KNOWLTON
   {
     Value *V1 = nullptr;
