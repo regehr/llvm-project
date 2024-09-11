@@ -5162,18 +5162,24 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
   {
   // BEGIN DIBRI NSOFOR
   // MAX - (x or MAX) → x and (MAX + 1)
+  LLVM_DEBUG(dbgs() << "My optimization pass is running!\n";);
   Value *X = nullptr;
   Value *Y = nullptr;
-  if (match(I, m_Sub(m_Constant(C), m_Value(Y)))) {
-    dbgs() << "DN: matched the 'sub'\n";
-    if (C->getUniqueInteger().isMaxSignedValue()) {
-      dbgs() << "JDR: found the max int const \n";
-      if (match(Y, m_Or(m_Value(X), m_Constant(C))) || match(Y, m_Or(m_Constant(C), m_Value(X)))) {
-        dbgs() << "DN: matched the 'or'\n";
+  Constant *C = nullptr;
+  // %b = or (sub i16 32767, %x), 32767
+  if (match(I, m_Or(m_Value(X), m_Constant(C)))) {
+    dbgs() << "DN: matched the 'or'\n";
+    if (match(X, m_Sub(m_Constant(C), m_Value(Y)))) {
+      dbgs() << "DN: matched the 'sub'\n";
+      if (C->getUniqueInteger().isMaxSignedValue()) {
+        dbgs() << "DN: found the max int const \n";
         log_optzn("Dibri Nsofor");
         unsigned bitWidth = X->getType()->getIntegerBitWidth(); // 16
-        auto SMax = APInt::getMaxValue(bitWidth); //getmaxsignedvalue
+        auto SMax = APInt::getSignedMaxValue(bitWidth); //getmaxsignedvalue
+        dbgs() << "Generated: \n" << bitWidth << "\n";
+        dbgs() << "Generated: \n" << SMax << "\n";
         Instruction *NewI = BinaryOperator::CreateAnd(X, ConstantInt::get(I->getContext(), SMax + 1));
+        dbgs() << "Generated: \n" << *NewI << "\n";
         return NewI;
       }
     }
