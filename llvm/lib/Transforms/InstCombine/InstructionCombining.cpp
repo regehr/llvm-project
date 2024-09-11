@@ -5590,7 +5590,74 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
   }
   // END TANMAY TIRPANKAR
 
- return nullptr;
+  // BEGIN LEE WEI
+  {
+    // 1 input
+    Value *A = nullptr;
+    Value *B = nullptr;
+    ConstantInt*C = nullptr;
+    Value *X = nullptr;
+    ICmpInst::Predicate Pred = ICmpInst::ICMP_EQ;
+    if (match(I, m_c_ICmp(Pred, m_Value(A), m_One()))) {
+      if (match(A, m_c_And(m_Value(B), m_ConstantInt(C)))) {
+        auto INT_SMIN_ADD_ONE = APInt::getSignedMinValue(C->getUniqueInteger().getBitWidth()) + 1;
+        if (INT_SMIN_ADD_ONE == C->getValue()) {
+          if (match(B, m_SExt(m_Value(X))) && X && X->getType()->isIntegerTy() && X->getType()->getIntegerBitWidth() > 2) {
+            log_optzn("Lee Wei");
+            Type* InputType = X->getType();
+            BasicBlock *BB = I->getParent();
+            IC.Builder.SetInsertPoint(BB->begin());
+            auto INPUT_SMIN_ADD_ONE = APInt::getSignedMinValue(InputType->getIntegerBitWidth()) + 1;
+            Value *AndInst = IC.Builder.CreateAnd(X, ConstantInt::get(InputType, INPUT_SMIN_ADD_ONE));
+            return CmpInst::Create(Instruction::OtherOps::ICmp, Pred, AndInst, ConstantInt::get(InputType, 1));
+          }
+        }
+      }
+    }
+  }
+
+  {
+    // 3 input
+    Value *A = nullptr;
+    Value *B = nullptr;
+    Value *C = nullptr;
+    Value *D = nullptr;
+    Value *E = nullptr;
+    ICmpInst::Predicate Pred = ICmpInst::ICMP_EQ;
+    if (match(I, m_c_ICmp(Pred, m_Value(A), m_Value(B)))) {
+      if (match(B, m_SExt(m_Value(C)))) {
+        if (match(C, m_c_And(m_Value(D), m_Value(E)))) {
+          BasicBlock *BB = I->getParent();
+          IRBuilder<> Builder(BB);
+          auto INPUT_SMAX = APInt::getSignedMaxValue(D->getType()->getIntegerBitWidth());
+          for (Use &U : A->uses()) {
+            if (Instruction* II = dyn_cast<Instruction>(U.getUser())) {
+              ICmpInst::Predicate PredULT = ICmpInst::ICMP_ULT;
+              if (match(II, m_c_ICmp(PredULT, m_Value(A), m_SpecificInt(INPUT_SMAX)))) {
+                for (Use &UI : II->uses()) {
+                  if (CallInst *CI = dyn_cast<CallInst>(UI.getUser())) {
+                    Function *Callee = CI->getCalledFunction();
+                    if (Callee && Callee->isIntrinsic() && (Callee->getIntrinsicID() == Intrinsic::assume)) {
+                      log_optzn("Lee Wei");
+                      CI->eraseFromParent();
+                      BasicBlock *BB = I->getParent();
+                      IC.Builder.SetInsertPoint(BB->begin());
+                      Value *AndInst = IC.Builder.CreateAnd(D, E);
+                      Value *TruncInst = IC.Builder.CreateTrunc(A, D->getType());
+                      return CmpInst::Create(Instruction::OtherOps::ICmp, Pred, AndInst, TruncInst);
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  // END LEE WEI
+
+  return nullptr;
 }
 
 bool InstCombinerImpl::run() {
