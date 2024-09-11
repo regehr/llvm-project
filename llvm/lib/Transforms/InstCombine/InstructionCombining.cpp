@@ -5207,6 +5207,55 @@ Instruction *cs6475_optimizer_tavakkoli(Instruction *I) {
   return nullptr;
 }
 
+// BEGIN KINCAID SAVOIE
+static Instruction* ksavoie_optimization(Instruction* I) {
+  // Attempt to match, bailing out if any invariant doesn't hold
+
+  Value* THREE = nullptr;
+  Value* FOUR = nullptr;
+  if(!match(I, m_Or(m_Value(THREE), m_Value(FOUR))))
+    return nullptr;
+
+  Value* ONE = nullptr;
+  Value* TWO = nullptr;
+  if(!match(THREE, m_And(m_Value(ONE), m_Value(TWO))))
+    return nullptr;
+
+  Value* X = nullptr;
+  ConstantInt* C0 = nullptr;
+  if(!match(ONE, m_And(m_Value(X), m_ConstantInt(C0))))
+    return nullptr;
+
+  if(C0->getUniqueInteger().getSExtValue() != 1)
+    return nullptr;
+
+  Value* Y = nullptr;
+  ConstantInt* C1 = nullptr;
+  if(!match(TWO, m_Xor(m_Value(Y), m_ConstantInt(C1))))
+    return nullptr;
+
+  if(C1->getUniqueInteger().getSExtValue() != -1)
+    return nullptr;
+
+  ConstantInt* C2 = nullptr;
+  if(!match(FOUR, m_And(m_Specific(X), m_ConstantInt(C2))))
+    return nullptr;
+
+  if(C2->getUniqueInteger().getSExtValue() != -2)
+    return nullptr;
+
+  // Match successful, create new instruction
+
+  IRBuilder<> Builder(I);
+  Value* V0 = Builder.CreateAnd(Y, C0);
+  Value* V1 = Builder.CreateXor(V0, C1);
+
+	log_optzn("Kincaid Savoie");
+
+	return BinaryOperator::CreateAnd(V1, X);
+}
+// END KINCAID SAVOIE
+
 Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInfo *LVI) {
   cs6475_debug("\nCS 6475 matcher: running now\n");
 
@@ -5741,6 +5790,7 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
   }
   // END LEE WEI
 
+
   // BEGIN SINA MAHDIPOUR SARAVANI
   {
     // Optimization for checking if fifth bit is zero
@@ -5785,6 +5835,11 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
     }
   }
   // END SINA MAHDIPOUR SARAVANI
+
+  // BEGIN KINCAID SAVOIE
+  if(Instruction* NewI = ksavoie_optimization(I))
+    return NewI;
+  // END KINCAID SAVOIE
 
   return nullptr;
 }
