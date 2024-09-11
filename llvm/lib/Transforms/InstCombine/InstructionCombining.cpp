@@ -5248,6 +5248,62 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
   }
   // END JOHN REGEHR
   
+  // BEGIN JACOB KNOWLTON
+  {
+    Value *V1 = nullptr;
+    Value *V2 = nullptr;
+    Value *V3 = nullptr;
+    Value *V4 = nullptr;
+    ConstantInt *C1 = nullptr;
+    // >= case
+    ICmpInst::Predicate Pred1 = ICmpInst::ICMP_SGE; 
+    if (match(I, m_ICmp(Pred1, m_Value(V1), m_Value(V2)))) {
+      if (match(V2, m_ConstantInt(C1))) {
+        if (C1->isZero()) {
+          if (match(V1, m_Mul(m_Value(V3), m_Value(V4)))) {
+            auto Mul1 = dyn_cast<BinaryOperator>(V1);
+            if (Mul1->hasNoSignedWrap()) {
+              if (match(V3, m_Mul(m_Specific(V4), m_ConstantInt(C1))) || match(V3, m_Shl(m_Specific(V4), m_ConstantInt(C1)))) {
+                auto Mul2 = dyn_cast<BinaryOperator>(V3);
+                if (Mul2->hasNoSignedWrap()) {
+                  if (C1->getUniqueInteger().isNonNegative()) {
+                    log_optzn("Jacob Knowlton");
+                    ICmpInst::Predicate Pred3 = ICmpInst::ICMP_EQ; 
+                    return new ICmpInst(Pred3, ConstantInt::getTrue(I->getContext()), ConstantInt::getTrue(I->getContext()));
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    // > case
+    ICmpInst::Predicate Pred2 = ICmpInst::ICMP_SGT; 
+    if (match(I, m_ICmp(Pred2, m_Value(V1), m_Value(V2)))) {
+      if (match(V2, m_ConstantInt(C1))) {
+        if (C1->isMinusOne()) {
+          if (match(V1, m_Mul(m_Value(V3), m_Value(V4)))) {
+            auto Mul1 = dyn_cast<BinaryOperator>(V1);
+            if (Mul1->hasNoSignedWrap()) {
+              if (match(V3, m_Mul(m_Specific(V4), m_ConstantInt(C1))) || match(V3, m_Shl(m_Specific(V4), m_ConstantInt(C1)))) {
+                auto Mul2 = dyn_cast<BinaryOperator>(V3);
+                if (Mul2->hasNoSignedWrap()) {
+                  if (C1->getUniqueInteger().isNonNegative()) {
+                    log_optzn("Jacob Knowlton");
+                    ICmpInst::Predicate Pred3 = ICmpInst::ICMP_EQ; 
+                    return new ICmpInst(Pred3, ConstantInt::getTrue(I->getContext()), ConstantInt::getTrue(I->getContext()));
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  // END JACOB KNOWLTON
+
   // BEGIN YEASEEN ARAFAT
   {
     //0x7FFFFFFF - (x ⊕ c) → x ⊕ (0x7FFFFFFF - c)
