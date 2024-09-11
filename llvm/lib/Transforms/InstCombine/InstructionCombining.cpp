@@ -5137,12 +5137,16 @@ Instruction* cs6475_dominic_kennedy_optimization(Instruction *I) {
         dyn_cast<ICmpInst>(I)->getPredicate() == ICmpInst::ICMP_ULT) {
       if(match(X, m_c_Add(m_Value(Y), m_ConstantInt(AddInt)))) {
         if(match(Y, m_c_Or(m_Value(Input), m_ConstantInt(OrInt)))) {
-          uint64_t max_cmp = get_max_cmp(extract_rounded_int(AddInt), extract_rounded_int(OrInt));
-          if (max_cmp >= CmpInt->getZExtValue()) {
-            log_optzn("Dominic Kennedy\n");
-            Value *RetVal = ConstantInt::get(I->getContext(), APInt::getMinValue(1));
-            Instruction *NewI = BinaryOperator::CreateAnd(RetVal, RetVal);
-            return NewI;
+          if (AddInt->getUniqueInteger().getBitWidth() <= 64 &&
+              OrInt->getUniqueInteger().getBitWidth() <= 64 &&
+              CmpInt->getUniqueInteger().getBitWidth() <= 64) {
+            uint64_t max_cmp = get_max_cmp(extract_rounded_int(AddInt), extract_rounded_int(OrInt));
+            if (max_cmp >= CmpInt->getZExtValue()) {
+              log_optzn("Dominic Kennedy\n");
+              Value *RetVal = ConstantInt::get(I->getContext(), APInt::getMinValue(1));
+              Instruction *NewI = BinaryOperator::CreateAnd(RetVal, RetVal);
+              return NewI;
+           }
           }
         }
       }
