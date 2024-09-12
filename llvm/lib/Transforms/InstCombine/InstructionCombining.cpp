@@ -5353,6 +5353,70 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
     }
   }
   // END DOMINIC KENNEDY
+  
+  {
+  // BEGIN JOSHUA TLATELPA-AGUSTIN
+  // trunc( ((((z*2050) & 139536) ∣ ((z*32800) & 558144)) * 65793) ≫ 16 ), z → zext64(i8)
+  // → trunc((((z*2149582850) & 36578664720) * 4311810305) ≫ 32), z → zext64(i8)
+  Value *J15 = nullptr;
+  Value *J0 = nullptr;
+  ConstantInt *J1 = nullptr;
+  Value *J2 = nullptr;
+  ConstantInt *J3 = nullptr;
+  Value *J4 = nullptr;
+  Value *J5 = nullptr;
+  Value *J6 = nullptr;
+  ConstantInt *J7 = nullptr;
+  Value *J8 = nullptr;
+  ConstantInt *J9 = nullptr;
+  Value *J10 = nullptr;
+  ConstantInt *J11 = nullptr;
+  Value *J12 = nullptr;
+  ConstantInt *J13 = nullptr;
+  Value *J14 = nullptr;
+
+  if (match(I, m_Trunc(m_Value(J15))) && J15->getType()->isIntegerTy(64)) {
+    cs6475_debug("JT: matched the 'trunc'\n");
+    if (match(J15, m_Shr(m_Value(J0), m_ConstantInt(J1))) && J1->getZExtValue() == 16) {
+      cs6475_debug("JT: matched the 'lshr'\n");
+      if (match(J0, m_Mul(m_Value(J2), m_ConstantInt(J3))) && J3->getZExtValue() == 65793) {
+        cs6475_debug("JT: matched the 'mul'\n");
+        if (match(J2, m_Or(m_Value(J4),m_Value(J5)))) {
+          cs6475_debug("JT: matched the 'or'\n");
+          if (match(J4,m_And(m_Value(J6), m_ConstantInt(J7))) && J7->getZExtValue() == 139536) {
+            cs6475_debug("JT: matched the 'and'\n");
+            if (match(J6, m_Mul(m_Value(J8), m_ConstantInt(J9))) && J9->getZExtValue() == 2050) {
+              cs6475_debug("JT: matched the 'mul'\n");
+              if (match(J5, m_And(m_Value(J10),m_ConstantInt(J11))) && J11->getZExtValue() == 558144) {
+                cs6475_debug("JT: matched the 'and'\n");
+                if (match(J10, m_Mul(m_Value(J12),m_ConstantInt(J13))) && J13->getZExtValue()==32800) {
+                  cs6475_debug("JT: matched the 'mul'\n");
+                  if (J12 == J8 && J12->getType()->isIntegerTy(64)) {
+                    cs6475_debug("JT: verify z\n");
+                    if (match(J12, m_ZExt(m_Value(J14))) && J14->getType()->isIntegerTy(8)) {
+                    cs6475_debug("JT: matched the 'zext'\n");    
+                    log_optzn("Joshua Tlatelpa-Agustin\n");                                             
+                    IRBuilder<> Builder(I);
+                    Value *first = Builder.CreateZExt(J14, Type::getInt64Ty(I->getContext()));
+                    Value *second = Builder.CreateMul(first, Builder.getInt64(2149582850));
+                    Value *third = Builder.CreateAnd(second, Builder.getInt64(36578664720));
+                    Value *forth = Builder.CreateMul(third, Builder.getInt64(4311810305));
+                    Value *fifth = Builder.CreateLShr(forth, 32);
+                    Value *sixth = Builder.CreateTrunc(fifth, Type::getInt8Ty(I->getContext()));
+                    I->replaceAllUsesWith(sixth);                                       
+                    return nullptr;                       
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }                             
+  // END JOSHUA TLATELPA-AGUSTIN
+  }
 
   // BEGIN JACOB KNOWLTON
   {
