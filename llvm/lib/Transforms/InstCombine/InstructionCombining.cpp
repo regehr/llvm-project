@@ -5345,6 +5345,53 @@ Instruction* cs6475_optimizer(Instruction *I, InstCombinerImpl &IC, LazyValueInf
   }
   // END JOHN REGEHR
 
+  // BEGIN SAMEERAN
+  {
+    /*
+    The optimization is based on (x+1)**2 - (x**2 - 2*x + 1) --> 0
+    */
+
+    Value *X_PLUS_ONE_SQUARE = nullptr;
+    Value *B_neg = nullptr;
+    Value *X_PLUS_ONE = nullptr;
+    Value *X_PLUS_ONE_AGAIN = nullptr;
+    Value *X = nullptr;
+    ConstantInt *C = nullptr;
+    ConstantInt *C_minus_one = nullptr;
+    Value *LHS = nullptr;
+    Value *TWO_X = nullptr;
+    ConstantInt *C2 = nullptr;
+
+    if (match(I, m_Add(m_Value(X_PLUS_ONE_SQUARE), m_Value(B_neg)))) {
+        cs6475_debug("Sam: Found 'add'\n");
+
+        if (match(X_PLUS_ONE_SQUARE, m_Mul(m_Value(X_PLUS_ONE), m_Value(X_PLUS_ONE_AGAIN)))) {
+            if (match(X_PLUS_ONE, m_Add(m_Value(X), m_ConstantInt(C))) && C->getUniqueInteger().isOne() && 
+                match(X_PLUS_ONE_AGAIN, m_Add(m_Value(X), m_ConstantInt(C))) && C->getUniqueInteger().isOne()) {
+                cs6475_debug("Sam: matched the '(X+1)**2'\n");
+
+                if (match(B_neg, m_Xor(m_Value(LHS), m_ConstantInt(C_minus_one))) && C_minus_one->isMinusOne()) {
+                    if (match(LHS, m_Mul(m_Value(TWO_X), m_Value(X))) && 
+                        match(TWO_X, m_Add(m_Specific(X), m_ConstantInt(C2))) && C2->equalsInt(2)) {
+                        cs6475_debug("Sam: matched the 'RHS expression'\n");
+
+                        IRBuilder<> Builder(I);
+                        auto zerovalue = APInt(I->getType()->getScalarSizeInBits(), 0);
+                        ConstantInt *cintzero = Builder.getInt(zerovalue);
+
+                        I->replaceAllUsesWith(cintzero);
+                        cs6475_debug("Sam: Applied optimization\n");
+                        log_optzn("Sameeran");
+
+                        return I;
+                    }
+                }
+            }
+        }
+    }
+  } 
+  // END SAMEERAN
+
   // BEGIN DOMINIC KENNEDY
   {
     auto dk_i = cs6475_dominic_kennedy_optimization(I);
