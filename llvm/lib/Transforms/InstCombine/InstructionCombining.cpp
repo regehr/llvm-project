@@ -5066,41 +5066,39 @@ Instruction* cs6475_optimizer(Instruction *I) {
     }
   }
   // END JOHN REGEHR
+  {
+    cs6475_debug("\nCS 6475 matcher SMR: running now\n");
 
- return nullptr;
-}
-
-Instruction *cs6475_optimizer_smr(Instruction *I) {
- cs6475_debug("\nCS 6475 matcher SMR: running now\n");
-
- // -x ⊕ 0x7FFFFFFF → x + 0x7FFFFFFF
- ConstantInt *C = nullptr;
- ConstantInt *C_max = nullptr;
- Value *X = nullptr;
- Value *Y = nullptr;
- Value *dA = nullptr;
- if (match(I,
-           m_Xor(m_Value(X), m_Value(Y)))) { // left side (X) is the next expr
-                                             // (sub). Right side (Y) is 32767
-    cs6475_debug("SMR: matched the 'xor'\n");
-    if (match(X, m_Neg(m_Value(dA)))) { // dA is actually the sub above
-      cs6475_debug("SMR: matched the 'sub'\n");
-      if (match(Y, m_ConstantInt(C_max))) {
-        if (C_max->getUniqueInteger().isMaxSignedValue()) {
-          cs6475_debug("**** aand pull! ****\n");
-          log_optzn("Saurabh Raje");
-          auto SMax =
-              APInt::getSignedMaxValue(C_max->getUniqueInteger().getBitWidth());
-          Instruction *NewI = BinaryOperator::CreateAdd(
-              dA, ConstantInt::get(I->getContext(), SMax));
-          return NewI;
+    // -x ⊕ 0x7FFFFFFF → x + 0x7FFFFFFF
+    ConstantInt *C = nullptr;
+    ConstantInt *C_max = nullptr;
+    Value *X = nullptr;
+    Value *Y = nullptr;
+    Value *dA = nullptr;
+    if (match(I, m_Xor(m_Value(X),
+                       m_Value(Y)))) { // left side (X) is the next expr
+                                       // (sub). Right side (Y) is 32767
+      cs6475_debug("SMR: matched the 'xor'\n");
+      if (match(X, m_Neg(m_Value(dA)))) { // dA is actually the sub above
+        cs6475_debug("SMR: matched the 'sub'\n");
+        if (match(Y, m_ConstantInt(C_max))) {
+          if (C_max->getUniqueInteger().isMaxSignedValue()) {
+            cs6475_debug("**** aand pull! ****\n");
+            log_optzn("Saurabh Raje");
+            auto SMax = APInt::getSignedMaxValue(
+                C_max->getUniqueInteger().getBitWidth());
+            Instruction *NewI = BinaryOperator::CreateAdd(
+                dA, ConstantInt::get(I->getContext(), SMax));
+            return NewI;
+          }
         }
       }
     }
- }
+  }
 
  return nullptr;
 }
+
 
 bool InstCombinerImpl::run() {
   while (!Worklist.isEmpty()) {
@@ -5225,7 +5223,7 @@ bool InstCombinerImpl::run() {
     LLVM_DEBUG(dbgs() << "IC: Visiting: " << OrigI << '\n');
 
     Instruction *Result = nullptr;
-    if ((Result = visit(*I)) || (Result = cs6475_optimizer(I)) || (Result = cs6475_optimizer_smr(I))) {
+    if ((Result = visit(*I)) || (Result = cs6475_optimizer(I))) {
       ++NumCombined;
       // Should we replace the old instruction with a new one?
       if (Result != I) {
