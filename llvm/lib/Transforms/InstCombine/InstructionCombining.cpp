@@ -5034,6 +5034,72 @@ void InstCombinerImpl::tryToSinkInstructionDbgVariableRecords(
   }
 }
 
+void log_optzn(std::string Name) {
+  // TODO-- John will fill in the missing code here
+}
+
+void cs6475_debug(std::string DbgString) {
+  // set this to "false" to suppress debug output, before running "ninja test"
+  // set this to "true" to see debug output, to help you understand your transformation
+  if (true)
+    dbgs() << DbgString;
+}
+
+Instruction* cs6475_optimizer(Instruction *I) {
+  cs6475_debug("\nCS 6475 matcher: running now\n");
+
+  // BEGIN JOHN REGEHR
+  // x & (0x7FFFFFFF - x) → x & 0x80000000
+  ConstantInt *C = nullptr;
+  Value *X = nullptr;
+  Value *Y = nullptr;
+  if (match(I, m_And(m_Value(X), m_Value(Y)))) {
+    cs6475_debug("JDR: matched the 'and'\n");
+    if (match(Y, m_Sub(m_ConstantInt(C), m_Specific(X)))) {
+      cs6475_debug("JDR: matched the 'sub'\n");
+      if (C->getUniqueInteger().isMaxSignedValue()) {
+	log_optzn("John Regehr");
+	auto SMin = APInt::getSignedMinValue(C->getUniqueInteger().getBitWidth());
+	Instruction *NewI = BinaryOperator::CreateAnd(X, ConstantInt::get(I->getContext(), SMin));
+	return NewI;
+      }
+    }
+  }
+  // END JOHN REGEHR
+  {
+    cs6475_debug("\nCS 6475 matcher SMR: running now\n");
+
+    // -x ⊕ 0x7FFFFFFF → x + 0x7FFFFFFF
+    ConstantInt *C = nullptr;
+    ConstantInt *C_max = nullptr;
+    Value *X = nullptr;
+    Value *Y = nullptr;
+    Value *dA = nullptr;
+    if (match(I, m_Xor(m_Value(X),
+                       m_Value(Y)))) { // left side (X) is the next expr
+                                       // (sub). Right side (Y) is 32767
+      cs6475_debug("SMR: matched the 'xor'\n");
+      if (match(X, m_Neg(m_Value(dA)))) { // dA is actually the sub above
+        cs6475_debug("SMR: matched the 'sub'\n");
+        if (match(Y, m_ConstantInt(C_max))) {
+          if (C_max->getUniqueInteger().isMaxSignedValue()) {
+            cs6475_debug("**** aand pull! ****\n");
+            log_optzn("Saurabh Raje");
+            auto SMax = APInt::getSignedMaxValue(
+                C_max->getUniqueInteger().getBitWidth());
+            Instruction *NewI = BinaryOperator::CreateAdd(
+                dA, ConstantInt::get(I->getContext(), SMax));
+            return NewI;
+          }
+        }
+      }
+    }
+  }
+
+ return nullptr;
+}
+
+
 bool InstCombinerImpl::run() {
   while (!Worklist.isEmpty()) {
     // Walk deferred instructions in reverse order, and push them to the
@@ -5156,7 +5222,8 @@ bool InstCombinerImpl::run() {
     LLVM_DEBUG(raw_string_ostream SS(OrigI); I->print(SS););
     LLVM_DEBUG(dbgs() << "IC: Visiting: " << OrigI << '\n');
 
-    if (Instruction *Result = visit(*I)) {
+    Instruction *Result = nullptr;
+    if ((Result = visit(*I)) || (Result = cs6475_optimizer(I))) {
       ++NumCombined;
       // Should we replace the old instruction with a new one?
       if (Result != I) {
