@@ -522,7 +522,7 @@ bool ReducerWorkItem::isReduced(const TestRunner &Test) const {
     exit(1);
   }
 
-  if (dist(gen) < 0.05)
+  if (dist(gen) < 0.90)
     return false;
 
   // Current Chunks aren't interesting

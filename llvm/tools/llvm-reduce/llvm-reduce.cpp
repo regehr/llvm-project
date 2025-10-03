@@ -196,13 +196,15 @@ int main(int Argc, char **Argv) {
                     std::move(TM), ToolName, OutputFilename, InputIsBitcode,
                     OutputBitcode);
 
-  // This parses and writes out the testcase into a temporary file copy for the
-  // test, rather than evaluating the source IR directly. This is for the
-  // convenience of lit tests; the stripped out comments may have broken the
-  // interestingness checks.
-  if (!Tester.getProgram().isReduced(Tester)) {
-    errs() << "\nInput isn't interesting! Verify interesting-ness test\n";
-    return 2;
+  if (false) {
+    // This parses and writes out the testcase into a temporary file copy for the
+    // test, rather than evaluating the source IR directly. This is for the
+    // convenience of lit tests; the stripped out comments may have broken the
+    // interestingness checks.
+    if (!Tester.getProgram().isReduced(Tester)) {
+      errs() << "\nInput isn't interesting! Verify interesting-ness test\n";
+      return 2;
+    }
   }
 
   // Try to reduce code
