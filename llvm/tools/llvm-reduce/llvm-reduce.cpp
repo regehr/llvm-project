@@ -95,8 +95,8 @@ static cl::opt<bool> ForceOutputBitcode(
 static cl::opt<int>
     MaxPassIterations("max-pass-iterations",
                       cl::desc("Maximum number of times to run the full set "
-                               "of delta passes (default=5)"),
-                      cl::init(5), cl::cat(LLVMReduceOptions));
+                               "of delta passes (default=100)"),
+                      cl::init(100), cl::cat(LLVMReduceOptions));
 
 static codegen::RegisterCodeGenFlags CGF;
 
