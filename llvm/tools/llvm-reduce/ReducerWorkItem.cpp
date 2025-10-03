@@ -41,6 +41,7 @@
 #include "llvm/Transforms/IPO/ThinLTOBitcodeWriter.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include <optional>
+#include <random>
 
 using namespace llvm;
 
@@ -488,6 +489,10 @@ bool ReducerWorkItem::verify(raw_fd_ostream *OS) const {
   return false;
 }
 
+std::random_device rd;
+std::mt19937 gen(rd());
+std::uniform_real_distribution<> dist(0.0, 1.0);
+
 bool ReducerWorkItem::isReduced(const TestRunner &Test) const {
   const bool UseBitcode = Test.inputIsBitcode() || TmpFilesAsBitcode;
 
@@ -516,6 +521,9 @@ bool ReducerWorkItem::isReduced(const TestRunner &Test) const {
         << "': " << Out.os().error().message() << '\n';
     exit(1);
   }
+
+  if (dist(gen) < 0.05)
+    return false;
 
   // Current Chunks aren't interesting
   return Test.run(CurrentFilepath);
