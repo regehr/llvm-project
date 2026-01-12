@@ -16,6 +16,7 @@
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/ConstraintSystem.h"
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -39,6 +40,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/DebugCounter.h"
+#include "llvm/Support/KnownBits.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
@@ -62,6 +64,10 @@ static cl::opt<unsigned>
 static cl::opt<bool> DumpReproducers(
     "constraint-elimination-dump-reproducers", cl::init(false), cl::Hidden,
     cl::desc("Dump IR to reproduce successful transformations."));
+
+static cl::opt<bool> UseKnownBits(
+    "constraint-elimination-use-known-bits", cl::init(true), cl::Hidden,
+    cl::desc("Use computeKnownBits-derived bounds for simplification."));
 
 static int64_t MaxConstraintValue = std::numeric_limits<int64_t>::max();
 static int64_t MinSignedConstraintValue = std::numeric_limits<int64_t>::min();
@@ -902,6 +908,10 @@ void ConstraintInfo::transferToOtherSystem(
     return doesHold(CmpInst::ICMP_SGE, V, ConstantInt::get(V->getType(), 0)) ||
            isKnownNonNegative(V, DL, /*Depth=*/MaxAnalysisRecursionDepth - 1);
   };
+  auto IsKnownNegative = [this](Value *V) {
+    return doesHold(CmpInst::ICMP_SLT, V, ConstantInt::get(V->getType(), 0)) ||
+           isKnownNegative(V, DL, /*Depth=*/MaxAnalysisRecursionDepth - 1);
+  };
   // Check if we can combine facts from the signed and unsigned systems to
   // derive additional facts.
   if (!A->getType()->isIntegerTy())
@@ -921,6 +931,9 @@ void ConstraintInfo::transferToOtherSystem(
       addFact(ICmpInst::getSignedPredicate(Pred), A, B, NumIn, NumOut,
               DFSInStack);
     }
+    if (UseKnownBits && IsKnownNegative(A) && IsKnownNegative(B))
+      addFact(ICmpInst::getSignedPredicate(Pred), A, B, NumIn, NumOut,
+              DFSInStack);
     break;
   case CmpInst::ICMP_UGE:
   case CmpInst::ICMP_UGT:
@@ -931,10 +944,19 @@ void ConstraintInfo::transferToOtherSystem(
       addFact(ICmpInst::getSignedPredicate(Pred), A, B, NumIn, NumOut,
               DFSInStack);
     }
+    if (UseKnownBits && IsKnownNegative(A) && IsKnownNegative(B))
+      addFact(ICmpInst::getSignedPredicate(Pred), A, B, NumIn, NumOut,
+              DFSInStack);
     break;
   case CmpInst::ICMP_SLT:
     if (IsKnownNonNegative(A))
       addFact(CmpInst::ICMP_ULT, A, B, NumIn, NumOut, DFSInStack);
+    if (UseKnownBits && IsKnownNegative(A) && IsKnownNegative(B))
+      addFact(CmpInst::ICMP_ULT, A, B, NumIn, NumOut, DFSInStack);
+    break;
+  case CmpInst::ICMP_SLE:
+    if (UseKnownBits && IsKnownNegative(A) && IsKnownNegative(B))
+      addFact(CmpInst::ICMP_ULE, A, B, NumIn, NumOut, DFSInStack);
     break;
   case CmpInst::ICMP_SGT: {
     if (doesHold(CmpInst::ICMP_SGE, B, Constant::getAllOnesValue(B->getType())))
@@ -942,11 +964,15 @@ void ConstraintInfo::transferToOtherSystem(
               NumOut, DFSInStack);
     if (IsKnownNonNegative(B))
       addFact(CmpInst::ICMP_UGT, A, B, NumIn, NumOut, DFSInStack);
+    if (UseKnownBits && IsKnownNegative(A) && IsKnownNegative(B))
+      addFact(CmpInst::ICMP_UGT, A, B, NumIn, NumOut, DFSInStack);
 
     break;
   }
   case CmpInst::ICMP_SGE:
     if (IsKnownNonNegative(B))
+      addFact(CmpInst::ICMP_UGE, A, B, NumIn, NumOut, DFSInStack);
+    if (UseKnownBits && IsKnownNegative(A) && IsKnownNegative(B))
       addFact(CmpInst::ICMP_UGE, A, B, NumIn, NumOut, DFSInStack);
     break;
   }
@@ -1494,14 +1520,119 @@ static void generateReproducer(CmpInst *Cond, Module *M,
   assert(!verifyFunction(*F, &dbgs()));
 }
 
+static unsigned addKnownBitsConstraints(Value *V, bool IsSigned,
+                                        Instruction *ContextInst,
+                                        AssumptionCache *AC,
+                                        DominatorTree *DT, ConstraintInfo &Info,
+                                        ConstraintSystem &CS) {
+  if (!ContextInst)
+    return 0;
+
+  if (!V->getType()->isIntegerTy())
+    return 0;
+  unsigned BitWidth = V->getType()->getIntegerBitWidth();
+  if (BitWidth == 0 || BitWidth > 64)
+    return 0;
+
+  auto &Value2Index = Info.getValue2Index(IsSigned);
+  auto It = Value2Index.find(V);
+  if (It == Value2Index.end())
+    return 0;
+
+  KnownBits Known(BitWidth);
+  computeKnownBits(V, Known, ContextInst->getModule()->getDataLayout(), AC,
+                   ContextInst, DT);
+  if (Known.hasConflict())
+    return 0;
+
+  APInt Min = IsSigned ? Known.getSignedMinValue() : Known.getMinValue();
+  APInt Max = IsSigned ? Known.getSignedMaxValue() : Known.getMaxValue();
+
+  unsigned Added = 0;
+  auto AddRow = [&](int64_t Const, int64_t Coeff) {
+    SmallVector<int64_t, 8> Row(Value2Index.size() + 1, 0);
+    Row[0] = Const;
+    Row[It->second] = Coeff;
+    if (CS.addVariableRow(Row))
+      ++Added;
+  };
+
+  if (IsSigned ? Min.isSignedIntN(64) : Min.ule(MaxConstraintValue)) {
+    int64_t MinVal = IsSigned ? Min.getSExtValue()
+                              : static_cast<int64_t>(Min.getZExtValue());
+    int64_t NegMin;
+    if (!SubOverflow(int64_t(0), MinVal, NegMin))
+      AddRow(NegMin, -1);
+  }
+
+  if (IsSigned ? Max.isSignedIntN(64) : Max.ule(MaxConstraintValue)) {
+    int64_t MaxVal = IsSigned ? Max.getSExtValue()
+                              : static_cast<int64_t>(Max.getZExtValue());
+    AddRow(MaxVal, 1);
+  }
+
+  return Added;
+}
+
+static std::optional<bool>
+checkKnownBitsCondition(CmpInst::Predicate Pred, Value *A, Value *B,
+                         Instruction *ContextInst, AssumptionCache *AC,
+                         DominatorTree *DT) {
+  if (!ContextInst || !A->getType()->isIntegerTy() ||
+      A->getType() != B->getType())
+    return std::nullopt;
+
+  unsigned BitWidth = A->getType()->getIntegerBitWidth();
+  KnownBits KnownA(BitWidth);
+  KnownBits KnownB(BitWidth);
+  computeKnownBits(A, KnownA, ContextInst->getModule()->getDataLayout(), AC,
+                   ContextInst, DT);
+  computeKnownBits(B, KnownB, ContextInst->getModule()->getDataLayout(), AC,
+                   ContextInst, DT);
+  if (KnownA.hasConflict() || KnownB.hasConflict())
+    return std::nullopt;
+
+  if (CmpInst::isEquality(Pred))
+    return Pred == CmpInst::ICMP_EQ ? KnownBits::eq(KnownA, KnownB)
+                                    : KnownBits::ne(KnownA, KnownB);
+
+  switch (Pred) {
+  case CmpInst::ICMP_ULT:
+    return KnownBits::ult(KnownA, KnownB);
+  case CmpInst::ICMP_ULE:
+    return KnownBits::ule(KnownA, KnownB);
+  case CmpInst::ICMP_UGT:
+    return KnownBits::ugt(KnownA, KnownB);
+  case CmpInst::ICMP_UGE:
+    return KnownBits::uge(KnownA, KnownB);
+  case CmpInst::ICMP_SLT:
+    return KnownBits::slt(KnownA, KnownB);
+  case CmpInst::ICMP_SLE:
+    return KnownBits::sle(KnownA, KnownB);
+  case CmpInst::ICMP_SGT:
+    return KnownBits::sgt(KnownA, KnownB);
+  case CmpInst::ICMP_SGE:
+    return KnownBits::sge(KnownA, KnownB);
+  default:
+    return std::nullopt;
+  }
+}
+
 static std::optional<bool> checkCondition(CmpInst::Predicate Pred, Value *A,
                                           Value *B, Instruction *CheckInst,
-                                          ConstraintInfo &Info) {
+                                          Instruction *ContextInst,
+                                          ConstraintInfo &Info,
+                                          AssumptionCache *AC,
+                                          DominatorTree *DT) {
   LLVM_DEBUG(dbgs() << "Checking " << *CheckInst << "\n");
 
   auto R = Info.getConstraintForSolving(Pred, A, B);
   if (R.empty() || !R.isValid(Info)) {
     LLVM_DEBUG(dbgs() << "   failed to decompose condition\n");
+    if (UseKnownBits) {
+      Instruction *KBContext = ContextInst ? ContextInst : CheckInst;
+      return checkKnownBitsCondition(Pred, A, B, KBContext, AC, DT);
+    }
     return std::nullopt;
   }
 
@@ -1510,10 +1641,22 @@ static std::optional<bool> checkCondition(CmpInst::Predicate Pred, Value *A,
   // If there was extra information collected during decomposition, apply
   // it now and remove it immediately once we are done with reasoning
   // about the constraint.
+  unsigned AddedRows = 0;
+  auto AddRow = [&](ArrayRef<int64_t> Row) {
+    if (CSToUse.addVariableRow(Row))
+      ++AddedRows;
+  };
   for (auto &Row : R.ExtraInfo)
-    CSToUse.addVariableRow(Row);
+    AddRow(Row);
+  if (UseKnownBits) {
+    Instruction *KBContext = ContextInst ? ContextInst : CheckInst;
+    AddedRows += addKnownBitsConstraints(A, R.IsSigned, KBContext, AC, DT, Info,
+                                         CSToUse);
+    AddedRows += addKnownBitsConstraints(B, R.IsSigned, KBContext, AC, DT, Info,
+                                         CSToUse);
+  }
   llvm::scope_exit InfoRestorer([&]() {
-    for (unsigned I = 0; I < R.ExtraInfo.size(); ++I)
+    for (unsigned I = 0; I < AddedRows; ++I)
       CSToUse.popLastConstraint();
   });
 
@@ -1532,12 +1675,17 @@ static std::optional<bool> checkCondition(CmpInst::Predicate Pred, Value *A,
     return ImpliedCondition;
   }
 
+  if (UseKnownBits) {
+    Instruction *KBContext = ContextInst ? ContextInst : CheckInst;
+    return checkKnownBitsCondition(Pred, A, B, KBContext, AC, DT);
+  }
+
   return std::nullopt;
 }
 
 static bool checkAndReplaceCondition(
-    ICmpInst *Cmp, ConstraintInfo &Info, unsigned NumIn, unsigned NumOut,
-    Instruction *ContextInst, Module *ReproducerModule,
+    ICmpInst *Cmp, ConstraintInfo &Info, AssumptionCache &AC, unsigned NumIn,
+    unsigned NumOut, Instruction *ContextInst, Module *ReproducerModule,
     ArrayRef<ReproducerEntry> ReproducerCondStack, DominatorTree &DT,
     SmallVectorImpl<Instruction *> &ToRemove) {
   auto ReplaceCmpWithConstant = [&](CmpInst *Cmp, bool IsTrue) {
@@ -1590,7 +1738,7 @@ static bool checkAndReplaceCondition(
 
   if (auto ImpliedCondition =
           checkCondition(Cmp->getPredicate(), Cmp->getOperand(0),
-                         Cmp->getOperand(1), Cmp, Info))
+                         Cmp->getOperand(1), Cmp, ContextInst, Info, &AC, &DT))
     return ReplaceCmpWithConstant(Cmp, *ImpliedCondition);
 
   // When the predicate is samesign and unsigned, we can also make use of the
@@ -1598,13 +1746,15 @@ static bool checkAndReplaceCondition(
   if (Cmp->hasSameSign() && Cmp->isUnsigned())
     if (auto ImpliedCondition =
             checkCondition(Cmp->getSignedPredicate(), Cmp->getOperand(0),
-                           Cmp->getOperand(1), Cmp, Info))
+                           Cmp->getOperand(1), Cmp, ContextInst, Info, &AC,
+                           &DT))
       return ReplaceCmpWithConstant(Cmp, *ImpliedCondition);
 
   return false;
 }
 
 static bool checkAndReplaceMinMax(MinMaxIntrinsic *MinMax, ConstraintInfo &Info,
+                                  AssumptionCache &AC, DominatorTree &DT,
                                   SmallVectorImpl<Instruction *> &ToRemove) {
   auto ReplaceMinMaxWithOperand = [&](MinMaxIntrinsic *MinMax, bool UseLHS) {
     // TODO: generate reproducer for min/max.
@@ -1616,29 +1766,35 @@ static bool checkAndReplaceMinMax(MinMaxIntrinsic *MinMax, ConstraintInfo &Info,
   ICmpInst::Predicate Pred =
       ICmpInst::getNonStrictPredicate(MinMax->getPredicate());
   if (auto ImpliedCondition = checkCondition(
-          Pred, MinMax->getOperand(0), MinMax->getOperand(1), MinMax, Info))
+          Pred, MinMax->getOperand(0), MinMax->getOperand(1), MinMax, MinMax,
+          Info, &AC, &DT))
     return ReplaceMinMaxWithOperand(MinMax, *ImpliedCondition);
   if (auto ImpliedCondition = checkCondition(
-          Pred, MinMax->getOperand(1), MinMax->getOperand(0), MinMax, Info))
+          Pred, MinMax->getOperand(1), MinMax->getOperand(0), MinMax, MinMax,
+          Info, &AC, &DT))
     return ReplaceMinMaxWithOperand(MinMax, !*ImpliedCondition);
   return false;
 }
 
 static bool checkAndReplaceCmp(CmpIntrinsic *I, ConstraintInfo &Info,
+                               AssumptionCache &AC, DominatorTree &DT,
                                SmallVectorImpl<Instruction *> &ToRemove) {
   Value *LHS = I->getOperand(0);
   Value *RHS = I->getOperand(1);
-  if (checkCondition(I->getGTPredicate(), LHS, RHS, I, Info).value_or(false)) {
+  if (checkCondition(I->getGTPredicate(), LHS, RHS, I, I, Info, &AC, &DT)
+          .value_or(false)) {
     I->replaceAllUsesWith(ConstantInt::get(I->getType(), 1));
     ToRemove.push_back(I);
     return true;
   }
-  if (checkCondition(I->getLTPredicate(), LHS, RHS, I, Info).value_or(false)) {
+  if (checkCondition(I->getLTPredicate(), LHS, RHS, I, I, Info, &AC, &DT)
+          .value_or(false)) {
     I->replaceAllUsesWith(ConstantInt::getSigned(I->getType(), -1));
     ToRemove.push_back(I);
     return true;
   }
-  if (checkCondition(ICmpInst::ICMP_EQ, LHS, RHS, I, Info).value_or(false)) {
+  if (checkCondition(ICmpInst::ICMP_EQ, LHS, RHS, I, I, Info, &AC, &DT)
+          .value_or(false)) {
     I->replaceAllUsesWith(ConstantInt::get(I->getType(), 0));
     ToRemove.push_back(I);
     return true;
@@ -1668,6 +1824,7 @@ static bool checkOrAndOpImpliedByOther(
     FactOrCheck &CB, ConstraintInfo &Info, Module *ReproducerModule,
     SmallVectorImpl<ReproducerEntry> &ReproducerCondStack,
     SmallVectorImpl<StackEntry> &DFSInStack,
+    AssumptionCache &AC, DominatorTree &DT,
     SmallVectorImpl<Instruction *> &ToRemove) {
   Instruction *JoinOp = CB.getContextInst();
   if (JoinOp->use_empty())
@@ -1718,7 +1875,8 @@ static bool checkOrAndOpImpliedByOther(
   // Check if the second condition can be simplified now.
   if (auto ImpliedCondition =
           checkCondition(CmpToCheck->getPredicate(), CmpToCheck->getOperand(0),
-                         CmpToCheck->getOperand(1), CmpToCheck, Info)) {
+                         CmpToCheck->getOperand(1), CmpToCheck, JoinOp, Info,
+                         &AC, &DT)) {
     if (IsOr == *ImpliedCondition)
       JoinOp->replaceAllUsesWith(
           ConstantInt::getBool(JoinOp->getType(), *ImpliedCondition));
@@ -1837,15 +1995,10 @@ static bool replaceSubOverflowUses(IntrinsicInst *II, Value *A, Value *B,
 
 static bool
 tryToSimplifyOverflowMath(IntrinsicInst *II, ConstraintInfo &Info,
+                          AssumptionCache &AC, DominatorTree &DT,
                           SmallVectorImpl<Instruction *> &ToRemove) {
-  auto DoesConditionHold = [](CmpInst::Predicate Pred, Value *A, Value *B,
-                              ConstraintInfo &Info) {
-    auto R = Info.getConstraintForSolving(Pred, A, B);
-    if (R.size() < 2 || !R.isValid(Info))
-      return false;
-
-    auto &CSToUse = Info.getCS(R.IsSigned);
-    return CSToUse.isConditionImplied(R.Coefficients);
+  auto DoesConditionHold = [&](CmpInst::Predicate Pred, Value *A, Value *B) {
+    return checkCondition(Pred, A, B, II, II, Info, &AC, &DT).value_or(false);
   };
 
   bool Changed = false;
@@ -1854,9 +2007,9 @@ tryToSimplifyOverflowMath(IntrinsicInst *II, ConstraintInfo &Info,
     // can be simplified to a regular sub.
     Value *A = II->getArgOperand(0);
     Value *B = II->getArgOperand(1);
-    if (!DoesConditionHold(CmpInst::ICMP_SGE, A, B, Info) ||
+    if (!DoesConditionHold(CmpInst::ICMP_SGE, A, B) ||
         !DoesConditionHold(CmpInst::ICMP_SGE, B,
-                           ConstantInt::get(A->getType(), 0), Info))
+                           ConstantInt::get(A->getType(), 0)))
       return false;
     Changed = replaceSubOverflowUses(II, A, B, ToRemove);
   }
@@ -1864,7 +2017,7 @@ tryToSimplifyOverflowMath(IntrinsicInst *II, ConstraintInfo &Info,
 }
 
 static bool eliminateConstraints(Function &F, DominatorTree &DT, LoopInfo &LI,
-                                 ScalarEvolution &SE,
+                                 ScalarEvolution &SE, AssumptionCache &AC,
                                  OptimizationRemarkEmitter &ORE,
                                  TargetLibraryInfo &TLI) {
   bool Changed = false;
@@ -1951,22 +2104,22 @@ static bool eliminateConstraints(Function &F, DominatorTree &DT, LoopInfo &LI,
       LLVM_DEBUG(dbgs() << "Processing condition to simplify: " << *Inst
                         << "\n");
       if (auto *II = dyn_cast<WithOverflowInst>(Inst)) {
-        Changed |= tryToSimplifyOverflowMath(II, Info, ToRemove);
+        Changed |= tryToSimplifyOverflowMath(II, Info, AC, DT, ToRemove);
       } else if (auto *Cmp = dyn_cast<ICmpInst>(Inst)) {
         bool Simplified = checkAndReplaceCondition(
-            Cmp, Info, CB.NumIn, CB.NumOut, CB.getContextInst(),
+            Cmp, Info, AC, CB.NumIn, CB.NumOut, CB.getContextInst(),
             ReproducerModule.get(), ReproducerCondStack, S.DT, ToRemove);
         if (!Simplified &&
             match(CB.getContextInst(), m_LogicalOp(m_Value(), m_Value()))) {
           Simplified = checkOrAndOpImpliedByOther(
               CB, Info, ReproducerModule.get(), ReproducerCondStack, DFSInStack,
-              ToRemove);
+              AC, DT, ToRemove);
         }
         Changed |= Simplified;
       } else if (auto *MinMax = dyn_cast<MinMaxIntrinsic>(Inst)) {
-        Changed |= checkAndReplaceMinMax(MinMax, Info, ToRemove);
+        Changed |= checkAndReplaceMinMax(MinMax, Info, AC, DT, ToRemove);
       } else if (auto *CmpIntr = dyn_cast<CmpIntrinsic>(Inst)) {
-        Changed |= checkAndReplaceCmp(CmpIntr, Info, ToRemove);
+        Changed |= checkAndReplaceCmp(CmpIntr, Info, AC, DT, ToRemove);
       }
       continue;
     }
@@ -2118,9 +2271,10 @@ PreservedAnalyses ConstraintEliminationPass::run(Function &F,
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
   auto &LI = AM.getResult<LoopAnalysis>(F);
   auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
+  auto &AC = AM.getResult<AssumptionAnalysis>(F);
   auto &ORE = AM.getResult<OptimizationRemarkEmitterAnalysis>(F);
   auto &TLI = AM.getResult<TargetLibraryAnalysis>(F);
-  if (!eliminateConstraints(F, DT, LI, SE, ORE, TLI))
+  if (!eliminateConstraints(F, DT, LI, SE, AC, ORE, TLI))
     return PreservedAnalyses::all();
 
   PreservedAnalyses PA;
