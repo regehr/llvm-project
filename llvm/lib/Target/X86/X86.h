@@ -87,7 +87,14 @@ public:
 FunctionPass *createX86FixupInstTuningLegacyPass();
 
 /// Return a pass that reduces the size of vector constant pool loads.
-FunctionPass *createX86FixupVectorConstants();
+class X86FixupVectorConstantsPass
+    : public PassInfoMixin<X86FixupInstTuningPass> {
+public:
+  PreservedAnalyses run(MachineFunction &MF,
+                        MachineFunctionAnalysisManager &MFAM);
+};
+
+FunctionPass *createX86FixupVectorConstantsLegacyPass();
 
 /// Return a pass that removes redundant LEA instructions and redundant address
 /// recalculations.
@@ -140,7 +147,13 @@ public:
 FunctionPass *createX86DynAllocaExpanderLegacyPass();
 
 /// Return a pass that config the tile registers.
-FunctionPass *createX86TileConfigPass();
+class X86TileConfigPass : public PassInfoMixin<X86TileConfigPass> {
+public:
+  PreservedAnalyses run(MachineFunction &MF,
+                        MachineFunctionAnalysisManager &MFAM);
+};
+
+FunctionPass *createX86TileConfigLegacyPass();
 
 /// Return a pass that preconfig the tile registers before fast reg allocation.
 class X86FastPreTileConfigPass
@@ -162,7 +175,13 @@ public:
 FunctionPass *createX86FastTileConfigLegacyPass();
 
 /// Return a pass that insert pseudo tile config instruction.
-FunctionPass *createX86PreTileConfigPass();
+class X86PreTileConfigPass : public PassInfoMixin<X86PreTileConfigPass> {
+public:
+  PreservedAnalyses run(MachineFunction &MF,
+                        MachineFunctionAnalysisManager &MFAM);
+};
+
+FunctionPass *createX86PreTileConfigLegacyPass();
 
 /// Return a pass that lower the tile copy instruction.
 class X86LowerTileCopyPass : public PassInfoMixin<X86LowerTileCopyPass> {
@@ -298,6 +317,16 @@ public:
 
 FunctionPass *createX86LowerAMXTypeLegacyPass();
 
+// Suppresses APX features for relocations for supporting older linkers.
+class X86SuppressAPXForRelocationPass
+    : public PassInfoMixin<X86SuppressAPXForRelocationPass> {
+public:
+  PreservedAnalyses run(MachineFunction &MF,
+                        MachineFunctionAnalysisManager &MFAM);
+};
+
+FunctionPass *createX86SuppressAPXForRelocationLegacyPass();
+
 /// The pass transforms amx intrinsics to scalar operation if the function has
 /// optnone attribute or it is O0.
 class X86LowerAMXIntrinsicsPass
@@ -323,7 +352,6 @@ FunctionPass *createX86LoadValueInjectionRetHardeningPass();
 FunctionPass *createX86SpeculativeLoadHardeningPass();
 FunctionPass *createX86SpeculativeExecutionSideEffectSuppression();
 FunctionPass *createX86ArgumentStackSlotPass();
-FunctionPass *createX86SuppressAPXForRelocationPass();
 
 void initializeCompressEVEXLegacyPass(PassRegistry &);
 void initializeX86FixupBWInstLegacyPass(PassRegistry &);
@@ -331,7 +359,7 @@ void initializeFixupLEAsLegacyPass(PassRegistry &);
 void initializeX86ArgumentStackSlotPassPass(PassRegistry &);
 void initializeX86AsmPrinterPass(PassRegistry &);
 void initializeX86FixupInstTuningLegacyPass(PassRegistry &);
-void initializeX86FixupVectorConstantsPassPass(PassRegistry &);
+void initializeX86FixupVectorConstantsLegacyPass(PassRegistry &);
 void initializeWinEHStatePassPass(PassRegistry &);
 void initializeX86AvoidSFBLegacyPass(PassRegistry &);
 void initializeX86AvoidTrailingCallLegacyPassPass(PassRegistry &);
@@ -354,12 +382,12 @@ void initializeX86LowerAMXTypeLegacyPassPass(PassRegistry &);
 void initializeX86LowerTileCopyLegacyPass(PassRegistry &);
 void initializeX86OptimizeLEAsLegacyPass(PassRegistry &);
 void initializeX86PartialReductionLegacyPass(PassRegistry &);
-void initializeX86PreTileConfigPass(PassRegistry &);
+void initializeX86PreTileConfigLegacyPass(PassRegistry &);
 void initializeX86ReturnThunksPass(PassRegistry &);
 void initializeX86SpeculativeExecutionSideEffectSuppressionPass(PassRegistry &);
 void initializeX86SpeculativeLoadHardeningPassPass(PassRegistry &);
-void initializeX86TileConfigPass(PassRegistry &);
-void initializeX86SuppressAPXForRelocationPassPass(PassRegistry &);
+void initializeX86SuppressAPXForRelocationLegacyPass(PassRegistry &);
+void initializeX86TileConfigLegacyPass(PassRegistry &);
 void initializeX86WinEHUnwindV2Pass(PassRegistry &);
 void initializeX86PreLegalizerCombinerPass(PassRegistry &);
 

@@ -70,7 +70,7 @@ extern "C" LLVM_C_ABI void LLVMInitializeX86Target() {
   PassRegistry &PR = *PassRegistry::getPassRegistry();
   initializeX86LowerAMXIntrinsicsLegacyPassPass(PR);
   initializeX86LowerAMXTypeLegacyPassPass(PR);
-  initializeX86PreTileConfigPass(PR);
+  initializeX86PreTileConfigLegacyPass(PR);
   initializeGlobalISel(PR);
   initializeWinEHStatePassPass(PR);
   initializeX86FixupBWInstLegacyPass(PR);
@@ -80,7 +80,7 @@ extern "C" LLVM_C_ABI void LLVMInitializeX86Target() {
   initializeX86FixupSetCCLegacyPass(PR);
   initializeX86CallFrameOptimizationLegacyPass(PR);
   initializeX86CmovConversionLegacyPass(PR);
-  initializeX86TileConfigPass(PR);
+  initializeX86TileConfigLegacyPass(PR);
   initializeX86FastPreTileConfigLegacyPass(PR);
   initializeX86FastTileConfigLegacyPass(PR);
   initializeKCFIPass(PR);
@@ -103,9 +103,9 @@ extern "C" LLVM_C_ABI void LLVMInitializeX86Target() {
   initializeX86ArgumentStackSlotPassPass(PR);
   initializeX86AsmPrinterPass(PR);
   initializeX86FixupInstTuningLegacyPass(PR);
-  initializeX86FixupVectorConstantsPassPass(PR);
+  initializeX86FixupVectorConstantsLegacyPass(PR);
   initializeX86DynAllocaExpanderLegacyPass(PR);
-  initializeX86SuppressAPXForRelocationPassPass(PR);
+  initializeX86SuppressAPXForRelocationLegacyPass(PR);
   initializeX86WinEHUnwindV2Pass(PR);
   initializeX86PreLegalizerCombinerPass(PR);
 }
@@ -520,14 +520,14 @@ void X86PassConfig::addPreRegAlloc() {
     addPass(createX86AvoidStoreForwardingBlocksLegacyPass());
   }
 
-  addPass(createX86SuppressAPXForRelocationPass());
+  addPass(createX86SuppressAPXForRelocationLegacyPass());
 
   addPass(createX86SpeculativeLoadHardeningPass());
   addPass(createX86FlagsCopyLoweringLegacyPass());
   addPass(createX86DynAllocaExpanderLegacyPass());
 
   if (getOptLevel() != CodeGenOptLevel::None)
-    addPass(createX86PreTileConfigPass());
+    addPass(createX86PreTileConfigLegacyPass());
   else
     addPass(createX86FastPreTileConfigLegacyPass());
 }
@@ -568,7 +568,7 @@ void X86PassConfig::addPreEmitPass() {
     addPass(createX86PadShortFunctions());
     addPass(createX86FixupLEAsLegacyPass());
     addPass(createX86FixupInstTuningLegacyPass());
-    addPass(createX86FixupVectorConstants());
+    addPass(createX86FixupVectorConstantsLegacyPass());
   }
   addPass(createX86CompressEVEXLegacyPass());
   addPass(createX86InsertX87waitPass());
@@ -655,7 +655,7 @@ bool X86PassConfig::addRegAssignAndRewriteOptimized() {
   if (!isCustomizedRegAlloc() && EnableTileRAPass) {
     // Allocate tile register first.
     addPass(createGreedyRegisterAllocator(onlyAllocateTileRegisters));
-    addPass(createX86TileConfigPass());
+    addPass(createX86TileConfigLegacyPass());
   }
   return TargetPassConfig::addRegAssignAndRewriteOptimized();
 }
