@@ -153,7 +153,6 @@ struct MissingFeatures {
   static bool emitBodyAndFallthrough() { return false; }
   static bool coroOutsideFrameMD() { return false; }
   static bool coroCoReturn() { return false; }
-  static bool coroCoYield() { return false; }
   static bool coroutineExceptions() { return false; };
 
   // Various handling of deferred processing in CIRGenModule.
@@ -193,6 +192,7 @@ struct MissingFeatures {
   // LowerModule handling
   static bool lowerModuleCodeGenOpts() { return false; }
   static bool lowerModuleLangOpts() { return false; }
+  static bool targetLoweringInfo() { return false; }
 
   // Misc
   static bool aarch64SIMDIntrinsics() { return false; }
