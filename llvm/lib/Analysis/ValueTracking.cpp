@@ -220,7 +220,7 @@ static bool haveNoCommonBitsSetSpecialCases(const Value *LHS, const Value *RHS,
 
   // Look for: (X << V) op (Y >> (BitWidth - V))
   // or        (X >> V) op (Y << (BitWidth - V))
-  {
+  if (EnableSpecializedXferFuncs) {
     const Value *V;
     const APInt *R;
     if (((match(RHS, m_Shl(m_Value(), m_Sub(m_APInt(R), m_Value(V)))) &&
@@ -285,8 +285,9 @@ bool llvm::isKnownNonNegative(const Value *V, const SimplifyQuery &SQ,
 
 bool llvm::isKnownPositive(const Value *V, const SimplifyQuery &SQ,
                            unsigned Depth) {
-  if (auto *CI = dyn_cast<ConstantInt>(V))
-    return CI->getValue().isStrictlyPositive();
+  if (EnableSpecializedXferFuncs)
+    if (auto *CI = dyn_cast<ConstantInt>(V))
+      return CI->getValue().isStrictlyPositive();
 
   // If `isKnownNonNegative` ever becomes more sophisticated, make sure to keep
   // this updated.
@@ -759,25 +760,28 @@ static bool cmpExcludesZero(CmpInst::Predicate Pred, const Value *RHS) {
     return match(RHS, m_Zero());
 
   // All other predicates - rely on generic ConstantRange handling.
-  const APInt *C;
-  auto Zero = APInt::getZero(RHS->getType()->getScalarSizeInBits());
-  if (match(RHS, m_APInt(C))) {
-    ConstantRange TrueValues = ConstantRange::makeExactICmpRegion(Pred, *C);
-    return !TrueValues.contains(Zero);
-  }
+  if (EnableSpecializedXferFuncs) {
+    const APInt *C;
+    auto Zero = APInt::getZero(RHS->getType()->getScalarSizeInBits());
+    if (match(RHS, m_APInt(C))) {
+      ConstantRange TrueValues = ConstantRange::makeExactICmpRegion(Pred, *C);
+      return !TrueValues.contains(Zero);
+    }
 
-  auto *VC = dyn_cast<ConstantDataVector>(RHS);
-  if (VC == nullptr)
-    return false;
-
-  for (unsigned ElemIdx = 0, NElem = VC->getNumElements(); ElemIdx < NElem;
-       ++ElemIdx) {
-    ConstantRange TrueValues = ConstantRange::makeExactICmpRegion(
-        Pred, VC->getElementAsAPInt(ElemIdx));
-    if (TrueValues.contains(Zero))
+    auto *VC = dyn_cast<ConstantDataVector>(RHS);
+    if (VC == nullptr)
       return false;
+
+    for (unsigned ElemIdx = 0, NElem = VC->getNumElements(); ElemIdx < NElem;
+         ++ElemIdx) {
+      ConstantRange TrueValues = ConstantRange::makeExactICmpRegion(
+          Pred, VC->getElementAsAPInt(ElemIdx));
+      if (TrueValues.contains(Zero))
+        return false;
+    }
+    return true;
   }
-  return true;
+  return false;
 }
 
 static void breakSelfRecursivePHI(const Use *U, const PHINode *PHI,
@@ -904,6 +908,9 @@ static void computeKnownBitsFromCmp(const Value *V, CmpInst::Predicate Pred,
   unsigned BitWidth = Known.getBitWidth();
   auto m_V =
       m_CombineOr(m_Specific(V), m_PtrToIntSameSize(Q.DL, m_Specific(V)));
+
+  if (!EnableSpecializedXferFuncs)
+    return;
 
   Value *Y;
   const APInt *Mask, *C;
@@ -1635,9 +1642,11 @@ static void computeKnownBitsFromOperator(const Operator *I,
     computeKnownBitsFromShiftOperator(I, DemandedElts, Known, Known2, Q, Depth,
                                       KF);
     // Trailing zeros of a right-shifted constant never decrease.
-    const APInt *C;
-    if (match(I->getOperand(0), m_APInt(C)))
-      Known.Zero.setLowBits(C->countr_zero());
+    if (EnableSpecializedXferFuncs) {
+      const APInt *C;
+      if (match(I->getOperand(0), m_APInt(C)))
+        Known.Zero.setLowBits(C->countr_zero());
+    }
     break;
   }
   case Instruction::LShr: {
@@ -1649,9 +1658,11 @@ static void computeKnownBitsFromOperator(const Operator *I,
     computeKnownBitsFromShiftOperator(I, DemandedElts, Known, Known2, Q, Depth,
                                       KF);
     // Leading zeros of a left-shifted constant never decrease.
-    const APInt *C;
-    if (match(I->getOperand(0), m_APInt(C)))
-      Known.Zero.setHighBits(C->countl_zero());
+    if (EnableSpecializedXferFuncs) {
+      const APInt *C;
+      if (match(I->getOperand(0), m_APInt(C)))
+        Known.Zero.setHighBits(C->countl_zero());
+    }
     break;
   }
   case Instruction::AShr: {
@@ -1725,7 +1736,7 @@ static void computeKnownBitsFromOperator(const Operator *I,
 
       // Handle case when index is zero.
       Constant *CIndex = dyn_cast<Constant>(Index);
-      if (CIndex && CIndex->isZeroValue())
+      if (EnableSpecializedXferFuncs && CIndex && CIndex->isZeroValue())
         continue;
 
       if (StructType *STy = GTI.getStructTypeOrNull()) {
@@ -1753,7 +1764,7 @@ static void computeKnownBitsFromOperator(const Operator *I,
 
       TypeSize Stride = GTI.getSequentialElementStride(Q.DL);
       uint64_t StrideInBytes = Stride.getKnownMinValue();
-      if (!Stride.isScalable()) {
+      if (EnableSpecializedXferFuncs && !Stride.isScalable()) {
         // Fast path for constant offset.
         if (auto *CI = dyn_cast<ConstantInt>(Index)) {
           AccConstIndices +=
@@ -1960,7 +1971,7 @@ static void computeKnownBitsFromOperator(const Operator *I,
 
         // See if we can further use a conditional branch into the phi
         // to help us determine the range of the value.
-        if (!Known2.isConstant()) {
+        if (EnableSpecializedXferFuncs && !Known2.isConstant()) {
           CmpPredicate Pred;
           const APInt *RHSC;
           BasicBlock *TrueSucc, *FalseSucc;
@@ -2080,7 +2091,7 @@ static void computeKnownBitsFromOperator(const Operator *I,
       case Intrinsic::fshr:
       case Intrinsic::fshl: {
         const APInt *SA;
-        if (!match(I->getOperand(2), m_APInt(SA)))
+        if (!EnableSpecializedXferFuncs || !match(I->getOperand(2), m_APInt(SA)))
           break;
 
         // Normalize to funnel shift left.
@@ -2169,13 +2180,15 @@ static void computeKnownBitsFromOperator(const Operator *I,
         computeKnownBits(I->getOperand(0), DemandedElts, Known, Q, Depth + 1);
         computeKnownBits(I->getOperand(1), DemandedElts, Known2, Q, Depth + 1);
         Known = KnownBits::smin(Known, Known2);
-        unionWithMinMaxIntrinsicClamp(II, Known);
+        if (EnableSpecializedXferFuncs)
+          unionWithMinMaxIntrinsicClamp(II, Known);
         break;
       case Intrinsic::smax:
         computeKnownBits(I->getOperand(0), DemandedElts, Known, Q, Depth + 1);
         computeKnownBits(I->getOperand(1), DemandedElts, Known2, Q, Depth + 1);
         Known = KnownBits::smax(Known, Known2);
-        unionWithMinMaxIntrinsicClamp(II, Known);
+        if (EnableSpecializedXferFuncs)
+          unionWithMinMaxIntrinsicClamp(II, Known);
         break;
       case Intrinsic::ptrmask: {
         computeKnownBits(I->getOperand(0), DemandedElts, Known, Q, Depth + 1);
@@ -2251,7 +2264,7 @@ static void computeKnownBitsFromOperator(const Operator *I,
         uint64_t MaxVL = MaxVLEN / RISCVVType::getSEWLMULRatio(SEW, VLMUL);
 
         // Result of vsetvli must be not larger than AVL.
-        if (HasAVL)
+        if (EnableSpecializedXferFuncs && HasAVL)
           if (auto *CI = dyn_cast<ConstantInt>(II->getArgOperand(0)))
             MaxVL = std::min(MaxVL, CI->getZExtValue());
 
@@ -2312,7 +2325,9 @@ static void computeKnownBitsFromOperator(const Operator *I,
     }
     const Value *Vec = I->getOperand(0);
     const Value *Elt = I->getOperand(1);
-    auto *CIdx = dyn_cast<ConstantInt>(I->getOperand(2));
+    auto *CIdx = EnableSpecializedXferFuncs
+                     ? dyn_cast<ConstantInt>(I->getOperand(2))
+                     : nullptr;
     unsigned NumElts = DemandedElts.getBitWidth();
     APInt DemandedVecElts = DemandedElts;
     bool NeedsElt = true;
@@ -2341,7 +2356,8 @@ static void computeKnownBitsFromOperator(const Operator *I,
     // out-of-range demand all elements, otherwise just the extracted element.
     const Value *Vec = I->getOperand(0);
     const Value *Idx = I->getOperand(1);
-    auto *CIdx = dyn_cast<ConstantInt>(Idx);
+    auto *CIdx =
+        EnableSpecializedXferFuncs ? dyn_cast<ConstantInt>(Idx) : nullptr;
     if (isa<ScalableVectorType>(Vec->getType())) {
       // FIXME: there's probably *something* we can do with scalable vectors
       Known.resetAll();
@@ -2625,6 +2641,8 @@ static bool isPowerOfTwoRecurrence(const PHINode *PN, bool OrZero,
 static bool isImpliedToBeAPowerOfTwoFromCond(const Value *V, bool OrZero,
                                              const Value *Cond,
                                              bool CondIsTrue) {
+  if (!EnableSpecializedXferFuncs)
+    return false;
   CmpPredicate Pred;
   const APInt *RHSC;
   if (!match(Cond, m_ICmp(Pred, m_Intrinsic<Intrinsic::ctpop>(m_Specific(V)),
@@ -3026,6 +3044,9 @@ static bool rangeMetadataExcludesValue(const MDNode* Ranges, const APInt& Value)
 /// Try to detect a recurrence that monotonically increases/decreases from a
 /// non-zero starting value. These are common as induction variables.
 static bool isNonZeroRecurrence(const PHINode *PN) {
+  if (!EnableSpecializedXferFuncs)
+    return false;
+
   BinaryOperator *BO = nullptr;
   Value *Start = nullptr, *Step = nullptr;
   const APInt *StartC, *StepC;
@@ -3935,6 +3956,8 @@ static bool isModifyingBinopOfNonZero(const Value *V1, const Value *V2,
 static bool isNonEqualMul(const Value *V1, const Value *V2,
                           const APInt &DemandedElts, const SimplifyQuery &Q,
                           unsigned Depth) {
+  if (!EnableSpecializedXferFuncs)
+    return false;
   if (auto *OBO = dyn_cast<OverflowingBinaryOperator>(V2)) {
     const APInt *C;
     return match(OBO, m_Mul(m_Specific(V1), m_APInt(C))) &&
@@ -3950,6 +3973,8 @@ static bool isNonEqualMul(const Value *V1, const Value *V2,
 static bool isNonEqualShl(const Value *V1, const Value *V2,
                           const APInt &DemandedElts, const SimplifyQuery &Q,
                           unsigned Depth) {
+  if (!EnableSpecializedXferFuncs)
+    return false;
   if (auto *OBO = dyn_cast<OverflowingBinaryOperator>(V2)) {
     const APInt *C;
     return match(OBO, m_Shl(m_Specific(V1), m_APInt(C))) &&
@@ -3974,7 +3999,8 @@ static bool isNonEqualPHIs(const PHINode *PN1, const PHINode *PN2,
     const Value *IV1 = PN1->getIncomingValueForBlock(IncomBB);
     const Value *IV2 = PN2->getIncomingValueForBlock(IncomBB);
     const APInt *C1, *C2;
-    if (match(IV1, m_APInt(C1)) && match(IV2, m_APInt(C2)) && *C1 != *C2)
+    if (EnableSpecializedXferFuncs && match(IV1, m_APInt(C1)) &&
+        match(IV2, m_APInt(C2)) && *C1 != *C2)
       continue;
 
     // Only one pair of phi operands is allowed for full recursion.
@@ -4312,7 +4338,8 @@ static unsigned ComputeNumSignBitsImpl(const Value *V,
     case Instruction::SDiv: {
       const APInt *Denominator;
       // sdiv X, C -> adds log(C) sign bits.
-      if (match(U->getOperand(1), m_APInt(Denominator))) {
+      if (EnableSpecializedXferFuncs &&
+          match(U->getOperand(1), m_APInt(Denominator))) {
 
         // Ignore non-positive denominator.
         if (!Denominator->isStrictlyPositive())
@@ -4335,7 +4362,8 @@ static unsigned ComputeNumSignBitsImpl(const Value *V,
       // srem X, C -> we know that the result is within [-C+1,C) when C is a
       // positive constant.  This let us put a lower bound on the number of sign
       // bits.
-      if (match(U->getOperand(1), m_APInt(Denominator))) {
+      if (EnableSpecializedXferFuncs &&
+          match(U->getOperand(1), m_APInt(Denominator))) {
 
         // Ignore non-positive denominator.
         if (Denominator->isStrictlyPositive()) {
@@ -4363,7 +4391,8 @@ static unsigned ComputeNumSignBitsImpl(const Value *V,
       Tmp = ComputeNumSignBits(U->getOperand(0), DemandedElts, Q, Depth + 1);
       // ashr X, C   -> adds C sign bits.  Vectors too.
       const APInt *ShAmt;
-      if (match(U->getOperand(1), m_APInt(ShAmt))) {
+      if (EnableSpecializedXferFuncs &&
+          match(U->getOperand(1), m_APInt(ShAmt))) {
         if (ShAmt->uge(TyBits))
           break; // Bad shift.
         unsigned ShAmtLimited = ShAmt->getZExtValue();
@@ -4375,7 +4404,8 @@ static unsigned ComputeNumSignBitsImpl(const Value *V,
     case Instruction::Shl: {
       const APInt *ShAmt;
       Value *X = nullptr;
-      if (match(U->getOperand(1), m_APInt(ShAmt))) {
+      if (EnableSpecializedXferFuncs &&
+          match(U->getOperand(1), m_APInt(ShAmt))) {
         // shl destroys sign bits.
         if (ShAmt->uge(TyBits))
           break; // Bad shift.
@@ -4412,10 +4442,12 @@ static unsigned ComputeNumSignBitsImpl(const Value *V,
     case Instruction::Select: {
       // If we have a clamp pattern, we know that the number of sign bits will
       // be the minimum of the clamp min/max range.
-      const Value *X;
-      const APInt *CLow, *CHigh;
-      if (isSignedMinMaxClamp(U, X, CLow, CHigh))
-        return std::min(CLow->getNumSignBits(), CHigh->getNumSignBits());
+      if (EnableSpecializedXferFuncs) {
+        const Value *X;
+        const APInt *CLow, *CHigh;
+        if (isSignedMinMaxClamp(U, X, CLow, CHigh))
+          return std::min(CLow->getNumSignBits(), CHigh->getNumSignBits());
+      }
 
       Tmp = ComputeNumSignBits(U->getOperand(1), DemandedElts, Q, Depth + 1);
       if (Tmp == 1)
@@ -4431,21 +4463,22 @@ static unsigned ComputeNumSignBitsImpl(const Value *V,
       if (Tmp == 1) break;
 
       // Special case decrementing a value (ADD X, -1):
-      if (const auto *CRHS = dyn_cast<Constant>(U->getOperand(1)))
-        if (CRHS->isAllOnesValue()) {
-          KnownBits Known(TyBits);
-          computeKnownBits(U->getOperand(0), DemandedElts, Known, Q, Depth + 1);
+      if (EnableSpecializedXferFuncs)
+        if (const auto *CRHS = dyn_cast<Constant>(U->getOperand(1)))
+          if (CRHS->isAllOnesValue()) {
+            KnownBits Known(TyBits);
+            computeKnownBits(U->getOperand(0), DemandedElts, Known, Q, Depth + 1);
 
-          // If the input is known to be 0 or 1, the output is 0/-1, which is
-          // all sign bits set.
-          if ((Known.Zero | 1).isAllOnes())
-            return TyBits;
+            // If the input is known to be 0 or 1, the output is 0/-1, which is
+            // all sign bits set.
+            if ((Known.Zero | 1).isAllOnes())
+              return TyBits;
 
-          // If we are subtracting one from a positive number, there is no carry
-          // out of the result.
-          if (Known.isNonNegative())
-            return Tmp;
-        }
+            // If we are subtracting one from a positive number, there is no carry
+            // out of the result.
+            if (Known.isNonNegative())
+              return Tmp;
+          }
 
       Tmp2 = ComputeNumSignBits(U->getOperand(1), DemandedElts, Q, Depth + 1);
       if (Tmp2 == 1)
@@ -4458,23 +4491,24 @@ static unsigned ComputeNumSignBitsImpl(const Value *V,
         break;
 
       // Handle NEG.
-      if (const auto *CLHS = dyn_cast<Constant>(U->getOperand(0)))
-        if (CLHS->isNullValue()) {
-          KnownBits Known(TyBits);
-          computeKnownBits(U->getOperand(1), DemandedElts, Known, Q, Depth + 1);
-          // If the input is known to be 0 or 1, the output is 0/-1, which is
-          // all sign bits set.
-          if ((Known.Zero | 1).isAllOnes())
-            return TyBits;
+      if (EnableSpecializedXferFuncs)
+        if (const auto *CLHS = dyn_cast<Constant>(U->getOperand(0)))
+          if (CLHS->isNullValue()) {
+            KnownBits Known(TyBits);
+            computeKnownBits(U->getOperand(1), DemandedElts, Known, Q, Depth + 1);
+            // If the input is known to be 0 or 1, the output is 0/-1, which is
+            // all sign bits set.
+            if ((Known.Zero | 1).isAllOnes())
+              return TyBits;
 
-          // If the input is known to be positive (the sign bit is known clear),
-          // the output of the NEG has the same number of sign bits as the
-          // input.
-          if (Known.isNonNegative())
-            return Tmp2;
+            // If the input is known to be positive (the sign bit is known clear),
+            // the output of the NEG has the same number of sign bits as the
+            // input.
+            if (Known.isNonNegative())
+              return Tmp2;
 
-          // Otherwise, we treat this like a SUB.
-        }
+            // Otherwise, we treat this like a SUB.
+          }
 
       // Sub can have at most one carry bit.  Thus we know that the output
       // is, at worst, one more bit than the inputs.
@@ -4826,11 +4860,13 @@ static void computeKnownFPClassFromCond(const Value *V, Value *Cond,
         LHS != V);
     if (CmpVal == V)
       KnownFromContext.knownNot(~(CondIsTrue ? MaskIfTrue : MaskIfFalse));
-  } else if (match(Cond, m_Intrinsic<Intrinsic::is_fpclass>(
+  } else if (EnableSpecializedXferFuncs &&
+             match(Cond, m_Intrinsic<Intrinsic::is_fpclass>(
                              m_Specific(V), m_ConstantInt(ClassVal)))) {
     FPClassTest Mask = static_cast<FPClassTest>(ClassVal);
     KnownFromContext.knownNot(CondIsTrue ? ~Mask : Mask);
-  } else if (match(Cond, m_ICmp(Pred, m_ElementWiseBitCast(m_Specific(V)),
+  } else if (EnableSpecializedXferFuncs &&
+             match(Cond, m_ICmp(Pred, m_ElementWiseBitCast(m_Specific(V)),
                                 m_APInt(RHS)))) {
     bool TrueIfSigned;
     if (!isSignBitCheck(Pred, *RHS, TrueIfSigned))
@@ -9853,6 +9889,8 @@ std::optional<bool> llvm::isImpliedByDomCondition(CmpPredicate Pred,
 static void setLimitsForBinOp(const BinaryOperator &BO, APInt &Lower,
                               APInt &Upper, const InstrInfoQuery &IIQ,
                               bool PreferSignedRange) {
+  if (!EnableSpecializedXferFuncs)
+    return;
   unsigned Width = Lower.getBitWidth();
   const APInt *C;
   switch (BO.getOpcode()) {
@@ -10094,13 +10132,15 @@ static ConstantRange getRangeForIntrinsic(const IntrinsicInst &II,
                                       APInt(Width, Width) + 1);
   case Intrinsic::uadd_sat:
     // uadd.sat(x, C) produces [C, UINT_MAX].
-    if (match(II.getOperand(0), m_APInt(C)) ||
-        match(II.getOperand(1), m_APInt(C)))
+    if (EnableSpecializedXferFuncs &&
+        (match(II.getOperand(0), m_APInt(C)) ||
+         match(II.getOperand(1), m_APInt(C))))
       return ConstantRange::getNonEmpty(*C, APInt::getZero(Width));
     break;
   case Intrinsic::sadd_sat:
-    if (match(II.getOperand(0), m_APInt(C)) ||
-        match(II.getOperand(1), m_APInt(C))) {
+    if (EnableSpecializedXferFuncs &&
+        (match(II.getOperand(0), m_APInt(C)) ||
+         match(II.getOperand(1), m_APInt(C)))) {
       if (C->isNegative())
         // sadd.sat(x, -C) produces [SINT_MIN, SINT_MAX + (-C)].
         return ConstantRange::getNonEmpty(APInt::getSignedMinValue(Width),
@@ -10113,44 +10153,49 @@ static ConstantRange getRangeForIntrinsic(const IntrinsicInst &II,
     }
     break;
   case Intrinsic::usub_sat:
-    // usub.sat(C, x) produces [0, C].
-    if (match(II.getOperand(0), m_APInt(C)))
-      return ConstantRange::getNonEmpty(APInt::getZero(Width), *C + 1);
+    if (EnableSpecializedXferFuncs) {
+      // usub.sat(C, x) produces [0, C].
+      if (match(II.getOperand(0), m_APInt(C)))
+        return ConstantRange::getNonEmpty(APInt::getZero(Width), *C + 1);
 
-    // usub.sat(x, C) produces [0, UINT_MAX - C].
-    if (match(II.getOperand(1), m_APInt(C)))
-      return ConstantRange::getNonEmpty(APInt::getZero(Width),
-                                        APInt::getMaxValue(Width) - *C + 1);
+      // usub.sat(x, C) produces [0, UINT_MAX - C].
+      if (match(II.getOperand(1), m_APInt(C)))
+        return ConstantRange::getNonEmpty(APInt::getZero(Width),
+                                          APInt::getMaxValue(Width) - *C + 1);
+    }
     break;
   case Intrinsic::ssub_sat:
-    if (match(II.getOperand(0), m_APInt(C))) {
-      if (C->isNegative())
-        // ssub.sat(-C, x) produces [SINT_MIN, -SINT_MIN + (-C)].
-        return ConstantRange::getNonEmpty(APInt::getSignedMinValue(Width),
-                                          *C - APInt::getSignedMinValue(Width) +
-                                              1);
+    if (EnableSpecializedXferFuncs) {
+      if (match(II.getOperand(0), m_APInt(C))) {
+        if (C->isNegative())
+          // ssub.sat(-C, x) produces [SINT_MIN, -SINT_MIN + (-C)].
+          return ConstantRange::getNonEmpty(APInt::getSignedMinValue(Width),
+                                            *C - APInt::getSignedMinValue(Width) +
+                                                1);
 
-      // ssub.sat(+C, x) produces [-SINT_MAX + C, SINT_MAX].
-      return ConstantRange::getNonEmpty(*C - APInt::getSignedMaxValue(Width),
-                                        APInt::getSignedMaxValue(Width) + 1);
-    } else if (match(II.getOperand(1), m_APInt(C))) {
-      if (C->isNegative())
-        // ssub.sat(x, -C) produces [SINT_MIN - (-C), SINT_MAX]:
-        return ConstantRange::getNonEmpty(APInt::getSignedMinValue(Width) - *C,
+        // ssub.sat(+C, x) produces [-SINT_MAX + C, SINT_MAX].
+        return ConstantRange::getNonEmpty(*C - APInt::getSignedMaxValue(Width),
                                           APInt::getSignedMaxValue(Width) + 1);
+      } else if (match(II.getOperand(1), m_APInt(C))) {
+        if (C->isNegative())
+          // ssub.sat(x, -C) produces [SINT_MIN - (-C), SINT_MAX]:
+          return ConstantRange::getNonEmpty(APInt::getSignedMinValue(Width) - *C,
+                                            APInt::getSignedMaxValue(Width) + 1);
 
-      // ssub.sat(x, +C) produces [SINT_MIN, SINT_MAX - C].
-      return ConstantRange::getNonEmpty(APInt::getSignedMinValue(Width),
-                                        APInt::getSignedMaxValue(Width) - *C +
-                                            1);
+        // ssub.sat(x, +C) produces [SINT_MIN, SINT_MAX - C].
+        return ConstantRange::getNonEmpty(APInt::getSignedMinValue(Width),
+                                          APInt::getSignedMaxValue(Width) - *C +
+                                              1);
+      }
     }
     break;
   case Intrinsic::umin:
   case Intrinsic::umax:
   case Intrinsic::smin:
   case Intrinsic::smax:
-    if (!match(II.getOperand(0), m_APInt(C)) &&
-        !match(II.getOperand(1), m_APInt(C)))
+    if (!EnableSpecializedXferFuncs ||
+        (!match(II.getOperand(0), m_APInt(C)) &&
+         !match(II.getOperand(1), m_APInt(C))))
       break;
 
     switch (II.getIntrinsicID()) {
@@ -10215,24 +10260,27 @@ static ConstantRange getRangeForSelectPattern(const SelectInst &SI,
                                       APInt(BitWidth, 1));
   }
 
-  const APInt *C;
-  if (!match(LHS, m_APInt(C)) && !match(RHS, m_APInt(C)))
-    return ConstantRange::getFull(BitWidth);
-
-  switch (R.Flavor) {
-  case SPF_UMIN:
-    return ConstantRange::getNonEmpty(APInt::getZero(BitWidth), *C + 1);
-  case SPF_UMAX:
-    return ConstantRange::getNonEmpty(*C, APInt::getZero(BitWidth));
-  case SPF_SMIN:
-    return ConstantRange::getNonEmpty(APInt::getSignedMinValue(BitWidth),
-                                      *C + 1);
-  case SPF_SMAX:
-    return ConstantRange::getNonEmpty(*C,
-                                      APInt::getSignedMaxValue(BitWidth) + 1);
-  default:
-    return ConstantRange::getFull(BitWidth);
+  if (EnableSpecializedXferFuncs) {
+    const APInt *C;
+    if (match(LHS, m_APInt(C)) || match(RHS, m_APInt(C))) {
+      switch (R.Flavor) {
+      case SPF_UMIN:
+        return ConstantRange::getNonEmpty(APInt::getZero(BitWidth), *C + 1);
+      case SPF_UMAX:
+        return ConstantRange::getNonEmpty(*C, APInt::getZero(BitWidth));
+      case SPF_SMIN:
+        return ConstantRange::getNonEmpty(APInt::getSignedMinValue(BitWidth),
+                                          *C + 1);
+      case SPF_SMAX:
+        return ConstantRange::getNonEmpty(*C,
+                                          APInt::getSignedMaxValue(BitWidth) + 1);
+      default:
+        break;
+      }
+    }
   }
+
+  return ConstantRange::getFull(BitWidth);
 }
 
 static void setLimitForFPToI(const Instruction *I, APInt &Lower, APInt &Upper) {

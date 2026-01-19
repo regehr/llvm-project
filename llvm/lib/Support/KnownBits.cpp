@@ -12,11 +12,18 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Support/KnownBits.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 
 using namespace llvm;
+
+bool llvm::EnableSpecializedXferFuncs;
+static cl::opt<bool, true> EnableSpecializedXferFuncsOpt(
+    "enable-specialized-xfer-funcs",
+    cl::desc("Enable specialized transfer functions in KnownBits"),
+    cl::location(EnableSpecializedXferFuncs), cl::init(true));
 
 KnownBits KnownBits::flipSignBit(const KnownBits &Val) {
   unsigned SignBitPosition = Val.getBitWidth() - 1;
@@ -482,7 +489,7 @@ KnownBits KnownBits::ashr(const KnownBits &LHS, const KnownBits &RHS,
 }
 
 std::optional<bool> KnownBits::eq(const KnownBits &LHS, const KnownBits &RHS) {
-  if (LHS.isConstant() && RHS.isConstant())
+  if (EnableSpecializedXferFuncs && LHS.isConstant() && RHS.isConstant())
     return std::optional<bool>(LHS.getConstant() == RHS.getConstant());
   if (LHS.One.intersects(RHS.Zero) || RHS.One.intersects(LHS.Zero))
     return std::optional<bool>(false);
@@ -608,7 +615,7 @@ KnownBits KnownBits::reduceAdd(unsigned NumElts) const {
   unsigned BitWidth = getBitWidth();
   KnownBits Result(BitWidth);
 
-  if (isConstant())
+  if (EnableSpecializedXferFuncs && isConstant())
     // If all elements are the same constant, we can simply compute it
     return KnownBits::makeConstant(NumElts * getConstant());
 
@@ -1092,7 +1099,8 @@ KnownBits KnownBits::remGetLowBits(const KnownBits &LHS, const KnownBits &RHS) {
 
 KnownBits KnownBits::urem(const KnownBits &LHS, const KnownBits &RHS) {
   KnownBits Known = remGetLowBits(LHS, RHS);
-  if (RHS.isConstant() && RHS.getConstant().isPowerOf2()) {
+  if (EnableSpecializedXferFuncs && RHS.isConstant() &&
+      RHS.getConstant().isPowerOf2()) {
     // NB: Low bits set in `remGetLowBits`.
     APInt HighBits = ~(RHS.getConstant() - 1);
     Known.Zero |= HighBits;
@@ -1109,7 +1117,8 @@ KnownBits KnownBits::urem(const KnownBits &LHS, const KnownBits &RHS) {
 
 KnownBits KnownBits::srem(const KnownBits &LHS, const KnownBits &RHS) {
   KnownBits Known = remGetLowBits(LHS, RHS);
-  if (RHS.isConstant() && RHS.getConstant().isPowerOf2()) {
+  if (EnableSpecializedXferFuncs && RHS.isConstant() &&
+      RHS.getConstant().isPowerOf2()) {
     // NB: Low bits are set in `remGetLowBits`.
     APInt LowBits = RHS.getConstant() - 1;
     // If the first operand is non-negative or has all low bits zero, then

@@ -20,6 +20,9 @@
 
 namespace llvm {
 
+/// Enable specialized transfer functions in KnownBits.
+extern bool EnableSpecializedXferFuncs;
+
 // Struct for tracking the known zeros and ones of a value.
 struct KnownBits {
   APInt Zero;
