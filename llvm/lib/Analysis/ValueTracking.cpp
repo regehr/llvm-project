@@ -929,28 +929,30 @@ static void computeKnownBitsFromCmp(const Value *V, CmpInst::Predicate Pred,
     // assume(V = C)
     if (match(LHS, m_V)) {
       Known = Known.unionWith(KnownBits::makeConstant(*C));
-      // assume(V & Mask = C)
-    } else if (match(LHS, m_c_And(m_V, m_Value(Y)))) {
+      // assume(V & Mask = C) - multi-instruction pattern
+    } else if (EnableMultiInstrPatterns && match(LHS, m_c_And(m_V, m_Value(Y)))) {
       // For one bits in Mask, we can propagate bits from C to V.
       Known.One |= *C;
       if (match(Y, m_APInt(Mask)))
         Known.Zero |= ~*C & *Mask;
-      // assume(V | Mask = C)
-    } else if (match(LHS, m_c_Or(m_V, m_Value(Y)))) {
+      // assume(V | Mask = C) - multi-instruction pattern
+    } else if (EnableMultiInstrPatterns && match(LHS, m_c_Or(m_V, m_Value(Y)))) {
       // For zero bits in Mask, we can propagate bits from C to V.
       Known.Zero |= ~*C;
       if (match(Y, m_APInt(Mask)))
         Known.One |= *C & ~*Mask;
-      // assume(V << ShAmt = C)
-    } else if (match(LHS, m_Shl(m_V, m_ConstantInt(ShAmt))) &&
+      // assume(V << ShAmt = C) - multi-instruction pattern
+    } else if (EnableMultiInstrPatterns &&
+               match(LHS, m_Shl(m_V, m_ConstantInt(ShAmt))) &&
                ShAmt < BitWidth) {
       // For those bits in C that are known, we can propagate them to known
       // bits in V shifted to the right by ShAmt.
       KnownBits RHSKnown = KnownBits::makeConstant(*C);
       RHSKnown >>= ShAmt;
       Known = Known.unionWith(RHSKnown);
-      // assume(V >> ShAmt = C)
-    } else if (match(LHS, m_Shr(m_V, m_ConstantInt(ShAmt))) &&
+      // assume(V >> ShAmt = C) - multi-instruction pattern
+    } else if (EnableMultiInstrPatterns &&
+               match(LHS, m_Shr(m_V, m_ConstantInt(ShAmt))) &&
                ShAmt < BitWidth) {
       // For those bits in RHS that are known, we can propagate them to known
       // bits in V shifted to the right by C.
@@ -2998,7 +3000,9 @@ static bool isKnownNonNullFromDominatingCondition(const Value *V,
         return true;
     }
 
-    if ((match(UI, m_IDiv(m_Value(), m_Specific(V))) ||
+    // This is a multi-instruction pattern.
+    if (EnableMultiInstrPatterns &&
+        (match(UI, m_IDiv(m_Value(), m_Specific(V))) ||
          match(UI, m_IRem(m_Value(), m_Specific(V)))) &&
         isValidAssumeForContext(UI, CtxI, DT))
       return true;
@@ -3446,6 +3450,10 @@ static bool isKnownNonZeroFromOperator(const Operator *I,
 
       // The condition of the select dominates the true/false arm. Check if the
       // condition implies that a given arm is non-zero.
+      // This is a multi-instruction pattern.
+      if (!EnableMultiInstrPatterns)
+        return false;
+
       Value *X;
       CmpPredicate Pred;
       if (!match(I->getOperand(0), m_c_ICmp(Pred, m_Specific(Op), m_Value(X))))
@@ -3475,19 +3483,22 @@ static bool isKnownNonZeroFromOperator(const Operator *I,
         return true;
       RecQ.CxtI = PN->getIncomingBlock(U)->getTerminator();
       // Check if the branch on the phi excludes zero.
-      CmpPredicate Pred;
-      Value *X;
-      BasicBlock *TrueSucc, *FalseSucc;
-      if (match(RecQ.CxtI,
-                m_Br(m_c_ICmp(Pred, m_Specific(U.get()), m_Value(X)),
-                     m_BasicBlock(TrueSucc), m_BasicBlock(FalseSucc)))) {
-        // Check for cases of duplicate successors.
-        if ((TrueSucc == PN->getParent()) != (FalseSucc == PN->getParent())) {
-          // If we're using the false successor, invert the predicate.
-          if (FalseSucc == PN->getParent())
-            Pred = CmpInst::getInversePredicate(Pred);
-          if (cmpExcludesZero(Pred, X))
-            return true;
+      // This is a multi-instruction pattern.
+      if (EnableMultiInstrPatterns) {
+        CmpPredicate Pred;
+        Value *X;
+        BasicBlock *TrueSucc, *FalseSucc;
+        if (match(RecQ.CxtI,
+                  m_Br(m_c_ICmp(Pred, m_Specific(U.get()), m_Value(X)),
+                       m_BasicBlock(TrueSucc), m_BasicBlock(FalseSucc)))) {
+          // Check for cases of duplicate successors.
+          if ((TrueSucc == PN->getParent()) != (FalseSucc == PN->getParent())) {
+            // If we're using the false successor, invert the predicate.
+            if (FalseSucc == PN->getParent())
+              Pred = CmpInst::getInversePredicate(Pred);
+            if (cmpExcludesZero(Pred, X))
+              return true;
+          }
         }
       }
       // Finally recurse on the edge and check it directly.
@@ -4074,6 +4085,10 @@ static bool isNonEqualPHIs(const PHINode *PN1, const PHINode *PN2,
 static bool isNonEqualSelect(const Value *V1, const Value *V2,
                              const APInt &DemandedElts, const SimplifyQuery &Q,
                              unsigned Depth) {
+  // This is a multi-instruction pattern.
+  if (!EnableMultiInstrPatterns)
+    return false;
+
   const SelectInst *SI1 = dyn_cast<SelectInst>(V1);
   if (!SI1)
     return false;
@@ -4098,6 +4113,10 @@ static bool isNonEqualSelect(const Value *V1, const Value *V2,
 // loop if offset of recursive GEP is greater than 0.
 static bool isNonEqualPointersWithRecursiveGEP(const Value *A, const Value *B,
                                                const SimplifyQuery &Q) {
+  // This is a multi-instruction pattern.
+  if (!EnableMultiInstrPatterns)
+    return false;
+
   if (!A->getType()->isPointerTy() || !B->getType()->isPointerTy())
     return false;
 
@@ -4145,6 +4164,10 @@ static bool isNonEqualPointersWithRecursiveGEP(const Value *A, const Value *B,
 
 static bool isKnownNonEqualFromContext(const Value *V1, const Value *V2,
                                        const SimplifyQuery &Q, unsigned Depth) {
+  // This is a multi-instruction pattern.
+  if (!EnableMultiInstrPatterns)
+    return false;
+
   if (!Q.CxtI)
     return false;
 
@@ -4269,7 +4292,9 @@ static bool isKnownNonEqual(const Value *V1, const Value *V2,
   Value *A, *B;
   // PtrToInts are NonEqual if their Ptrs are NonEqual.
   // Check PtrToInt type matches the pointer size.
-  if (match(V1, m_PtrToIntSameSize(Q.DL, m_Value(A))) &&
+  // This is a multi-instruction pattern.
+  if (EnableMultiInstrPatterns &&
+      match(V1, m_PtrToIntSameSize(Q.DL, m_Value(A))) &&
       match(V2, m_PtrToIntSameSize(Q.DL, m_Value(B))))
     return isKnownNonEqual(A, B, DemandedElts, Q, Depth + 1);
 
