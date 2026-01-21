@@ -3923,6 +3923,9 @@ getInvertibleOperands(const Operator *Op1,
 static bool isModifyingBinopOfNonZero(const Value *V1, const Value *V2,
                                       const APInt &DemandedElts,
                                       const SimplifyQuery &Q, unsigned Depth) {
+  if (!UseSSASameValueOptimization)
+    return false;
+
   const BinaryOperator *BO = dyn_cast<BinaryOperator>(V1);
   if (!BO)
     return false;
@@ -3952,6 +3955,9 @@ static bool isModifyingBinopOfNonZero(const Value *V1, const Value *V2,
 static bool isNonEqualMul(const Value *V1, const Value *V2,
                           const APInt &DemandedElts, const SimplifyQuery &Q,
                           unsigned Depth) {
+  if (!UseSSASameValueOptimization)
+    return false;
+
   if (auto *OBO = dyn_cast<OverflowingBinaryOperator>(V2)) {
     const APInt *C;
     return match(OBO, m_Mul(m_Specific(V1), m_APInt(C))) &&
@@ -3967,6 +3973,9 @@ static bool isNonEqualMul(const Value *V1, const Value *V2,
 static bool isNonEqualShl(const Value *V1, const Value *V2,
                           const APInt &DemandedElts, const SimplifyQuery &Q,
                           unsigned Depth) {
+  if (!UseSSASameValueOptimization)
+    return false;
+
   if (auto *OBO = dyn_cast<OverflowingBinaryOperator>(V2)) {
     const APInt *C;
     return match(OBO, m_Shl(m_Specific(V1), m_APInt(C))) &&
@@ -4014,14 +4023,16 @@ static bool isNonEqualSelect(const Value *V1, const Value *V2,
   if (!SI1)
     return false;
 
-  if (const SelectInst *SI2 = dyn_cast<SelectInst>(V2)) {
-    const Value *Cond1 = SI1->getCondition();
-    const Value *Cond2 = SI2->getCondition();
-    if (Cond1 == Cond2)
-      return isKnownNonEqual(SI1->getTrueValue(), SI2->getTrueValue(),
-                             DemandedElts, Q, Depth + 1) &&
-             isKnownNonEqual(SI1->getFalseValue(), SI2->getFalseValue(),
-                             DemandedElts, Q, Depth + 1);
+  if (UseSSASameValueOptimization) {
+    if (const SelectInst *SI2 = dyn_cast<SelectInst>(V2)) {
+      const Value *Cond1 = SI1->getCondition();
+      const Value *Cond2 = SI2->getCondition();
+      if (Cond1 == Cond2)
+        return isKnownNonEqual(SI1->getTrueValue(), SI2->getTrueValue(),
+                               DemandedElts, Q, Depth + 1) &&
+               isKnownNonEqual(SI1->getFalseValue(), SI2->getFalseValue(),
+                               DemandedElts, Q, Depth + 1);
+    }
   }
   return isKnownNonEqual(SI1->getTrueValue(), V2, DemandedElts, Q, Depth + 1) &&
          isKnownNonEqual(SI1->getFalseValue(), V2, DemandedElts, Q, Depth + 1);
@@ -7431,8 +7442,9 @@ OverflowResult llvm::computeOverflowForUnsignedSub(const Value *LHS,
 
   // TODO: There are other patterns like this.
   //       See simplifyICmpWithBinOpOnLHS() for candidates.
-  if (match(RHS, m_URem(m_Specific(LHS), m_Value())) ||
-      match(RHS, m_NUWSub(m_Specific(LHS), m_Value())))
+  if (UseSSASameValueOptimization &&
+      (match(RHS, m_URem(m_Specific(LHS), m_Value())) ||
+       match(RHS, m_NUWSub(m_Specific(LHS), m_Value()))))
     if (isGuaranteedNotToBeUndef(LHS, SQ.AC, SQ.CxtI, SQ.DT))
       return OverflowResult::NeverOverflows;
 
@@ -7461,8 +7473,9 @@ OverflowResult llvm::computeOverflowForSignedSub(const Value *LHS,
   // In the minimal case, this would simplify to "?", so there's no subtract
   // at all. But if this analysis is used to peek through casts, for example,
   // then determining no-overflow may allow other transforms.
-  if (match(RHS, m_SRem(m_Specific(LHS), m_Value())) ||
-      match(RHS, m_NSWSub(m_Specific(LHS), m_Value())))
+  if (UseSSASameValueOptimization &&
+      (match(RHS, m_SRem(m_Specific(LHS), m_Value())) ||
+       match(RHS, m_NSWSub(m_Specific(LHS), m_Value()))))
     if (isGuaranteedNotToBeUndef(LHS, SQ.AC, SQ.CxtI, SQ.DT))
       return OverflowResult::NeverOverflows;
 
@@ -8637,6 +8650,9 @@ bool llvm::isKnownNegation(const Value *X, const Value *Y, bool NeedNSW,
                            bool AllowPoison) {
   assert(X && Y && "Invalid operand");
 
+  if (!UseSSASameValueOptimization)
+    return false;
+
   auto IsNegationOf = [&](const Value *X, const Value *Y) {
     if (!match(X, m_Neg(m_Specific(Y))))
       return false;
@@ -8665,6 +8681,9 @@ bool llvm::isKnownNegation(const Value *X, const Value *Y, bool NeedNSW,
 }
 
 bool llvm::isKnownInversion(const Value *X, const Value *Y) {
+  if (!UseSSASameValueOptimization)
+    return false;
+
   // Handle X = icmp pred A, B, Y = icmp pred A, C.
   Value *A, *B, *C;
   CmpPredicate Pred1, Pred2;
@@ -9554,7 +9573,8 @@ isImpliedCondICmps(CmpPredicate LPred, const Value *L0, const Value *L1,
   // Take SGT as an example:  L0:x > L1:y and C >= 0
   //                      ==> R0:(x -nsw y) < R1:(-C) is false
   CmpInst::Predicate SignedLPred = LPred.getPreferredSignedPredicate();
-  if ((SignedLPred == ICmpInst::ICMP_SGT ||
+  if (UseSSASameValueOptimization &&
+      (SignedLPred == ICmpInst::ICMP_SGT ||
        SignedLPred == ICmpInst::ICMP_SGE) &&
       match(R0, m_NSWSub(m_Specific(L0), m_Specific(L1)))) {
     if (match(R1, m_NonPositive()) &&
@@ -9564,7 +9584,8 @@ isImpliedCondICmps(CmpPredicate LPred, const Value *L0, const Value *L1,
 
   // Take SLT as an example:  L0:x < L1:y and C <= 0
   //                      ==> R0:(x -nsw y) < R1:(-C) is true
-  if ((SignedLPred == ICmpInst::ICMP_SLT ||
+  if (UseSSASameValueOptimization &&
+      (SignedLPred == ICmpInst::ICMP_SLT ||
        SignedLPred == ICmpInst::ICMP_SLE) &&
       match(R0, m_NSWSub(m_Specific(L0), m_Specific(L1)))) {
     if (match(R1, m_NonNegative()) &&
@@ -9576,8 +9597,8 @@ isImpliedCondICmps(CmpPredicate LPred, const Value *L0, const Value *L1,
   // ptrtoint(a) - ptrtoint(b) == NonZero -> a != b
   const APInt *L1C;
   Value *A, *B;
-  if (LPred == ICmpInst::ICMP_EQ && ICmpInst::isEquality(RPred) &&
-      match(L1, m_APInt(L1C)) && !L1C->isZero() &&
+  if (UseSSASameValueOptimization && LPred == ICmpInst::ICMP_EQ &&
+      ICmpInst::isEquality(RPred) && match(L1, m_APInt(L1C)) && !L1C->isZero() &&
       match(L0, m_Sub(m_Value(A), m_Value(B))) &&
       ((A == R0 && B == R1) || (A == R1 && B == R0) ||
        (match(A, m_PtrToIntOrAddr(m_Specific(R0))) &&
@@ -9588,7 +9609,7 @@ isImpliedCondICmps(CmpPredicate LPred, const Value *L0, const Value *L1,
   }
 
   // L0 = R0 = L1 + R1, L0 >=u L1 implies R0 >=u R1, L0 <u L1 implies R0 <u R1
-  if (L0 == R0 &&
+  if (UseSSASameValueOptimization && L0 == R0 &&
       (LPred == ICmpInst::ICMP_ULT || LPred == ICmpInst::ICMP_UGE) &&
       (RPred == ICmpInst::ICMP_ULT || RPred == ICmpInst::ICMP_UGE) &&
       match(L0, m_c_Add(m_Specific(L1), m_Specific(R1))))
