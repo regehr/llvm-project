@@ -90,6 +90,13 @@ using namespace llvm::PatternMatch;
 static cl::opt<unsigned> DomConditionsMaxUses("dom-conditions-max-uses",
                                               cl::Hidden, cl::init(20));
 
+// Controls whether analysis takes advantage of the same SSA value being used
+// multiple times in an expression (e.g., x * x is always non-negative).
+static cl::opt<bool> UseSSASameValueOptimization(
+    "use-ssa-same-value-optimization", cl::Hidden, cl::init(true),
+    cl::desc("Use optimizations based on the same SSA value appearing "
+             "multiple times in an expression"));
+
 /// Maximum number of instructions to check between assume and context
 /// instruction.
 static constexpr unsigned MaxInstrsToCheckForFree = 16;
@@ -178,6 +185,9 @@ KnownBits llvm::computeKnownBits(const Value *V, const APInt &DemandedElts,
 
 static bool haveNoCommonBitsSetSpecialCases(const Value *LHS, const Value *RHS,
                                             const SimplifyQuery &SQ) {
+  if (!UseSSASameValueOptimization)
+    return false;
+
   // Look for an inverted mask: (X & ~M) op (Y & M).
   {
     Value *M;
@@ -374,6 +384,8 @@ static void computeKnownBitsFromLerpPattern(const Value *Op0, const Value *Op1,
                                             KnownBits &KnownOut,
                                             const SimplifyQuery &Q,
                                             unsigned Depth) {
+  if (!UseSSASameValueOptimization)
+    return;
 
   Type *Ty = Op0->getType();
   const unsigned BitWidth = Ty->getScalarSizeInBits();
@@ -519,7 +531,7 @@ static void computeKnownBitsMul(const Value *Op0, const Value *Op1, bool NSW,
   bool isKnownNonNegative = false;
   // If the multiplication is known not to overflow, compute the sign bit.
   if (NSW) {
-    if (Op0 == Op1) {
+    if (UseSSASameValueOptimization && Op0 == Op1) {
       // The product of a number with itself is non-negative.
       isKnownNonNegative = true;
     } else {
@@ -547,7 +559,7 @@ static void computeKnownBitsMul(const Value *Op0, const Value *Op1, bool NSW,
     }
   }
 
-  bool SelfMultiply = Op0 == Op1;
+  bool SelfMultiply = UseSSASameValueOptimization && Op0 == Op1;
   if (SelfMultiply)
     SelfMultiply &=
         isGuaranteedNotToBeUndef(Op0, Q.AC, Q.CxtI, Q.DT, Depth + 1);
@@ -2825,7 +2837,8 @@ bool llvm::isKnownToBeAPowerOfTwo(const Value *V, bool OrZero,
       case Intrinsic::fshr:
       case Intrinsic::fshl:
         // If Op0 == Op1, this is a rotate. is_pow2(rotate(x, y)) == is_pow2(x)
-        if (II->getArgOperand(0) == II->getArgOperand(1))
+        if (UseSSASameValueOptimization &&
+            II->getArgOperand(0) == II->getArgOperand(1))
           return isKnownToBeAPowerOfTwo(II->getArgOperand(0), OrZero, Q, Depth);
         break;
       default:
@@ -3646,7 +3659,8 @@ static bool isKnownNonZeroFromOperator(const Operator *I,
       case Intrinsic::fshr:
       case Intrinsic::fshl:
         // If Op0 == Op1, this is a rotate. rotate(x, y) != 0 iff x != 0.
-        if (II->getArgOperand(0) == II->getArgOperand(1))
+        if (UseSSASameValueOptimization &&
+            II->getArgOperand(0) == II->getArgOperand(1))
           return isKnownNonZero(II->getArgOperand(0), DemandedElts, Q, Depth);
         break;
       case Intrinsic::vscale:
@@ -3789,6 +3803,9 @@ bool llvm::isKnownNonZero(const Value *V, const SimplifyQuery &Q,
 static std::optional<std::pair<Value*, Value*>>
 getInvertibleOperands(const Operator *Op1,
                       const Operator *Op2) {
+  if (!UseSSASameValueOptimization)
+    return std::nullopt;
+
   if (Op1->getOpcode() != Op2->getOpcode())
     return std::nullopt;
 
@@ -5128,7 +5145,8 @@ void computeKnownFPClass(const Value *V, const APInt &DemandedElts,
       if ((InterestedClasses & fcNegative) == fcNone)
         break;
 
-      if (II->getArgOperand(0) != II->getArgOperand(1) ||
+      if (!UseSSASameValueOptimization ||
+          II->getArgOperand(0) != II->getArgOperand(1) ||
           !isGuaranteedNotToBeUndef(II->getArgOperand(0), Q.AC, Q.CxtI, Q.DT,
                                     Depth + 1))
         break;
@@ -5524,7 +5542,8 @@ void computeKnownFPClass(const Value *V, const APInt &DemandedElts,
                         KnownRHS, Q, Depth + 1);
 
     // Special case fadd x, x, which is the canonical form of fmul x, 2.
-    bool SelfAdd = Op->getOperand(0) == Op->getOperand(1) &&
+    bool SelfAdd = UseSSASameValueOptimization &&
+                   Op->getOperand(0) == Op->getOperand(1) &&
                    isGuaranteedNotToBeUndef(Op->getOperand(0), Q.AC, Q.CxtI,
                                             Q.DT, Depth + 1);
     if (SelfAdd)
@@ -5609,7 +5628,8 @@ void computeKnownFPClass(const Value *V, const APInt &DemandedElts,
           : DenormalMode::getDynamic();
 
     // X * X is always non-negative or a NaN.
-    if (Op->getOperand(0) == Op->getOperand(1) &&
+    if (UseSSASameValueOptimization &&
+        Op->getOperand(0) == Op->getOperand(1) &&
         isGuaranteedNotToBeUndef(Op->getOperand(0), Q.AC, Q.CxtI, Q.DT)) {
       KnownFPClass KnownSrc;
       computeKnownFPClass(Op->getOperand(0), DemandedElts, fcAllFlags, KnownSrc,
@@ -5655,7 +5675,8 @@ void computeKnownFPClass(const Value *V, const APInt &DemandedElts,
   case Instruction::FRem: {
     const bool WantNan = (InterestedClasses & fcNan) != fcNone;
 
-    if (Op->getOperand(0) == Op->getOperand(1) &&
+    if (UseSSASameValueOptimization &&
+        Op->getOperand(0) == Op->getOperand(1) &&
         isGuaranteedNotToBeUndef(Op->getOperand(0), Q.AC, Q.CxtI, Q.DT)) {
       if (Op->getOpcode() == Instruction::FDiv) {
         // X / X is always exactly 1.0 or a NaN.
@@ -9319,7 +9340,8 @@ bool llvm::matchSimpleBinaryIntrinsicRecurrence(const IntrinsicInst *I,
 /// Return true if "icmp Pred LHS RHS" is always true.
 static bool isTruePredicate(CmpInst::Predicate Pred, const Value *LHS,
                             const Value *RHS) {
-  if (ICmpInst::isTrueWhenEqual(Pred) && LHS == RHS)
+  if (UseSSASameValueOptimization && ICmpInst::isTrueWhenEqual(Pred) &&
+      LHS == RHS)
     return true;
 
   switch (Pred) {
@@ -9732,13 +9754,13 @@ std::optional<bool> llvm::isImpliedCondition(const Value *LHS, const Value *RHS,
                                              const DataLayout &DL,
                                              bool LHSIsTrue, unsigned Depth) {
   // LHS ==> RHS by definition
-  if (LHS == RHS)
+  if (UseSSASameValueOptimization && LHS == RHS)
     return LHSIsTrue;
 
   // Match not
   bool InvertRHS = false;
   if (match(RHS, m_Not(m_Value(RHS)))) {
-    if (LHS == RHS)
+    if (UseSSASameValueOptimization && LHS == RHS)
       return !LHSIsTrue;
     InvertRHS = true;
   }
