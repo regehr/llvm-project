@@ -90,6 +90,12 @@ using namespace llvm::PatternMatch;
 static cl::opt<unsigned> DomConditionsMaxUses("dom-conditions-max-uses",
                                               cl::Hidden, cl::init(20));
 
+// Controls whether multi-instruction patterns are used for enhanced precision
+// in known bits analysis. When false, only single-instruction analysis is used.
+static cl::opt<bool> EnableMultiInstrPatterns(
+    "enable-multi-instr-patterns", cl::Hidden, cl::init(true),
+    cl::desc("Enable multi-instruction pattern matching for known bits analysis"));
+
 /// Maximum number of instructions to check between assume and context
 /// instruction.
 static constexpr unsigned MaxInstrsToCheckForFree = 16;
@@ -178,6 +184,10 @@ KnownBits llvm::computeKnownBits(const Value *V, const APInt &DemandedElts,
 
 static bool haveNoCommonBitsSetSpecialCases(const Value *LHS, const Value *RHS,
                                             const SimplifyQuery &SQ) {
+  // All patterns in this function are multi-instruction patterns.
+  if (!EnableMultiInstrPatterns)
+    return false;
+
   // Look for an inverted mask: (X & ~M) op (Y & M).
   {
     Value *M;
@@ -374,6 +384,9 @@ static void computeKnownBitsFromLerpPattern(const Value *Op0, const Value *Op1,
                                             KnownBits &KnownOut,
                                             const SimplifyQuery &Q,
                                             unsigned Depth) {
+  // This is a multi-instruction pattern.
+  if (!EnableMultiInstrPatterns)
+    return;
 
   Type *Ty = Op0->getType();
   const unsigned BitWidth = Ty->getScalarSizeInBits();
@@ -948,20 +961,26 @@ static void computeKnownBitsFromCmp(const Value *V, CmpInst::Predicate Pred,
     break;
   case ICmpInst::ICMP_NE: {
     // assume (V & B != 0) where B is a power of 2
+    // This is a multi-instruction pattern.
     const APInt *BPow2;
-    if (C->isZero() && match(LHS, m_And(m_V, m_Power2(BPow2))))
+    if (EnableMultiInstrPatterns && C->isZero() &&
+        match(LHS, m_And(m_V, m_Power2(BPow2))))
       Known.One |= *BPow2;
     break;
   }
   default: {
     const APInt *Offset = nullptr;
-    if (match(LHS, m_CombineOr(m_V, m_AddLike(m_V, m_APInt(Offset))))) {
+    // This is a multi-instruction pattern.
+    if (EnableMultiInstrPatterns &&
+        match(LHS, m_CombineOr(m_V, m_AddLike(m_V, m_APInt(Offset))))) {
       ConstantRange LHSRange = ConstantRange::makeAllowedICmpRegion(Pred, *C);
       if (Offset)
         LHSRange = LHSRange.sub(*Offset);
       Known = Known.unionWith(LHSRange.toKnownBits());
     }
-    if (Pred == ICmpInst::ICMP_UGT || Pred == ICmpInst::ICMP_UGE) {
+    // These are multi-instruction patterns.
+    if (EnableMultiInstrPatterns &&
+        (Pred == ICmpInst::ICMP_UGT || Pred == ICmpInst::ICMP_UGE)) {
       // X & Y u> C     -> X u> C && Y u> C
       // X nuw- Y u> C  -> X u> C
       if (match(LHS, m_c_And(m_V, m_Value())) ||
@@ -969,7 +988,8 @@ static void computeKnownBitsFromCmp(const Value *V, CmpInst::Predicate Pred,
         Known.One.setHighBits(
             (*C + (Pred == ICmpInst::ICMP_UGT)).countLeadingOnes());
     }
-    if (Pred == ICmpInst::ICMP_ULT || Pred == ICmpInst::ICMP_ULE) {
+    if (EnableMultiInstrPatterns &&
+        (Pred == ICmpInst::ICMP_ULT || Pred == ICmpInst::ICMP_ULE)) {
       // X | Y u< C    -> X u< C && Y u< C
       // X nuw+ Y u< C -> X u< C && Y u< C
       if (match(LHS, m_c_Or(m_V, m_Value())) ||
@@ -991,7 +1011,8 @@ static void computeKnownBitsFromICmpCond(const Value *V, ICmpInst *Cmp,
   Value *RHS = Cmp->getOperand(1);
 
   // Handle icmp pred (trunc V), C
-  if (match(LHS, m_Trunc(m_Specific(V)))) {
+  // This is a multi-instruction pattern.
+  if (EnableMultiInstrPatterns && match(LHS, m_Trunc(m_Specific(V)))) {
     KnownBits DstKnown(LHS->getType()->getScalarSizeInBits());
     computeKnownBitsFromCmp(LHS, Pred, LHS, RHS, DstKnown, SQ);
     if (cast<TruncInst>(LHS)->hasNoUnsignedWrap())
@@ -1008,7 +1029,8 @@ static void computeKnownBitsFromCond(const Value *V, Value *Cond,
                                      KnownBits &Known, const SimplifyQuery &SQ,
                                      bool Invert, unsigned Depth) {
   Value *A, *B;
-  if (Depth < MaxAnalysisRecursionDepth &&
+  // This is a multi-instruction pattern.
+  if (EnableMultiInstrPatterns && Depth < MaxAnalysisRecursionDepth &&
       match(Cond, m_LogicalOp(m_Value(A), m_Value(B)))) {
     KnownBits Known2(Known.getBitWidth());
     KnownBits Known3(Known.getBitWidth());
@@ -1028,7 +1050,8 @@ static void computeKnownBitsFromCond(const Value *V, Value *Cond,
     return;
   }
 
-  if (match(Cond, m_Trunc(m_Specific(V)))) {
+  // This is a multi-instruction pattern.
+  if (EnableMultiInstrPatterns && match(Cond, m_Trunc(m_Specific(V)))) {
     KnownBits DstKnown(1);
     if (Invert) {
       DstKnown.setAllZero();
@@ -1043,7 +1066,9 @@ static void computeKnownBitsFromCond(const Value *V, Value *Cond,
     return;
   }
 
-  if (Depth < MaxAnalysisRecursionDepth && match(Cond, m_Not(m_Value(A))))
+  // This is a multi-instruction pattern.
+  if (EnableMultiInstrPatterns && Depth < MaxAnalysisRecursionDepth &&
+      match(Cond, m_Not(m_Value(A))))
     computeKnownBitsFromCond(V, A, Known, SQ, !Invert, Depth + 1);
 }
 
@@ -1118,15 +1143,17 @@ void llvm::computeKnownBitsFromContext(const Value *V, KnownBits &Known,
       Known.setAllOnes();
       return;
     }
-    if (match(Arg, m_Not(m_Specific(V))) &&
+    // This is a multi-instruction pattern.
+    if (EnableMultiInstrPatterns && match(Arg, m_Not(m_Specific(V))) &&
         isValidAssumeForContext(I, Q.CxtI, Q.DT)) {
       assert(BitWidth == 1 && "assume operand is not i1?");
       (void)BitWidth;
       Known.setAllZero();
       return;
     }
+    // This is a multi-instruction pattern.
     auto *Trunc = dyn_cast<TruncInst>(Arg);
-    if (Trunc && Trunc->getOperand(0) == V &&
+    if (EnableMultiInstrPatterns && Trunc && Trunc->getOperand(0) == V &&
         isValidAssumeForContext(I, Q.CxtI, Q.DT)) {
       if (Trunc->hasNoUnsignedWrap()) {
         Known = KnownBits::makeConstant(APInt(BitWidth, 1));
@@ -1198,7 +1225,8 @@ getKnownBitsFromAndXorOr(const Operator *I, const APInt &DemandedElts,
     // above it.
     // TODO: instcombine often reassociates independent `and` which can hide
     // this pattern. Try to match and(x, and(-x, y)) / and(and(x, y), -x).
-    if (HasKnownOne && match(I, m_c_And(m_Value(X), m_Neg(m_Deferred(X))))) {
+    if (EnableMultiInstrPatterns && HasKnownOne &&
+        match(I, m_c_And(m_Value(X), m_Neg(m_Deferred(X))))) {
       // -(-x) == x so using whichever (LHS/RHS) gets us a better result.
       if (KnownLHS.countMaxTrailingZeros() <= KnownRHS.countMaxTrailingZeros())
         KnownOut = KnownLHS.blsi();
@@ -1218,7 +1246,7 @@ getKnownBitsFromAndXorOr(const Operator *I, const APInt &DemandedElts,
     // -1 but for the purpose of demanded bits (xor(x, x-C) &
     // Demanded) == (xor(x, x-1) & Demanded). Extend the xor pattern
     // to use arbitrary C if xor(x, x-C) as the same as xor(x, x-1).
-    if (HasKnownOne &&
+    if (EnableMultiInstrPatterns && HasKnownOne &&
         match(I, m_c_Xor(m_Value(X), m_Add(m_Deferred(X), m_AllOnes())))) {
       const KnownBits &XBits = I->getOperand(0) == X ? KnownLHS : KnownRHS;
       KnownOut = XBits.blsmsk();
@@ -1234,7 +1262,7 @@ getKnownBitsFromAndXorOr(const Operator *I, const APInt &DemandedElts,
   // matching the form and/xor/or(x, add(x, y)) where y is odd.
   // TODO: This could be generalized to clearing any bit set in y where the
   // following bit is known to be unset in y.
-  if (!KnownOut.Zero[0] && !KnownOut.One[0] &&
+  if (EnableMultiInstrPatterns && !KnownOut.Zero[0] && !KnownOut.One[0] &&
       (match(I, m_c_BinOp(m_Value(X), m_c_Add(m_Deferred(X), m_Value(Y)))) ||
        match(I, m_c_BinOp(m_Value(X), m_Sub(m_Deferred(X), m_Value(Y)))) ||
        match(I, m_c_BinOp(m_Value(X), m_Sub(m_Value(Y), m_Deferred(X)))))) {
@@ -1347,6 +1375,10 @@ void llvm::adjustKnownBitsForSelectArm(KnownBits &Known, Value *Cond,
 // Returns the input and lower/upper bounds.
 static bool isSignedMinMaxClamp(const Value *Select, const Value *&In,
                                 const APInt *&CLow, const APInt *&CHigh) {
+  // This is a multi-instruction pattern.
+  if (!EnableMultiInstrPatterns)
+    return false;
+
   assert(isa<Operator>(Select) &&
          cast<Operator>(Select)->getOpcode() == Instruction::Select &&
          "Input should be a Select!");
@@ -1377,6 +1409,10 @@ static bool isSignedMinMaxClamp(const Value *Select, const Value *&In,
 static bool isSignedMinMaxIntrinsicClamp(const IntrinsicInst *II,
                                          const APInt *&CLow,
                                          const APInt *&CHigh) {
+  // This is a multi-instruction pattern.
+  if (!EnableMultiInstrPatterns)
+    return false;
+
   assert((II->getIntrinsicID() == Intrinsic::smin ||
           II->getIntrinsicID() == Intrinsic::smax) &&
          "Must be smin/smax");
@@ -1785,7 +1821,8 @@ static void computeKnownBitsFromOperator(const Operator *I,
     const PHINode *P = cast<PHINode>(I);
     BinaryOperator *BO = nullptr;
     Value *R = nullptr, *L = nullptr;
-    if (matchSimpleRecurrence(P, BO, R, L)) {
+    // PHI recurrence patterns are multi-instruction patterns.
+    if (EnableMultiInstrPatterns && matchSimpleRecurrence(P, BO, R, L)) {
       // Handle the case of a simple two-predecessor recurrence PHI.
       // There's a lot more that could theoretically be done here, but
       // this is sufficient to catch some interesting cases.
@@ -1960,7 +1997,8 @@ static void computeKnownBitsFromOperator(const Operator *I,
 
         // See if we can further use a conditional branch into the phi
         // to help us determine the range of the value.
-        if (!Known2.isConstant()) {
+        // This is a multi-instruction pattern.
+        if (EnableMultiInstrPatterns && !Known2.isConstant()) {
           CmpPredicate Pred;
           const APInt *RHSC;
           BasicBlock *TrueSucc, *FalseSucc;
@@ -2567,6 +2605,10 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
 /// always a power of two (or zero).
 static bool isPowerOfTwoRecurrence(const PHINode *PN, bool OrZero,
                                    SimplifyQuery &Q, unsigned Depth) {
+  // This is a multi-instruction pattern.
+  if (!EnableMultiInstrPatterns)
+    return false;
+
   BinaryOperator *BO = nullptr;
   Value *Start = nullptr, *Step = nullptr;
   if (!matchSimpleRecurrence(PN, BO, Start, Step))
@@ -2625,6 +2667,10 @@ static bool isPowerOfTwoRecurrence(const PHINode *PN, bool OrZero,
 static bool isImpliedToBeAPowerOfTwoFromCond(const Value *V, bool OrZero,
                                              const Value *Cond,
                                              bool CondIsTrue) {
+  // This is a multi-instruction pattern.
+  if (!EnableMultiInstrPatterns)
+    return false;
+
   CmpPredicate Pred;
   const APInt *RHSC;
   if (!match(Cond, m_ICmp(Pred, m_Intrinsic<Intrinsic::ctpop>(m_Specific(V)),
@@ -2703,7 +2749,8 @@ bool llvm::isKnownToBeAPowerOfTwo(const Value *V, bool OrZero,
 
   // (signmask) >>l X is clearly a power of two if the one is not shifted off
   // the bottom.  If it is shifted off the bottom then the result is undefined.
-  if (match(I, m_LShr(m_SignMask(), m_Value())))
+  // This is a multi-instruction pattern.
+  if (EnableMultiInstrPatterns && match(I, m_LShr(m_SignMask(), m_Value())))
     return true;
 
   // The remaining tests are all recursive, so bail out if we hit the limit.
@@ -2738,8 +2785,10 @@ bool llvm::isKnownToBeAPowerOfTwo(const Value *V, bool OrZero,
          isKnownToBeAPowerOfTwo(I->getOperand(0), /*OrZero*/ true, Q, Depth)))
       return true;
     // X & (-X) is always a power of two or zero.
-    if (match(I->getOperand(0), m_Neg(m_Specific(I->getOperand(1)))) ||
-        match(I->getOperand(1), m_Neg(m_Specific(I->getOperand(0)))))
+    // This is a multi-instruction pattern.
+    if (EnableMultiInstrPatterns &&
+        (match(I->getOperand(0), m_Neg(m_Specific(I->getOperand(1)))) ||
+         match(I->getOperand(1), m_Neg(m_Specific(I->getOperand(0))))))
       return OrZero || isKnownNonZero(I->getOperand(0), Q, Depth);
     return false;
   case Instruction::Add: {
@@ -2748,14 +2797,17 @@ bool llvm::isKnownToBeAPowerOfTwo(const Value *V, bool OrZero,
     const OverflowingBinaryOperator *VOBO = cast<OverflowingBinaryOperator>(V);
     if (OrZero || Q.IIQ.hasNoUnsignedWrap(VOBO) ||
         Q.IIQ.hasNoSignedWrap(VOBO)) {
-      if (match(I->getOperand(0),
-                m_c_And(m_Specific(I->getOperand(1)), m_Value())) &&
-          isKnownToBeAPowerOfTwo(I->getOperand(1), OrZero, Q, Depth))
-        return true;
-      if (match(I->getOperand(1),
-                m_c_And(m_Specific(I->getOperand(0)), m_Value())) &&
-          isKnownToBeAPowerOfTwo(I->getOperand(0), OrZero, Q, Depth))
-        return true;
+      // These are multi-instruction patterns.
+      if (EnableMultiInstrPatterns) {
+        if (match(I->getOperand(0),
+                  m_c_And(m_Specific(I->getOperand(1)), m_Value())) &&
+            isKnownToBeAPowerOfTwo(I->getOperand(1), OrZero, Q, Depth))
+          return true;
+        if (match(I->getOperand(1),
+                  m_c_And(m_Specific(I->getOperand(0)), m_Value())) &&
+            isKnownToBeAPowerOfTwo(I->getOperand(0), OrZero, Q, Depth))
+          return true;
+      }
 
       unsigned BitWidth = V->getType()->getScalarSizeInBits();
       KnownBits LHSBits(BitWidth);
@@ -2774,7 +2826,8 @@ bool llvm::isKnownToBeAPowerOfTwo(const Value *V, bool OrZero,
     }
 
     // LShr(UINT_MAX, Y) + 1 is a power of two (if add is nuw) or zero.
-    if (OrZero || Q.IIQ.hasNoUnsignedWrap(VOBO))
+    // This is a multi-instruction pattern.
+    if (EnableMultiInstrPatterns && (OrZero || Q.IIQ.hasNoUnsignedWrap(VOBO)))
       if (match(I, m_Add(m_LShr(m_AllOnes(), m_Value()), m_One())))
         return true;
     return false;
@@ -3026,6 +3079,10 @@ static bool rangeMetadataExcludesValue(const MDNode* Ranges, const APInt& Value)
 /// Try to detect a recurrence that monotonically increases/decreases from a
 /// non-zero starting value. These are common as induction variables.
 static bool isNonZeroRecurrence(const PHINode *PN) {
+  // This is a multi-instruction pattern.
+  if (!EnableMultiInstrPatterns)
+    return false;
+
   BinaryOperator *BO = nullptr;
   Value *Start = nullptr, *Step = nullptr;
   const APInt *StartC, *StepC;
@@ -3054,6 +3111,10 @@ static bool isNonZeroRecurrence(const PHINode *PN) {
 }
 
 static bool matchOpWithOpEqZero(Value *Op0, Value *Op1) {
+  // This is a multi-instruction pattern.
+  if (!EnableMultiInstrPatterns)
+    return false;
+
   return match(Op0, m_ZExtOrSExt(m_SpecificICmp(ICmpInst::ICMP_EQ,
                                                 m_Specific(Op1), m_Zero()))) ||
          match(Op1, m_ZExtOrSExt(m_SpecificICmp(ICmpInst::ICMP_EQ,
@@ -3866,6 +3927,10 @@ getInvertibleOperands(const Operator *Op1,
       return getOperands(0);
     break;
   case Instruction::PHI: {
+    // This is a multi-instruction pattern.
+    if (!EnableMultiInstrPatterns)
+      break;
+
     const PHINode *PN1 = cast<PHINode>(Op1);
     const PHINode *PN2 = cast<PHINode>(Op2);
 
@@ -3906,6 +3971,10 @@ getInvertibleOperands(const Operator *Op1,
 static bool isModifyingBinopOfNonZero(const Value *V1, const Value *V2,
                                       const APInt &DemandedElts,
                                       const SimplifyQuery &Q, unsigned Depth) {
+  // This is a multi-instruction pattern.
+  if (!EnableMultiInstrPatterns)
+    return false;
+
   const BinaryOperator *BO = dyn_cast<BinaryOperator>(V1);
   if (!BO)
     return false;
@@ -3935,6 +4004,10 @@ static bool isModifyingBinopOfNonZero(const Value *V1, const Value *V2,
 static bool isNonEqualMul(const Value *V1, const Value *V2,
                           const APInt &DemandedElts, const SimplifyQuery &Q,
                           unsigned Depth) {
+  // This is a multi-instruction pattern.
+  if (!EnableMultiInstrPatterns)
+    return false;
+
   if (auto *OBO = dyn_cast<OverflowingBinaryOperator>(V2)) {
     const APInt *C;
     return match(OBO, m_Mul(m_Specific(V1), m_APInt(C))) &&
@@ -3950,6 +4023,10 @@ static bool isNonEqualMul(const Value *V1, const Value *V2,
 static bool isNonEqualShl(const Value *V1, const Value *V2,
                           const APInt &DemandedElts, const SimplifyQuery &Q,
                           unsigned Depth) {
+  // This is a multi-instruction pattern.
+  if (!EnableMultiInstrPatterns)
+    return false;
+
   if (auto *OBO = dyn_cast<OverflowingBinaryOperator>(V2)) {
     const APInt *C;
     return match(OBO, m_Shl(m_Specific(V1), m_APInt(C))) &&
@@ -3962,6 +4039,10 @@ static bool isNonEqualShl(const Value *V1, const Value *V2,
 static bool isNonEqualPHIs(const PHINode *PN1, const PHINode *PN2,
                            const APInt &DemandedElts, const SimplifyQuery &Q,
                            unsigned Depth) {
+  // This is a multi-instruction pattern.
+  if (!EnableMultiInstrPatterns)
+    return false;
+
   // Check two PHIs are in same block.
   if (PN1->getParent() != PN2->getParent())
     return false;
@@ -4135,9 +4216,11 @@ static bool isKnownNonEqual(const Value *V1, const Value *V2,
   // See if we can recurse through (exactly one of) our operands.  This
   // requires our operation be 1-to-1 and map every input value to exactly
   // one output value.  Such an operation is invertible.
+  // These are multi-instruction patterns.
   auto *O1 = dyn_cast<Operator>(V1);
   auto *O2 = dyn_cast<Operator>(V2);
-  if (O1 && O2 && O1->getOpcode() == O2->getOpcode()) {
+  if (EnableMultiInstrPatterns && O1 && O2 &&
+      O1->getOpcode() == O2->getOpcode()) {
     if (auto Values = getInvertibleOperands(O1, O2))
       return isKnownNonEqual(Values->first, Values->second, DemandedElts, Q,
                              Depth + 1);
@@ -9321,6 +9404,10 @@ static bool isTruePredicate(CmpInst::Predicate Pred, const Value *LHS,
                             const Value *RHS) {
   if (ICmpInst::isTrueWhenEqual(Pred) && LHS == RHS)
     return true;
+
+  // All patterns below are multi-instruction patterns.
+  if (!EnableMultiInstrPatterns)
+    return false;
 
   switch (Pred) {
   default:
