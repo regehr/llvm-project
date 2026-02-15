@@ -63,6 +63,11 @@ static cl::opt<bool> DumpReproducers(
     "constraint-elimination-dump-reproducers", cl::init(false), cl::Hidden,
     cl::desc("Dump IR to reproduce successful transformations."));
 
+static cl::opt<bool> UseSCEVFallback(
+    "constraint-elimination-use-scev-fallback", cl::init(true), cl::Hidden,
+    cl::desc("Allow SCEV fallback when constraint decomposition cannot "
+             "prove conditions."));
+
 static int64_t MaxConstraintValue = std::numeric_limits<int64_t>::max();
 static int64_t MinSignedConstraintValue = std::numeric_limits<int64_t>::min();
 
@@ -1475,11 +1480,24 @@ static void generateReproducer(CmpInst *Cond, Module *M,
 
 static std::optional<bool> checkCondition(CmpInst::Predicate Pred, Value *A,
                                           Value *B, Instruction *CheckInst,
-                                          ConstraintInfo &Info) {
+                                          ConstraintInfo &Info,
+                                          ScalarEvolution &SE,
+                                          bool AllowSCEVFallback = true) {
   LLVM_DEBUG(dbgs() << "Checking " << *CheckInst << "\n");
 
   auto R = Info.getConstraintForSolving(Pred, A, B);
   if (R.empty() || !R.isValid(Info)) {
+    // Fall back to SCEV when the linear constraint system cannot currently
+    // represent this predicate (for example, due to unsupported operations).
+    if (AllowSCEVFallback && SE.isSCEVable(A->getType())) {
+      const SCEV *AS = SE.getSCEV(A);
+      const SCEV *BS = SE.getSCEV(B);
+      if (auto Known = SE.evaluatePredicateAt(Pred, AS, BS, CheckInst)) {
+        LLVM_DEBUG(dbgs() << "Condition known by SCEV\n");
+        return Known;
+      }
+    }
+
     LLVM_DEBUG(dbgs() << "   failed to decompose condition\n");
     return std::nullopt;
   }
@@ -1500,13 +1518,32 @@ static std::optional<bool> checkCondition(CmpInst::Predicate Pred, Value *A,
     return ImpliedCondition;
   }
 
+  // Fall back to SCEV for non-linear patterns the constraint system does not
+  // currently decompose (e.g. and/or assumptions).
+  if (AllowSCEVFallback && SE.isSCEVable(A->getType())) {
+    const SCEV *AS = SE.getSCEV(A);
+    const SCEV *BS = SE.getSCEV(B);
+    if (auto Known = SE.evaluatePredicateAt(Pred, AS, BS, CheckInst)) {
+      LLVM_DEBUG(dbgs() << "Condition known by SCEV\n");
+      return Known;
+    }
+  }
+
   return std::nullopt;
+}
+
+static bool hasDominatingNonICmpAssume(
+    Instruction *I, DominatorTree &DT,
+    ArrayRef<AssumeInst *> NonICmpAssumesInFunction) {
+  return any_of(NonICmpAssumesInFunction,
+                [&](AssumeInst *AI) { return DT.dominates(AI, I); });
 }
 
 static bool checkAndReplaceCondition(
     ICmpInst *Cmp, ConstraintInfo &Info, unsigned NumIn, unsigned NumOut,
     Instruction *ContextInst, Module *ReproducerModule,
     ArrayRef<ReproducerEntry> ReproducerCondStack, DominatorTree &DT,
+    ScalarEvolution &SE, ArrayRef<AssumeInst *> NonICmpAssumesInFunction,
     SmallVectorImpl<Instruction *> &ToRemove) {
   auto ReplaceCmpWithConstant = [&](CmpInst *Cmp, bool IsTrue) {
     generateReproducer(Cmp, ReproducerModule, ReproducerCondStack, Info, DT);
@@ -1556,9 +1593,14 @@ static bool checkAndReplaceCondition(
     return Changed;
   };
 
+  bool AllowSCEVFallback =
+      UseSCEVFallback && !Cmp->hasSameSign() &&
+      hasDominatingNonICmpAssume(Cmp, DT, NonICmpAssumesInFunction);
+
   if (auto ImpliedCondition =
           checkCondition(Cmp->getPredicate(), Cmp->getOperand(0),
-                         Cmp->getOperand(1), Cmp, Info))
+                         Cmp->getOperand(1), Cmp, Info, SE,
+                         AllowSCEVFallback))
     return ReplaceCmpWithConstant(Cmp, *ImpliedCondition);
 
   // When the predicate is samesign and unsigned, we can also make use of the
@@ -1566,13 +1608,15 @@ static bool checkAndReplaceCondition(
   if (Cmp->hasSameSign() && Cmp->isUnsigned())
     if (auto ImpliedCondition =
             checkCondition(Cmp->getSignedPredicate(), Cmp->getOperand(0),
-                           Cmp->getOperand(1), Cmp, Info))
+                           Cmp->getOperand(1), Cmp, Info, SE,
+                           /*AllowSCEVFallback=*/false))
       return ReplaceCmpWithConstant(Cmp, *ImpliedCondition);
 
   return false;
 }
 
 static bool checkAndReplaceMinMax(MinMaxIntrinsic *MinMax, ConstraintInfo &Info,
+                                  ScalarEvolution &SE,
                                   SmallVectorImpl<Instruction *> &ToRemove) {
   auto ReplaceMinMaxWithOperand = [&](MinMaxIntrinsic *MinMax, bool UseLHS) {
     // TODO: generate reproducer for min/max.
@@ -1584,29 +1628,38 @@ static bool checkAndReplaceMinMax(MinMaxIntrinsic *MinMax, ConstraintInfo &Info,
   ICmpInst::Predicate Pred =
       ICmpInst::getNonStrictPredicate(MinMax->getPredicate());
   if (auto ImpliedCondition = checkCondition(
-          Pred, MinMax->getOperand(0), MinMax->getOperand(1), MinMax, Info))
+          Pred, MinMax->getOperand(0), MinMax->getOperand(1), MinMax, Info, SE,
+          /*AllowSCEVFallback=*/false))
     return ReplaceMinMaxWithOperand(MinMax, *ImpliedCondition);
   if (auto ImpliedCondition = checkCondition(
-          Pred, MinMax->getOperand(1), MinMax->getOperand(0), MinMax, Info))
+          Pred, MinMax->getOperand(1), MinMax->getOperand(0), MinMax, Info, SE,
+          /*AllowSCEVFallback=*/false))
     return ReplaceMinMaxWithOperand(MinMax, !*ImpliedCondition);
   return false;
 }
 
 static bool checkAndReplaceCmp(CmpIntrinsic *I, ConstraintInfo &Info,
+                               ScalarEvolution &SE,
                                SmallVectorImpl<Instruction *> &ToRemove) {
   Value *LHS = I->getOperand(0);
   Value *RHS = I->getOperand(1);
-  if (checkCondition(I->getGTPredicate(), LHS, RHS, I, Info).value_or(false)) {
+  if (checkCondition(I->getGTPredicate(), LHS, RHS, I, Info, SE,
+                     /*AllowSCEVFallback=*/false)
+          .value_or(false)) {
     I->replaceAllUsesWith(ConstantInt::get(I->getType(), 1));
     ToRemove.push_back(I);
     return true;
   }
-  if (checkCondition(I->getLTPredicate(), LHS, RHS, I, Info).value_or(false)) {
+  if (checkCondition(I->getLTPredicate(), LHS, RHS, I, Info, SE,
+                     /*AllowSCEVFallback=*/false)
+          .value_or(false)) {
     I->replaceAllUsesWith(ConstantInt::getSigned(I->getType(), -1));
     ToRemove.push_back(I);
     return true;
   }
-  if (checkCondition(ICmpInst::ICMP_EQ, LHS, RHS, I, Info).value_or(false)) {
+  if (checkCondition(ICmpInst::ICMP_EQ, LHS, RHS, I, Info, SE,
+                     /*AllowSCEVFallback=*/false)
+          .value_or(false)) {
     I->replaceAllUsesWith(ConstantInt::get(I->getType(), 0));
     ToRemove.push_back(I);
     return true;
@@ -1635,6 +1688,7 @@ removeEntryFromStack(const StackEntry &E, ConstraintInfo &Info,
 static bool checkOrAndOpImpliedByOther(
     FactOrCheck &CB, ConstraintInfo &Info, Module *ReproducerModule,
     SmallVectorImpl<ReproducerEntry> &ReproducerCondStack,
+    ScalarEvolution &SE,
     SmallVectorImpl<StackEntry> &DFSInStack,
     SmallVectorImpl<Instruction *> &ToRemove) {
   Instruction *JoinOp = CB.getContextInst();
@@ -1686,7 +1740,8 @@ static bool checkOrAndOpImpliedByOther(
   // Check if the second condition can be simplified now.
   if (auto ImpliedCondition =
           checkCondition(CmpToCheck->getPredicate(), CmpToCheck->getOperand(0),
-                         CmpToCheck->getOperand(1), CmpToCheck, Info)) {
+                         CmpToCheck->getOperand(1), CmpToCheck, Info, SE,
+                         /*AllowSCEVFallback=*/false)) {
     if (IsOr == *ImpliedCondition)
       JoinOp->replaceAllUsesWith(
           ConstantInt::getBool(JoinOp->getType(), *ImpliedCondition));
@@ -1838,6 +1893,15 @@ static bool eliminateConstraints(Function &F, DominatorTree &DT, LoopInfo &LI,
   bool Changed = false;
   DT.updateDFSNumbers();
   SmallVector<Value *> FunctionArgs(llvm::make_pointer_range(F.args()));
+  SmallVector<AssumeInst *> NonICmpAssumesInFunction;
+  for (BasicBlock &BB : F)
+    for (Instruction &I : BB) {
+      Value *Cond;
+      if (match(&I, m_Intrinsic<Intrinsic::assume>(m_Value(Cond))) &&
+          !isa<ICmpInst>(Cond))
+        NonICmpAssumesInFunction.push_back(cast<AssumeInst>(&I));
+    }
+
   ConstraintInfo Info(F.getDataLayout(), FunctionArgs);
   State S(DT, LI, SE, TLI);
   std::unique_ptr<Module> ReproducerModule(
@@ -1923,18 +1987,19 @@ static bool eliminateConstraints(Function &F, DominatorTree &DT, LoopInfo &LI,
       } else if (auto *Cmp = dyn_cast<ICmpInst>(Inst)) {
         bool Simplified = checkAndReplaceCondition(
             Cmp, Info, CB.NumIn, CB.NumOut, CB.getContextInst(),
-            ReproducerModule.get(), ReproducerCondStack, S.DT, ToRemove);
+            ReproducerModule.get(), ReproducerCondStack, S.DT, SE,
+            NonICmpAssumesInFunction, ToRemove);
         if (!Simplified &&
             match(CB.getContextInst(), m_LogicalOp(m_Value(), m_Value()))) {
           Simplified = checkOrAndOpImpliedByOther(
-              CB, Info, ReproducerModule.get(), ReproducerCondStack, DFSInStack,
-              ToRemove);
+              CB, Info, ReproducerModule.get(), ReproducerCondStack, SE,
+              DFSInStack, ToRemove);
         }
         Changed |= Simplified;
       } else if (auto *MinMax = dyn_cast<MinMaxIntrinsic>(Inst)) {
-        Changed |= checkAndReplaceMinMax(MinMax, Info, ToRemove);
+        Changed |= checkAndReplaceMinMax(MinMax, Info, SE, ToRemove);
       } else if (auto *CmpIntr = dyn_cast<CmpIntrinsic>(Inst)) {
-        Changed |= checkAndReplaceCmp(CmpIntr, Info, ToRemove);
+        Changed |= checkAndReplaceCmp(CmpIntr, Info, SE, ToRemove);
       }
       continue;
     }
