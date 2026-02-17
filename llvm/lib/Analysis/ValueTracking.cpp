@@ -143,11 +143,25 @@ static std::string formatKnownBits(const KnownBits &Known) {
   return Result;
 }
 
-static StringRef getKnownBitsLogInstructionName(const Instruction &I) {
+static std::string getKnownBitsLogInstructionName(const Instruction &I) {
   if (const auto *II = dyn_cast<IntrinsicInst>(&I))
     if (const Function *F = II->getCalledFunction())
-      return F->getName();
-  return I.getOpcodeName();
+      return std::string(F->getName());
+
+  std::string Name = I.getOpcodeName();
+
+  if (const auto *OBO = dyn_cast<OverflowingBinaryOperator>(&I)) {
+    if (OBO->hasNoSignedWrap())
+      Name += ".nsw";
+    if (OBO->hasNoUnsignedWrap())
+      Name += ".nuw";
+  }
+
+  if (const auto *PEO = dyn_cast<PossiblyExactOperator>(&I))
+    if (PEO->isExact())
+      Name += ".exact";
+
+  return Name;
 }
 
 static raw_fd_ostream *getKnownBitsLogStream() {
@@ -216,8 +230,18 @@ static std::string getKnownBitsAbstractValue(const Value *V,
   if (!canComputeKnownBitsForType(V->getType()))
     return "NA";
 
+  // computeKnownBits() expects DemandedElts to match the queried value shape:
+  // fixed-vector lane mask width, or APInt(1, 1) for scalars/scalable vectors.
+  APInt OperandDemandedElts = APInt(1, 1);
+  if (const auto *FVTy = dyn_cast<FixedVectorType>(V->getType())) {
+    unsigned NumElts = FVTy->getNumElements();
+    OperandDemandedElts = (DemandedElts.getBitWidth() == NumElts)
+                              ? DemandedElts
+                              : APInt::getAllOnes(NumElts);
+  }
+
   KnownBits KB(getBitWidth(V->getType(), Q.DL));
-  computeKnownBits(V, DemandedElts, KB, Q, Depth);
+  computeKnownBits(V, OperandDemandedElts, KB, Q, Depth);
   return formatKnownBits(KB);
 }
 
