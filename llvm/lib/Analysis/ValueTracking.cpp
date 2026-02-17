@@ -72,14 +72,18 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/KnownFPClass.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/RISCVTargetParser.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
+#include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 
 using namespace llvm;
@@ -89,6 +93,9 @@ using namespace llvm::PatternMatch;
 // dominating comparisons.
 static cl::opt<unsigned> DomConditionsMaxUses("dom-conditions-max-uses",
                                               cl::Hidden, cl::init(20));
+static cl::opt<std::string> KnownBitsLogFile(
+    "known-bits-log-file", cl::init(""), cl::value_desc("filename"),
+    cl::desc("Log computeKnownBits() instruction invocations to this file"));
 
 /// Maximum number of instructions to check between assume and context
 /// instruction.
@@ -101,6 +108,114 @@ static unsigned getBitWidth(Type *Ty, const DataLayout &DL) {
     return BitWidth;
 
   return DL.getPointerTypeSizeInBits(Ty);
+}
+
+static bool shouldLogKnownBits() { return !KnownBitsLogFile.empty(); }
+
+static bool shouldLogKnownBitsInstruction(const Instruction &I) {
+  switch (I.getOpcode()) {
+  case Instruction::ICmp:
+  case Instruction::ExtractValue:
+    return false;
+  default:
+    return true;
+  }
+}
+
+static bool canComputeKnownBitsForType(Type *Ty) {
+  return Ty->isIntOrIntVectorTy() || Ty->isPtrOrPtrVectorTy();
+}
+
+static std::string formatKnownBits(const KnownBits &Known) {
+  std::string Result;
+  Result.reserve(Known.getBitWidth());
+  for (int Bit = Known.getBitWidth() - 1; Bit >= 0; --Bit) {
+    if (Known.Zero[Bit])
+      Result.push_back('0');
+    else if (Known.One[Bit])
+      Result.push_back('1');
+    else
+      Result.push_back('?');
+  }
+  return Result;
+}
+
+static StringRef getKnownBitsLogInstructionName(const Instruction &I) {
+  if (const auto *II = dyn_cast<IntrinsicInst>(&I))
+    if (const Function *F = II->getCalledFunction())
+      return F->getName();
+  return I.getOpcodeName();
+}
+
+static raw_fd_ostream *getKnownBitsLogStream() {
+  if (!shouldLogKnownBits())
+    return nullptr;
+
+  static std::unique_ptr<raw_fd_ostream> LogFileStream;
+  if (LogFileStream)
+    return LogFileStream.get();
+
+  std::error_code EC;
+  LogFileStream =
+      std::make_unique<raw_fd_ostream>(KnownBitsLogFile, EC, sys::fs::OF_None);
+  if (EC)
+    report_fatal_error(Twine("Unable to open known bits log file '") +
+                       KnownBitsLogFile + "': " + EC.message());
+  return LogFileStream.get();
+}
+
+static bool SuppressKnownBitsLogging = false;
+
+class KnownBitsLoggingSuppressor {
+  bool Saved = false;
+
+public:
+  KnownBitsLoggingSuppressor() : Saved(SuppressKnownBitsLogging) {
+    SuppressKnownBitsLogging = true;
+  }
+  ~KnownBitsLoggingSuppressor() { SuppressKnownBitsLogging = Saved; }
+};
+
+static std::string getKnownBitsAbstractValue(const Value *V,
+                                             const APInt &DemandedElts,
+                                             const SimplifyQuery &Q,
+                                             unsigned Depth);
+
+static void computeKnownBits(const Value *V, const APInt &DemandedElts,
+                             KnownBits &Known, const SimplifyQuery &Q,
+                             unsigned Depth);
+
+static void logKnownBitsInvocation(const Instruction &I,
+                                   const APInt &DemandedElts,
+                                   const KnownBits &KnownResult,
+                                   const SimplifyQuery &Q, unsigned Depth) {
+  raw_fd_ostream *OS = getKnownBitsLogStream();
+  if (!OS)
+    return;
+
+  KnownBitsLoggingSuppressor Suppressor;
+  *OS << getKnownBitsLogInstructionName(I) << ' '
+      << formatKnownBits(KnownResult);
+  if (const auto *CB = dyn_cast<CallBase>(&I)) {
+    for (const Value *Arg : CB->args())
+      *OS << ' ' << getKnownBitsAbstractValue(Arg, DemandedElts, Q, Depth);
+  } else {
+    for (const Use &Op : I.operands())
+      *OS << ' ' << getKnownBitsAbstractValue(Op.get(), DemandedElts, Q, Depth);
+  }
+  *OS << '\n';
+}
+
+static std::string getKnownBitsAbstractValue(const Value *V,
+                                             const APInt &DemandedElts,
+                                             const SimplifyQuery &Q,
+                                             unsigned Depth) {
+  if (!canComputeKnownBitsForType(V->getType()))
+    return "NA";
+
+  KnownBits KB(getBitWidth(V->getType(), Q.DL));
+  computeKnownBits(V, DemandedElts, KB, Q, Depth);
+  return formatKnownBits(KB);
 }
 
 // Given the provided Value and, potentially, a context instruction, return
@@ -133,10 +248,6 @@ static bool getShuffleDemandedElts(const ShuffleVectorInst *Shuf,
   return llvm::getShuffleDemandedElts(NumElts, Shuf->getShuffleMask(),
                                       DemandedElts, DemandedLHS, DemandedRHS);
 }
-
-static void computeKnownBits(const Value *V, const APInt &DemandedElts,
-                             KnownBits &Known, const SimplifyQuery &Q,
-                             unsigned Depth);
 
 void llvm::computeKnownBits(const Value *V, KnownBits &Known,
                             const SimplifyQuery &Q, unsigned Depth) {
@@ -2431,8 +2542,20 @@ KnownBits llvm::computeKnownBits(const Value *V, const SimplifyQuery &Q,
 void computeKnownBits(const Value *V, const APInt &DemandedElts,
                       KnownBits &Known, const SimplifyQuery &Q,
                       unsigned Depth) {
+  const Instruction *LoggedInst = nullptr;
+  bool ShouldLogInvocation = true;
+  if (shouldLogKnownBits() && !SuppressKnownBitsLogging)
+    if (const auto *I = dyn_cast<Instruction>(V);
+        I && shouldLogKnownBitsInstruction(*I))
+      LoggedInst = I;
+  auto LogResult = scope_exit([&] {
+    if (LoggedInst && ShouldLogInvocation)
+      logKnownBitsInvocation(*LoggedInst, DemandedElts, Known, Q, Depth);
+  });
+
   if (!DemandedElts) {
     // No demanded elts, better to assume we don't know anything.
+    ShouldLogInvocation = false;
     Known.resetAll();
     return;
   }
@@ -2537,8 +2660,10 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
       Known = Range->toKnownBits();
 
   // All recursive calls that increase depth must come after this.
-  if (Depth == MaxAnalysisRecursionDepth)
+  if (Depth == MaxAnalysisRecursionDepth) {
+    ShouldLogInvocation = false;
     return;
+  }
 
   // A weak GlobalAlias is totally unknown. A non-weak GlobalAlias has
   // the bits of its aliasee.
