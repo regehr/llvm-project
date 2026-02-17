@@ -115,6 +115,9 @@ static bool shouldLogKnownBits() { return !KnownBitsLogFile.empty(); }
 static bool shouldLogKnownBitsInstruction(const Instruction &I) {
   switch (I.getOpcode()) {
   case Instruction::ICmp:
+  case Instruction::Call:
+  case Instruction::Load:
+  case Instruction::Store:
   case Instruction::ExtractValue:
     return false;
   default:
@@ -123,7 +126,7 @@ static bool shouldLogKnownBitsInstruction(const Instruction &I) {
 }
 
 static bool canComputeKnownBitsForType(Type *Ty) {
-  return Ty->isIntOrIntVectorTy() || Ty->isPtrOrPtrVectorTy();
+  return Ty->isIntOrIntVectorTy();
 }
 
 static std::string formatKnownBits(const KnownBits &Known) {
