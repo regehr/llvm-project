@@ -243,11 +243,13 @@ static void logKnownBitsInvocation(const Instruction &I,
     *OS << ' ' << KnownResultString;
     if (const auto *CB = dyn_cast<CallBase>(&I)) {
       for (const Value *Arg : CB->args())
-        *OS << ' ' << getKnownBitsAbstractValue(Arg, LineDemandedElts, Q, Depth);
+        *OS << ' '
+            << getKnownBitsAbstractValue(Arg, LineDemandedElts, Q, Depth + 1);
     } else {
       for (const Use &Op : I.operands())
-        *OS << ' ' << getKnownBitsAbstractValue(Op.get(), LineDemandedElts, Q,
-                                                Depth);
+        *OS << ' '
+            << getKnownBitsAbstractValue(Op.get(), LineDemandedElts, Q,
+                                         Depth + 1);
     }
     *OS << '\n';
   };
