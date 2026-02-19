@@ -2737,6 +2737,13 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
   // computeKnownBitsFromContext strictly refines Known.
   // Therefore, we run them after computeKnownBitsFromOperator.
 
+  if (LoggedInst && ShouldLogInvocation) {
+    logKnownBitsInvocation(*LoggedInst, DemandedElts, Known, Q, Depth);
+    ShouldLogInvocation = false;
+  }
+  if (SuppressKnownBitsLogging)
+    return;
+
   // Check whether we can determine known bits from context such as assumes.
   computeKnownBitsFromContext(V, Known, Q, Depth);
 }
