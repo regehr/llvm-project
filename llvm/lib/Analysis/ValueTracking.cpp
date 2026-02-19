@@ -113,11 +113,19 @@ static unsigned getBitWidth(Type *Ty, const DataLayout &DL) {
 static bool shouldLogKnownBits() { return !KnownBitsLogFile.empty(); }
 
 static bool shouldLogKnownBitsInstruction(const Instruction &I) {
+  if (const auto *CB = dyn_cast<CallBase>(&I)) {
+    const Function *F = CB->getCalledFunction();
+    return F && F->isIntrinsic();
+  }
+
   switch (I.getOpcode()) {
   case Instruction::ICmp:
   case Instruction::Load:
   case Instruction::Store:
   case Instruction::ExtractValue:
+  case Instruction::GetElementPtr:
+  case Instruction::Alloca:
+  case Instruction::PHI:
     return false;
   default:
     return true;
@@ -181,6 +189,7 @@ static raw_fd_ostream *getKnownBitsLogStream() {
 }
 
 static bool SuppressKnownBitsLogging = false;
+static const Value *SuppressCallRangeRefinementForValue = nullptr;
 
 class KnownBitsLoggingSuppressor {
   bool Saved = false;
@@ -190,6 +199,19 @@ public:
     SuppressKnownBitsLogging = true;
   }
   ~KnownBitsLoggingSuppressor() { SuppressKnownBitsLogging = Saved; }
+};
+
+class KnownBitsCallRangeRefinementSuppressor {
+  const Value *Saved = nullptr;
+
+public:
+  explicit KnownBitsCallRangeRefinementSuppressor(const Value *V)
+      : Saved(SuppressCallRangeRefinementForValue) {
+    SuppressCallRangeRefinementForValue = V;
+  }
+  ~KnownBitsCallRangeRefinementSuppressor() {
+    SuppressCallRangeRefinementForValue = Saved;
+  }
 };
 
 static std::string getKnownBitsAbstractValue(const Value *V,
@@ -2164,14 +2186,16 @@ static void computeKnownBitsFromOperator(const Operator *I,
     // If range metadata is attached to this call, set known bits from that,
     // and then intersect with known bits based on other properties of the
     // function.
-    if (MDNode *MD =
-            Q.IIQ.getMetadata(cast<Instruction>(I), LLVMContext::MD_range))
-      computeKnownBitsFromRangeMetadata(*MD, Known);
+    if (I != SuppressCallRangeRefinementForValue)
+      if (MDNode *MD =
+              Q.IIQ.getMetadata(cast<Instruction>(I), LLVMContext::MD_range))
+        computeKnownBitsFromRangeMetadata(*MD, Known);
 
     const auto *CB = cast<CallBase>(I);
 
-    if (std::optional<ConstantRange> Range = CB->getRange())
-      Known = Known.unionWith(Range->toKnownBits());
+    if (I != SuppressCallRangeRefinementForValue)
+      if (std::optional<ConstantRange> Range = CB->getRange())
+        Known = Known.unionWith(Range->toKnownBits());
 
     if (const Value *RV = CB->getReturnedArgOperand()) {
       if (RV->getType() == I->getType()) {
@@ -2738,7 +2762,13 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
   // Therefore, we run them after computeKnownBitsFromOperator.
 
   if (LoggedInst && ShouldLogInvocation) {
-    logKnownBitsInvocation(*LoggedInst, DemandedElts, Known, Q, Depth);
+    KnownBits KnownForLog(Known.getBitWidth());
+    {
+      KnownBitsLoggingSuppressor LoggingSuppressor;
+      KnownBitsCallRangeRefinementSuppressor RangeSuppressor(V);
+      computeKnownBits(V, DemandedElts, KnownForLog, Q, Depth);
+    }
+    logKnownBitsInvocation(*LoggedInst, DemandedElts, KnownForLog, Q, Depth);
     ShouldLogInvocation = false;
   }
   if (SuppressKnownBitsLogging)
