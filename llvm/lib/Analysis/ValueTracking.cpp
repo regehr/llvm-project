@@ -115,7 +115,6 @@ static bool shouldLogKnownBits() { return !KnownBitsLogFile.empty(); }
 static bool shouldLogKnownBitsInstruction(const Instruction &I) {
   switch (I.getOpcode()) {
   case Instruction::ICmp:
-  case Instruction::Call:
   case Instruction::Load:
   case Instruction::Store:
   case Instruction::ExtractValue:
