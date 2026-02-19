@@ -210,16 +210,38 @@ static void logKnownBitsInvocation(const Instruction &I,
     return;
 
   KnownBitsLoggingSuppressor Suppressor;
-  *OS << getKnownBitsLogInstructionName(I) << ' '
-      << formatKnownBits(KnownResult);
-  if (const auto *CB = dyn_cast<CallBase>(&I)) {
-    for (const Value *Arg : CB->args())
-      *OS << ' ' << getKnownBitsAbstractValue(Arg, DemandedElts, Q, Depth);
-  } else {
-    for (const Use &Op : I.operands())
-      *OS << ' ' << getKnownBitsAbstractValue(Op.get(), DemandedElts, Q, Depth);
+
+  auto LogLine = [&](const APInt &LineDemandedElts,
+                     const std::string &KnownResultString) {
+    *OS << getKnownBitsLogInstructionName(I);
+    *OS << ' ' << KnownResultString;
+    if (const auto *CB = dyn_cast<CallBase>(&I)) {
+      for (const Value *Arg : CB->args())
+        *OS << ' ' << getKnownBitsAbstractValue(Arg, LineDemandedElts, Q, Depth);
+    } else {
+      for (const Use &Op : I.operands())
+        *OS << ' ' << getKnownBitsAbstractValue(Op.get(), LineDemandedElts, Q,
+                                                Depth);
+    }
+    *OS << '\n';
+  };
+
+  if (const auto *FVTy = dyn_cast<FixedVectorType>(I.getType())) {
+    unsigned NumElts = FVTy->getNumElements();
+    if (DemandedElts.getBitWidth() == NumElts) {
+      for (unsigned Lane = 0; Lane != NumElts; ++Lane) {
+        if (!DemandedElts[Lane])
+          continue;
+        APInt LaneDemandedElts = APInt::getZero(NumElts);
+        LaneDemandedElts.setBit(Lane);
+        LogLine(LaneDemandedElts,
+                getKnownBitsAbstractValue(&I, LaneDemandedElts, Q, Depth));
+      }
+      return;
+    }
   }
-  *OS << '\n';
+
+  LogLine(DemandedElts, formatKnownBits(KnownResult));
 }
 
 static std::string getKnownBitsAbstractValue(const Value *V,
