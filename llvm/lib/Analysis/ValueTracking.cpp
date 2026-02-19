@@ -126,6 +126,10 @@ static bool shouldLogKnownBitsInstruction(const Instruction &I) {
   case Instruction::GetElementPtr:
   case Instruction::Alloca:
   case Instruction::PHI:
+  case Instruction::PtrToAddr:
+  case Instruction::SExt:
+  case Instruction::ZExt:
+  case Instruction::Trunc:
     return false;
   default:
     return true;
