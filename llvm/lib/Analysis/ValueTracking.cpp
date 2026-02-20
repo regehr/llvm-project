@@ -130,6 +130,8 @@ static bool shouldLogKnownBitsInstruction(const Instruction &I) {
   case Instruction::SExt:
   case Instruction::ZExt:
   case Instruction::Trunc:
+  case Instruction::Select:
+  case Instruction::ShuffleVector:
     return false;
   default:
     return true;
