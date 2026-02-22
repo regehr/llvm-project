@@ -127,6 +127,7 @@ static bool shouldLogKnownBitsInstruction(const Instruction &I) {
   case Instruction::Alloca:
   case Instruction::PHI:
   case Instruction::PtrToAddr:
+  case Instruction::PtrToInt:
   case Instruction::SExt:
   case Instruction::ZExt:
   case Instruction::Trunc:
@@ -196,6 +197,7 @@ static raw_fd_ostream *getKnownBitsLogStream() {
 
 static bool SuppressKnownBitsLogging = false;
 static const Value *SuppressCallRangeRefinementForValue = nullptr;
+static const Value *SuppressCollectionRefinementForValue = nullptr;
 
 class KnownBitsLoggingSuppressor {
   bool Saved = false;
@@ -217,6 +219,19 @@ public:
   }
   ~KnownBitsCallRangeRefinementSuppressor() {
     SuppressCallRangeRefinementForValue = Saved;
+  }
+};
+
+class KnownBitsCollectionRefinementSuppressor {
+  const Value *Saved = nullptr;
+
+public:
+  explicit KnownBitsCollectionRefinementSuppressor(const Value *V)
+      : Saved(SuppressCollectionRefinementForValue) {
+    SuppressCollectionRefinementForValue = V;
+  }
+  ~KnownBitsCollectionRefinementSuppressor() {
+    SuppressCollectionRefinementForValue = Saved;
   }
 };
 
@@ -676,7 +691,8 @@ static void computeKnownBitsAddSub(bool Add, const Value *Op0, const Value *Op1,
                                    bool NSW, bool NUW,
                                    const APInt &DemandedElts,
                                    KnownBits &KnownOut, KnownBits &Known2,
-                                   const SimplifyQuery &Q, unsigned Depth) {
+                                   const SimplifyQuery &Q, unsigned Depth,
+                                   bool DisableCollectionRefinements) {
   computeKnownBits(Op1, DemandedElts, KnownOut, Q, Depth + 1);
 
   // If one operand is unknown and we have no nowrap information,
@@ -687,12 +703,13 @@ static void computeKnownBitsAddSub(bool Add, const Value *Op0, const Value *Op1,
   computeKnownBits(Op0, DemandedElts, Known2, Q, Depth + 1);
   KnownOut = KnownBits::computeForAddSub(Add, NSW, NUW, Known2, KnownOut);
 
-  if (!Add && NSW && !KnownOut.isNonNegative() &&
+  if (!DisableCollectionRefinements && !Add && NSW &&
+      !KnownOut.isNonNegative() &&
       isImpliedByDomCondition(ICmpInst::ICMP_SLE, Op1, Op0, Q.CxtI, Q.DL)
           .value_or(false))
     KnownOut.makeNonNegative();
 
-  if (Add)
+  if (Add && !DisableCollectionRefinements)
     // Try to match lerp pattern and combine results
     computeKnownBitsFromLerpPattern(Op0, Op1, DemandedElts, KnownOut, Q, Depth);
 }
@@ -1374,6 +1391,8 @@ getKnownBitsFromAndXorOr(const Operator *I, const APInt &DemandedElts,
                          const SimplifyQuery &Q, unsigned Depth) {
   unsigned BitWidth = KnownLHS.getBitWidth();
   KnownBits KnownOut(BitWidth);
+  bool DisableCollectionRefinements =
+      I == SuppressCollectionRefinementForValue;
   bool IsAnd = false;
   bool HasKnownOne = !KnownLHS.One.isZero() || !KnownRHS.One.isZero();
   Value *X = nullptr, *Y = nullptr;
@@ -1387,7 +1406,8 @@ getKnownBitsFromAndXorOr(const Operator *I, const APInt &DemandedElts,
     // above it.
     // TODO: instcombine often reassociates independent `and` which can hide
     // this pattern. Try to match and(x, and(-x, y)) / and(and(x, y), -x).
-    if (HasKnownOne && match(I, m_c_And(m_Value(X), m_Neg(m_Deferred(X))))) {
+    if (!DisableCollectionRefinements && HasKnownOne &&
+        match(I, m_c_And(m_Value(X), m_Neg(m_Deferred(X))))) {
       // -(-x) == x so using whichever (LHS/RHS) gets us a better result.
       if (KnownLHS.countMaxTrailingZeros() <= KnownRHS.countMaxTrailingZeros())
         KnownOut = KnownLHS.blsi();
@@ -1407,7 +1427,7 @@ getKnownBitsFromAndXorOr(const Operator *I, const APInt &DemandedElts,
     // -1 but for the purpose of demanded bits (xor(x, x-C) &
     // Demanded) == (xor(x, x-1) & Demanded). Extend the xor pattern
     // to use arbitrary C if xor(x, x-C) as the same as xor(x, x-1).
-    if (HasKnownOne &&
+    if (!DisableCollectionRefinements && HasKnownOne &&
         match(I, m_c_Xor(m_Value(X), m_Add(m_Deferred(X), m_AllOnes())))) {
       const KnownBits &XBits = I->getOperand(0) == X ? KnownLHS : KnownRHS;
       KnownOut = XBits.blsmsk();
@@ -1423,7 +1443,8 @@ getKnownBitsFromAndXorOr(const Operator *I, const APInt &DemandedElts,
   // matching the form and/xor/or(x, add(x, y)) where y is odd.
   // TODO: This could be generalized to clearing any bit set in y where the
   // following bit is known to be unset in y.
-  if (!KnownOut.Zero[0] && !KnownOut.One[0] &&
+  if (!DisableCollectionRefinements && !KnownOut.Zero[0] &&
+      !KnownOut.One[0] &&
       (match(I, m_c_BinOp(m_Value(X), m_c_Add(m_Deferred(X), m_Value(Y)))) ||
        match(I, m_c_BinOp(m_Value(X), m_Sub(m_Deferred(X), m_Value(Y)))) ||
        match(I, m_c_BinOp(m_Value(X), m_Sub(m_Value(Y), m_Deferred(X)))))) {
@@ -1596,6 +1617,8 @@ static void computeKnownBitsFromOperator(const Operator *I,
                                          const SimplifyQuery &Q,
                                          unsigned Depth) {
   unsigned BitWidth = Known.getBitWidth();
+  bool DisableCollectionRefinements =
+      I == SuppressCollectionRefinementForValue;
 
   KnownBits Known2(BitWidth);
   switch (I->getOpcode()) {
@@ -1648,7 +1671,9 @@ static void computeKnownBitsFromOperator(const Operator *I,
     auto ComputeForArm = [&](Value *Arm, bool Invert) {
       KnownBits Res(Known.getBitWidth());
       computeKnownBits(Arm, DemandedElts, Res, Q, Depth + 1);
-      adjustKnownBitsForSelectArm(Res, I->getOperand(0), Arm, Invert, Q, Depth);
+      if (!DisableCollectionRefinements)
+        adjustKnownBitsForSelectArm(Res, I->getOperand(0), Arm, Invert, Q,
+                                    Depth);
       return Res;
     };
     // Only known if known in both the LHS and RHS.
@@ -1857,14 +1882,16 @@ static void computeKnownBitsFromOperator(const Operator *I,
     bool NSW = Q.IIQ.hasNoSignedWrap(cast<OverflowingBinaryOperator>(I));
     bool NUW = Q.IIQ.hasNoUnsignedWrap(cast<OverflowingBinaryOperator>(I));
     computeKnownBitsAddSub(false, I->getOperand(0), I->getOperand(1), NSW, NUW,
-                           DemandedElts, Known, Known2, Q, Depth);
+                           DemandedElts, Known, Known2, Q, Depth,
+                           DisableCollectionRefinements);
     break;
   }
   case Instruction::Add: {
     bool NSW = Q.IIQ.hasNoSignedWrap(cast<OverflowingBinaryOperator>(I));
     bool NUW = Q.IIQ.hasNoUnsignedWrap(cast<OverflowingBinaryOperator>(I));
     computeKnownBitsAddSub(true, I->getOperand(0), I->getOperand(1), NSW, NUW,
-                           DemandedElts, Known, Known2, Q, Depth);
+                           DemandedElts, Known, Known2, Q, Depth,
+                           DisableCollectionRefinements);
     break;
   }
   case Instruction::SRem:
@@ -1974,7 +2001,7 @@ static void computeKnownBitsFromOperator(const Operator *I,
     const PHINode *P = cast<PHINode>(I);
     BinaryOperator *BO = nullptr;
     Value *R = nullptr, *L = nullptr;
-    if (matchSimpleRecurrence(P, BO, R, L)) {
+    if (!DisableCollectionRefinements && matchSimpleRecurrence(P, BO, R, L)) {
       // Handle the case of a simple two-predecessor recurrence PHI.
       // There's a lot more that could theoretically be done here, but
       // this is sufficient to catch some interesting cases.
@@ -2149,7 +2176,7 @@ static void computeKnownBitsFromOperator(const Operator *I,
 
         // See if we can further use a conditional branch into the phi
         // to help us determine the range of the value.
-        if (!Known2.isConstant()) {
+        if (!DisableCollectionRefinements && !Known2.isConstant()) {
           CmpPredicate Pred;
           const APInt *RHSC;
           BasicBlock *TrueSucc, *FalseSucc;
@@ -2365,13 +2392,15 @@ static void computeKnownBitsFromOperator(const Operator *I,
         computeKnownBits(I->getOperand(0), DemandedElts, Known, Q, Depth + 1);
         computeKnownBits(I->getOperand(1), DemandedElts, Known2, Q, Depth + 1);
         Known = KnownBits::smin(Known, Known2);
-        unionWithMinMaxIntrinsicClamp(II, Known);
+        if (!DisableCollectionRefinements)
+          unionWithMinMaxIntrinsicClamp(II, Known);
         break;
       case Intrinsic::smax:
         computeKnownBits(I->getOperand(0), DemandedElts, Known, Q, Depth + 1);
         computeKnownBits(I->getOperand(1), DemandedElts, Known2, Q, Depth + 1);
         Known = KnownBits::smax(Known, Known2);
-        unionWithMinMaxIntrinsicClamp(II, Known);
+        if (!DisableCollectionRefinements)
+          unionWithMinMaxIntrinsicClamp(II, Known);
         break;
       case Intrinsic::ptrmask: {
         computeKnownBits(I->getOperand(0), DemandedElts, Known, Q, Depth + 1);
@@ -2561,13 +2590,15 @@ static void computeKnownBitsFromOperator(const Operator *I,
         case Intrinsic::sadd_with_overflow:
           computeKnownBitsAddSub(
               true, II->getArgOperand(0), II->getArgOperand(1), /*NSW=*/false,
-              /* NUW=*/false, DemandedElts, Known, Known2, Q, Depth);
+              /* NUW=*/false, DemandedElts, Known, Known2, Q, Depth,
+              DisableCollectionRefinements);
           break;
         case Intrinsic::usub_with_overflow:
         case Intrinsic::ssub_with_overflow:
           computeKnownBitsAddSub(
               false, II->getArgOperand(0), II->getArgOperand(1), /*NSW=*/false,
-              /* NUW=*/false, DemandedElts, Known, Known2, Q, Depth);
+              /* NUW=*/false, DemandedElts, Known, Known2, Q, Depth,
+              DisableCollectionRefinements);
           break;
         case Intrinsic::umul_with_overflow:
         case Intrinsic::smul_with_overflow:
@@ -2774,6 +2805,7 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
     {
       KnownBitsLoggingSuppressor LoggingSuppressor;
       KnownBitsCallRangeRefinementSuppressor RangeSuppressor(V);
+      KnownBitsCollectionRefinementSuppressor CollectionSuppressor(V);
       computeKnownBits(V, DemandedElts, KnownForLog, Q, Depth);
     }
     logKnownBitsInvocation(*LoggedInst, DemandedElts, KnownForLog, Q, Depth);
