@@ -235,6 +235,10 @@ public:
   }
 };
 
+static bool shouldDisableCollectionRefinementsFor(const Value *V) {
+  return V == SuppressCollectionRefinementForValue;
+}
+
 static std::string getKnownBitsAbstractValue(const Value *V,
                                              const APInt &DemandedElts,
                                              const SimplifyQuery &Q,
@@ -717,7 +721,8 @@ static void computeKnownBitsAddSub(bool Add, const Value *Op0, const Value *Op1,
 static void computeKnownBitsMul(const Value *Op0, const Value *Op1, bool NSW,
                                 bool NUW, const APInt &DemandedElts,
                                 KnownBits &Known, KnownBits &Known2,
-                                const SimplifyQuery &Q, unsigned Depth) {
+                                const SimplifyQuery &Q, unsigned Depth,
+                                bool DisableCollectionRefinements) {
   computeKnownBits(Op1, DemandedElts, Known, Q, Depth + 1);
   computeKnownBits(Op0, DemandedElts, Known2, Q, Depth + 1);
 
@@ -725,7 +730,7 @@ static void computeKnownBitsMul(const Value *Op0, const Value *Op1, bool NSW,
   bool isKnownNonNegative = false;
   // If the multiplication is known not to overflow, compute the sign bit.
   if (NSW) {
-    if (Op0 == Op1) {
+    if (!DisableCollectionRefinements && Op0 == Op1) {
       // The product of a number with itself is non-negative.
       isKnownNonNegative = true;
     } else {
@@ -753,7 +758,7 @@ static void computeKnownBitsMul(const Value *Op0, const Value *Op1, bool NSW,
     }
   }
 
-  bool SelfMultiply = Op0 == Op1;
+  bool SelfMultiply = !DisableCollectionRefinements && Op0 == Op1;
   if (SelfMultiply)
     SelfMultiply &=
         isGuaranteedNotToBeUndef(Op0, Q.AC, Q.CxtI, Q.DT, Depth + 1);
@@ -1650,7 +1655,8 @@ static void computeKnownBitsFromOperator(const Operator *I,
     bool NSW = Q.IIQ.hasNoSignedWrap(cast<OverflowingBinaryOperator>(I));
     bool NUW = Q.IIQ.hasNoUnsignedWrap(cast<OverflowingBinaryOperator>(I));
     computeKnownBitsMul(I->getOperand(0), I->getOperand(1), NSW, NUW,
-                        DemandedElts, Known, Known2, Q, Depth);
+                        DemandedElts, Known, Known2, Q, Depth,
+                        DisableCollectionRefinements);
     break;
   }
   case Instruction::UDiv: {
@@ -2603,7 +2609,8 @@ static void computeKnownBitsFromOperator(const Operator *I,
         case Intrinsic::umul_with_overflow:
         case Intrinsic::smul_with_overflow:
           computeKnownBitsMul(II->getArgOperand(0), II->getArgOperand(1), false,
-                              false, DemandedElts, Known, Known2, Q, Depth);
+                              false, DemandedElts, Known, Known2, Q, Depth,
+                              DisableCollectionRefinements);
           break;
         }
       }
@@ -2944,6 +2951,8 @@ bool llvm::isKnownToBeAPowerOfTwo(const Value *V, bool OrZero,
   auto *I = dyn_cast<Instruction>(V);
   if (!I)
     return false;
+  bool DisableCollectionRefinements =
+      shouldDisableCollectionRefinementsFor(I);
 
   if (Q.CxtI && match(V, m_VScale())) {
     const Function *F = Q.CxtI->getFunction();
@@ -2993,8 +3002,9 @@ bool llvm::isKnownToBeAPowerOfTwo(const Value *V, bool OrZero,
          isKnownToBeAPowerOfTwo(I->getOperand(0), /*OrZero*/ true, Q, Depth)))
       return true;
     // X & (-X) is always a power of two or zero.
-    if (match(I->getOperand(0), m_Neg(m_Specific(I->getOperand(1)))) ||
-        match(I->getOperand(1), m_Neg(m_Specific(I->getOperand(0)))))
+    if (!DisableCollectionRefinements &&
+        (match(I->getOperand(0), m_Neg(m_Specific(I->getOperand(1)))) ||
+         match(I->getOperand(1), m_Neg(m_Specific(I->getOperand(0))))))
       return OrZero || isKnownNonZero(I->getOperand(0), Q, Depth);
     return false;
   case Instruction::Add: {
@@ -3003,11 +3013,13 @@ bool llvm::isKnownToBeAPowerOfTwo(const Value *V, bool OrZero,
     const OverflowingBinaryOperator *VOBO = cast<OverflowingBinaryOperator>(V);
     if (OrZero || Q.IIQ.hasNoUnsignedWrap(VOBO) ||
         Q.IIQ.hasNoSignedWrap(VOBO)) {
-      if (match(I->getOperand(0),
+      if (!DisableCollectionRefinements &&
+          match(I->getOperand(0),
                 m_c_And(m_Specific(I->getOperand(1)), m_Value())) &&
           isKnownToBeAPowerOfTwo(I->getOperand(1), OrZero, Q, Depth))
         return true;
-      if (match(I->getOperand(1),
+      if (!DisableCollectionRefinements &&
+          match(I->getOperand(1),
                 m_c_And(m_Specific(I->getOperand(0)), m_Value())) &&
           isKnownToBeAPowerOfTwo(I->getOperand(0), OrZero, Q, Depth))
         return true;
@@ -3080,7 +3092,8 @@ bool llvm::isKnownToBeAPowerOfTwo(const Value *V, bool OrZero,
       case Intrinsic::fshr:
       case Intrinsic::fshl:
         // If Op0 == Op1, this is a rotate. is_pow2(rotate(x, y)) == is_pow2(x)
-        if (II->getArgOperand(0) == II->getArgOperand(1))
+        if (!DisableCollectionRefinements &&
+            II->getArgOperand(0) == II->getArgOperand(1))
           return isKnownToBeAPowerOfTwo(II->getArgOperand(0), OrZero, Q, Depth);
         break;
       default:
@@ -3308,7 +3321,10 @@ static bool isNonZeroRecurrence(const PHINode *PN) {
   }
 }
 
-static bool matchOpWithOpEqZero(Value *Op0, Value *Op1) {
+static bool matchOpWithOpEqZero(Value *Op0, Value *Op1,
+                                bool DisableCollectionRefinements) {
+  if (DisableCollectionRefinements)
+    return false;
   return match(Op0, m_ZExtOrSExt(m_SpecificICmp(ICmpInst::ICMP_EQ,
                                                 m_Specific(Op1), m_Zero()))) ||
          match(Op1, m_ZExtOrSExt(m_SpecificICmp(ICmpInst::ICMP_EQ,
@@ -3317,9 +3333,10 @@ static bool matchOpWithOpEqZero(Value *Op0, Value *Op1) {
 
 static bool isNonZeroAdd(const APInt &DemandedElts, const SimplifyQuery &Q,
                          unsigned BitWidth, Value *X, Value *Y, bool NSW,
-                         bool NUW, unsigned Depth) {
+                         bool NUW, bool DisableCollectionRefinements,
+                         unsigned Depth) {
   // (X + (X != 0)) is non zero
-  if (matchOpWithOpEqZero(X, Y))
+  if (matchOpWithOpEqZero(X, Y, DisableCollectionRefinements))
     return true;
 
   if (NUW)
@@ -3363,10 +3380,10 @@ static bool isNonZeroAdd(const APInt &DemandedElts, const SimplifyQuery &Q,
 
 static bool isNonZeroSub(const APInt &DemandedElts, const SimplifyQuery &Q,
                          unsigned BitWidth, Value *X, Value *Y,
-                         unsigned Depth) {
+                         bool DisableCollectionRefinements, unsigned Depth) {
   // (X - (X != 0)) is non zero
   // ((X != 0) - X) is non zero
-  if (matchOpWithOpEqZero(X, Y))
+  if (matchOpWithOpEqZero(X, Y, DisableCollectionRefinements))
     return true;
 
   // TODO: Move this case into isKnownNonEqual().
@@ -3460,6 +3477,8 @@ static bool isKnownNonZeroFromOperator(const Operator *I,
                                        const APInt &DemandedElts,
                                        const SimplifyQuery &Q, unsigned Depth) {
   unsigned BitWidth = getBitWidth(I->getType()->getScalarType(), Q.DL);
+  bool DisableCollectionRefinements =
+      shouldDisableCollectionRefinementsFor(I);
   switch (I->getOpcode()) {
   case Instruction::Alloca:
     // Alloca never returns null, malloc might.
@@ -3533,10 +3552,11 @@ static bool isKnownNonZeroFromOperator(const Operator *I,
   case Instruction::Xor:
   case Instruction::Sub:
     return isNonZeroSub(DemandedElts, Q, BitWidth, I->getOperand(0),
-                        I->getOperand(1), Depth);
+                        I->getOperand(1), DisableCollectionRefinements, Depth);
   case Instruction::Or:
     // (X | (X != 0)) is non zero
-    if (matchOpWithOpEqZero(I->getOperand(0), I->getOperand(1)))
+    if (matchOpWithOpEqZero(I->getOperand(0), I->getOperand(1),
+                            DisableCollectionRefinements))
       return true;
     // X | Y != 0 if X != Y.
     if (isKnownNonEqual(I->getOperand(0), I->getOperand(1), DemandedElts, Q,
@@ -3616,7 +3636,8 @@ static bool isKnownNonZeroFromOperator(const Operator *I,
     auto *BO = cast<OverflowingBinaryOperator>(I);
     return isNonZeroAdd(DemandedElts, Q, BitWidth, I->getOperand(0),
                         I->getOperand(1), Q.IIQ.hasNoSignedWrap(BO),
-                        Q.IIQ.hasNoUnsignedWrap(BO), Depth);
+                        Q.IIQ.hasNoUnsignedWrap(BO),
+                        DisableCollectionRefinements, Depth);
   }
   case Instruction::Mul: {
     const OverflowingBinaryOperator *BO = cast<OverflowingBinaryOperator>(I);
@@ -3771,10 +3792,11 @@ static bool isKnownNonZeroFromOperator(const Operator *I,
         return isNonZeroAdd(DemandedElts, Q, BitWidth, WO->getArgOperand(0),
                             WO->getArgOperand(1),
                             /*NSW=*/false,
-                            /*NUW=*/false, Depth);
+                            /*NUW=*/false, DisableCollectionRefinements, Depth);
       case Instruction::Sub:
         return isNonZeroSub(DemandedElts, Q, BitWidth, WO->getArgOperand(0),
-                            WO->getArgOperand(1), Depth);
+                            WO->getArgOperand(1),
+                            DisableCollectionRefinements, Depth);
       case Instruction::Mul:
         return isNonZeroMul(DemandedElts, Q, BitWidth, WO->getArgOperand(0),
                             WO->getArgOperand(1),
@@ -3823,11 +3845,13 @@ static bool isKnownNonZeroFromOperator(const Operator *I,
         if (BitWidth == 1)
           return false;
         return isNonZeroSub(DemandedElts, Q, BitWidth, II->getArgOperand(0),
-                            II->getArgOperand(1), Depth);
+                            II->getArgOperand(1),
+                            DisableCollectionRefinements, Depth);
       case Intrinsic::sadd_sat:
         return isNonZeroAdd(DemandedElts, Q, BitWidth, II->getArgOperand(0),
                             II->getArgOperand(1),
-                            /*NSW=*/true, /* NUW=*/false, Depth);
+                            /*NSW=*/true, /* NUW=*/false,
+                            DisableCollectionRefinements, Depth);
         // Vec reverse preserves zero/non-zero status from input vec.
       case Intrinsic::vector_reverse:
         return isKnownNonZero(II->getArgOperand(0), DemandedElts.reverseBits(),
@@ -3843,7 +3867,8 @@ static bool isKnownNonZeroFromOperator(const Operator *I,
       case Intrinsic::uadd_sat:
         // umax(X, (X != 0)) is non zero
         // X +usat (X != 0) is non zero
-        if (matchOpWithOpEqZero(II->getArgOperand(0), II->getArgOperand(1)))
+        if (matchOpWithOpEqZero(II->getArgOperand(0), II->getArgOperand(1),
+                                DisableCollectionRefinements))
           return true;
 
         return isKnownNonZero(II->getArgOperand(1), DemandedElts, Q, Depth) ||
@@ -3901,7 +3926,8 @@ static bool isKnownNonZeroFromOperator(const Operator *I,
       case Intrinsic::fshr:
       case Intrinsic::fshl:
         // If Op0 == Op1, this is a rotate. rotate(x, y) != 0 iff x != 0.
-        if (II->getArgOperand(0) == II->getArgOperand(1))
+        if (!DisableCollectionRefinements &&
+            II->getArgOperand(0) == II->getArgOperand(1))
           return isKnownNonZero(II->getArgOperand(0), DemandedElts, Q, Depth);
         break;
       case Intrinsic::vscale:
@@ -5291,6 +5317,8 @@ void computeKnownFPClass(const Value *V, const APInt &DemandedElts,
     KnownNotFromFlags |= Arg->getNoFPClass();
 
   const Operator *Op = dyn_cast<Operator>(V);
+  bool DisableCollectionRefinements =
+      shouldDisableCollectionRefinementsFor(Op);
   if (const FPMathOperator *FPOp = dyn_cast_or_null<FPMathOperator>(Op)) {
     if (FPOp->hasNoNaNs())
       KnownNotFromFlags |= fcNan;
@@ -5387,7 +5415,8 @@ void computeKnownFPClass(const Value *V, const APInt &DemandedElts,
         break;
 
       // FIXME: This should check isGuaranteedNotToBeUndef
-      if (II->getArgOperand(0) == II->getArgOperand(1)) {
+      if (!DisableCollectionRefinements &&
+          II->getArgOperand(0) == II->getArgOperand(1)) {
         KnownFPClass KnownSrc, KnownAddend;
         computeKnownFPClass(II->getArgOperand(2), DemandedElts,
                             InterestedClasses, KnownAddend, Q, Depth + 1);
@@ -5780,7 +5809,8 @@ void computeKnownFPClass(const Value *V, const APInt &DemandedElts,
                         KnownRHS, Q, Depth + 1);
 
     // Special case fadd x, x, which is the canonical form of fmul x, 2.
-    bool Self = Op->getOperand(0) == Op->getOperand(1) &&
+    bool Self = !DisableCollectionRefinements &&
+                Op->getOperand(0) == Op->getOperand(1) &&
                 isGuaranteedNotToBeUndef(Op->getOperand(0), Q.AC, Q.CxtI, Q.DT,
                                          Depth + 1);
     if (Self)
@@ -5825,7 +5855,8 @@ void computeKnownFPClass(const Value *V, const APInt &DemandedElts,
 
     // X * X is always non-negative or a NaN.
     // FIXME: Should check isGuaranteedNotToBeUndef
-    if (Op->getOperand(0) == Op->getOperand(1)) {
+    if (!DisableCollectionRefinements &&
+        Op->getOperand(0) == Op->getOperand(1)) {
       KnownFPClass KnownSrc;
       computeKnownFPClass(Op->getOperand(0), DemandedElts, fcAllFlags, KnownSrc,
                           Q, Depth + 1);
@@ -5874,7 +5905,8 @@ void computeKnownFPClass(const Value *V, const APInt &DemandedElts,
   case Instruction::FRem: {
     const bool WantNan = (InterestedClasses & fcNan) != fcNone;
 
-    if (Op->getOperand(0) == Op->getOperand(1) &&
+    if (!DisableCollectionRefinements &&
+        Op->getOperand(0) == Op->getOperand(1) &&
         isGuaranteedNotToBeUndef(Op->getOperand(0), Q.AC, Q.CxtI, Q.DT)) {
       if (Op->getOpcode() == Instruction::FDiv) {
         // X / X is always exactly 1.0 or a NaN.
@@ -10139,8 +10171,9 @@ static void setLimitsForBinOp(const BinaryOperator &BO, APInt &Lower,
       Upper = *C + 1;
     // X & -X is a power of two or zero. So we can cap the value at max power of
     // two.
-    if (match(BO.getOperand(0), m_Neg(m_Specific(BO.getOperand(1)))) ||
-        match(BO.getOperand(1), m_Neg(m_Specific(BO.getOperand(0)))))
+    if (!shouldDisableCollectionRefinementsFor(&BO) &&
+        (match(BO.getOperand(0), m_Neg(m_Specific(BO.getOperand(1)))) ||
+         match(BO.getOperand(1), m_Neg(m_Specific(BO.getOperand(0))))))
       Upper = APInt::getSignedMinValue(Width) + 1;
     break;
 
