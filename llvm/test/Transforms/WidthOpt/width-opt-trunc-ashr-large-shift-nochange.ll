@@ -1,0 +1,16 @@
+; RUN: opt -passes='width-opt' -S %s | FileCheck %s
+
+; A shift amount >= the target width would make the narrow ashr poison, so
+; this must not be transformed.
+
+define i8 @ashr_shift_too_large(i8 %x) {
+  %wide = sext i8 %x to i32
+  %shifted = ashr i32 %wide, 8
+  %narrow = trunc i32 %shifted to i8
+  ret i8 %narrow
+}
+
+; CHECK-LABEL: define i8 @ashr_shift_too_large(
+; CHECK: sext
+; CHECK: ashr
+; CHECK: trunc

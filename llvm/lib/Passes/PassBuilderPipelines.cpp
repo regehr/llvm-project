@@ -134,6 +134,7 @@
 #include "llvm/Transforms/Scalar/SpeculativeExecution.h"
 #include "llvm/Transforms/Scalar/TailRecursionElimination.h"
 #include "llvm/Transforms/Scalar/WarnMissedTransforms.h"
+#include "llvm/Transforms/Scalar/WidthOpt.h"
 #include "llvm/Transforms/Utils/AddDiscriminators.h"
 #include "llvm/Transforms/Utils/AssumeBundleBuilder.h"
 #include "llvm/Transforms/Utils/CanonicalizeAliases.h"
@@ -416,6 +417,15 @@ void PassBuilder::invokePipelineEarlySimplificationEPCallbacks(
     C(MPM, Level, Phase);
 }
 
+// Helper to run WidthOptPass immediately before InstCombinePass so that the
+// width optimization pass always precedes every instcombine invocation.
+template <typename PassManagerT>
+static void addWidthOptThenInstCombine(PassManagerT &PM,
+                                       InstCombineOptions Opts = {}) {
+  PM.addPass(widthopt::WidthOptPass());
+  PM.addPass(InstCombinePass(Opts));
+}
+
 // Helper to add AnnotationRemarksPass.
 static void addAnnotationRemarksPass(ModulePassManager &MPM) {
   MPM.addPass(createModuleToFunctionPassAdaptor(AnnotationRemarksPass()));
@@ -472,7 +482,7 @@ PassBuilder::buildO1FunctionSimplificationPipeline(OptimizationLevel Level,
   // Hoisting of scalars and load expressions.
   FPM.addPass(
       SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
-  FPM.addPass(InstCombinePass());
+  addWidthOptThenInstCombine(FPM);
 
   FPM.addPass(LibCallsShrinkWrapPass());
 
@@ -545,7 +555,7 @@ PassBuilder::buildO1FunctionSimplificationPipeline(OptimizationLevel Level,
                                               /*UseMemorySSA=*/true));
   FPM.addPass(
       SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
-  FPM.addPass(InstCombinePass());
+  addWidthOptThenInstCombine(FPM);
   // The loop passes in LPM2 (LoopFullUnrollPass) do not preserve MemorySSA.
   // *All* loop passes must preserve it, in order to be able to use it.
   FPM.addPass(createFunctionToLoopPassAdaptor(std::move(LPM2),
@@ -569,7 +579,7 @@ PassBuilder::buildO1FunctionSimplificationPipeline(OptimizationLevel Level,
 
   // Run instcombine after redundancy and dead bit elimination to exploit
   // opportunities opened up by them.
-  FPM.addPass(InstCombinePass());
+  addWidthOptThenInstCombine(FPM);
   invokePeepholeEPCallbacks(FPM, Level);
 
   FPM.addPass(CoroElidePass());
@@ -582,7 +592,7 @@ PassBuilder::buildO1FunctionSimplificationPipeline(OptimizationLevel Level,
   FPM.addPass(ADCEPass());
   FPM.addPass(
       SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
-  FPM.addPass(InstCombinePass());
+  addWidthOptThenInstCombine(FPM);
   invokePeepholeEPCallbacks(FPM, Level);
 
   return FPM;
@@ -638,7 +648,7 @@ PassBuilder::buildFunctionSimplificationPipeline(OptimizationLevel Level,
 
   FPM.addPass(
       SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
-  FPM.addPass(InstCombinePass());
+  addWidthOptThenInstCombine(FPM);
   FPM.addPass(AggressiveInstCombinePass());
 
   if (!Level.isOptimizingForSize())
@@ -734,7 +744,7 @@ PassBuilder::buildFunctionSimplificationPipeline(OptimizationLevel Level,
                                               /*UseMemorySSA=*/true));
   FPM.addPass(
       SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
-  FPM.addPass(InstCombinePass());
+  addWidthOptThenInstCombine(FPM);
   // The loop passes in LPM2 (LoopIdiomRecognizePass, IndVarSimplifyPass,
   // LoopDeletionPass and LoopFullUnrollPass) do not preserve MemorySSA.
   // *All* loop passes must preserve it, in order to be able to use it.
@@ -767,7 +777,7 @@ PassBuilder::buildFunctionSimplificationPipeline(OptimizationLevel Level,
 
   // Run instcombine after redundancy and dead bit elimination to exploit
   // opportunities opened up by them.
-  FPM.addPass(InstCombinePass());
+  addWidthOptThenInstCombine(FPM);
   invokePeepholeEPCallbacks(FPM, Level);
 
   // Re-consider control flow based optimizations after redundancy elimination,
@@ -803,7 +813,7 @@ PassBuilder::buildFunctionSimplificationPipeline(OptimizationLevel Level,
                                   .convertSwitchToArithmetic(true)
                                   .hoistCommonInsts(true)
                                   .sinkCommonInsts(true)));
-  FPM.addPass(InstCombinePass());
+  addWidthOptThenInstCombine(FPM);
   invokePeepholeEPCallbacks(FPM, Level);
 
   return FPM;
@@ -839,7 +849,7 @@ void PassBuilder::addPreInlinerPasses(ModulePassManager &MPM,
   FPM.addPass(EarlyCSEPass()); // Catch trivial redundancies.
   FPM.addPass(SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(
       true)));                    // Merge & remove basic blocks.
-  FPM.addPass(InstCombinePass()); // Combine silly sequences.
+  addWidthOptThenInstCombine(FPM); // Combine silly sequences.
   invokePeepholeEPCallbacks(FPM, Level);
 
   CGPipeline.addPass(createCGSCCToFunctionPassAdaptor(
@@ -1213,7 +1223,7 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
   FunctionPassManager GlobalCleanupPM;
   // FIXME: Should this instead by a run of SROA?
   GlobalCleanupPM.addPass(PromotePass());
-  GlobalCleanupPM.addPass(InstCombinePass());
+  addWidthOptThenInstCombine(GlobalCleanupPM);
   invokePeepholeEPCallbacks(GlobalCleanupPM, Level);
   GlobalCleanupPM.addPass(
       SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
@@ -1369,7 +1379,7 @@ void PassBuilder::addVectorPasses(OptimizationLevel Level,
     FPM.addPass(LoopLoadEliminationPass());
   }
   // Cleanup after the loop optimization passes.
-  FPM.addPass(InstCombinePass());
+  addWidthOptThenInstCombine(FPM);
 
   if (Level.getSpeedupLevel() > 1 && ExtraVectorizerPasses) {
     ExtraFunctionPassManager<ShouldRunExtraVectorPasses> ExtraPasses;
@@ -1381,7 +1391,7 @@ void PassBuilder::addVectorPasses(OptimizationLevel Level,
     // dead (or speculatable) control flows or more combining opportunities.
     ExtraPasses.addPass(EarlyCSEPass());
     ExtraPasses.addPass(CorrelatedValuePropagationPass());
-    ExtraPasses.addPass(InstCombinePass());
+    addWidthOptThenInstCombine(ExtraPasses);
     LoopPassManager LPM;
     LPM.addPass(LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap,
                          /*AllowSpeculation=*/true));
@@ -1391,7 +1401,7 @@ void PassBuilder::addVectorPasses(OptimizationLevel Level,
         createFunctionToLoopPassAdaptor(std::move(LPM), /*UseMemorySSA=*/true));
     ExtraPasses.addPass(
         SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
-    ExtraPasses.addPass(InstCombinePass());
+    addWidthOptThenInstCombine(ExtraPasses);
     FPM.addPass(std::move(ExtraPasses));
   }
 
@@ -1415,7 +1425,7 @@ void PassBuilder::addVectorPasses(OptimizationLevel Level,
 
   if (IsFullLTO) {
     FPM.addPass(SCCPPass());
-    FPM.addPass(InstCombinePass());
+    addWidthOptThenInstCombine(FPM);
     FPM.addPass(BDCEPass());
   }
 
@@ -1430,7 +1440,7 @@ void PassBuilder::addVectorPasses(OptimizationLevel Level,
   FPM.addPass(VectorCombinePass());
 
   if (!IsFullLTO) {
-    FPM.addPass(InstCombinePass());
+    addWidthOptThenInstCombine(FPM);
     // Unroll small loops to hide loop backedge latency and saturate any
     // parallel execution resources of an out-of-order processor. We also then
     // need to clean up redundancies and loop invariant code.
@@ -1456,7 +1466,7 @@ void PassBuilder::addVectorPasses(OptimizationLevel Level,
   }
 
   FPM.addPass(InferAlignmentPass());
-  FPM.addPass(InstCombinePass());
+  addWidthOptThenInstCombine(FPM);
 
   // This is needed for two reasons:
   //   1. It works around problems that instcombine introduces, such as sinking
@@ -2103,7 +2113,7 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
   // function pointers.  When this happens, we often have to resolve varargs
   // calls, etc, so let instcombine do this.
   FunctionPassManager PeepholeFPM;
-  PeepholeFPM.addPass(InstCombinePass());
+  addWidthOptThenInstCombine(PeepholeFPM);
   if (Level.getSpeedupLevel() > 1)
     PeepholeFPM.addPass(AggressiveInstCombinePass());
   invokePeepholeEPCallbacks(PeepholeFPM, Level);
@@ -2158,7 +2168,7 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
 
   FunctionPassManager FPM;
   // The IPO Passes may leave cruft around. Clean up after them.
-  FPM.addPass(InstCombinePass());
+  addWidthOptThenInstCombine(FPM);
   invokePeepholeEPCallbacks(FPM, Level);
 
   if (EnableConstraintElimination)

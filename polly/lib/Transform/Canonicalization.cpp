@@ -20,6 +20,7 @@
 #include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/IPO/FunctionAttrs.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
+#include "llvm/Transforms/Scalar/WidthOpt.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/EarlyCSE.h"
 #include "llvm/Transforms/Scalar/IndVarSimplify.h"
@@ -76,6 +77,7 @@ polly::buildCanonicalicationPassesForNPM(llvm::ModulePassManager &MPM,
   bool UseMemSSA = true;
   FPM.addPass(PromotePass());
   FPM.addPass(EarlyCSEPass(UseMemSSA));
+  FPM.addPass(widthopt::WidthOptPass());
   FPM.addPass(InstCombinePass());
   FPM.addPass(SimplifyCFGPass());
   FPM.addPass(TailCallElimPass());
@@ -94,8 +96,10 @@ polly::buildCanonicalicationPassesForNPM(llvm::ModulePassManager &MPM,
 
     FPM.addPass(PromotePass());
     FPM.addPass(SimplifyCFGPass());
-    FPM.addPass(InstCombinePass());
+    FPM.addPass(widthopt::WidthOptPass());
+  FPM.addPass(InstCombinePass());
   }
+  FPM.addPass(widthopt::WidthOptPass());
   FPM.addPass(InstCombinePass());
   {
     LoopPassManager LPM;

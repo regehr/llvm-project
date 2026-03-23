@@ -66,6 +66,7 @@
 #include "llvm/Transforms/IPO/LowerTypeTests.h"
 #include "llvm/Transforms/IPO/ThinLTOBitcodeWriter.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
+#include "llvm/Transforms/Scalar/WidthOpt.h"
 #include "llvm/Transforms/Instrumentation/AddressSanitizer.h"
 #include "llvm/Transforms/Instrumentation/AddressSanitizerOptions.h"
 #include "llvm/Transforms/Instrumentation/BoundsChecking.h"
@@ -710,9 +711,11 @@ static void addSanitizers(const Triple &TargetTriple,
           MPM.addPass(RequireAnalysisPass<GlobalsAA, llvm::Module>());
           FunctionPassManager FPM;
           FPM.addPass(EarlyCSEPass(true /* Enable mem-ssa. */));
+          FPM.addPass(widthopt::WidthOptPass());
           FPM.addPass(InstCombinePass());
           FPM.addPass(JumpThreadingPass());
           FPM.addPass(GVNPass());
+          FPM.addPass(widthopt::WidthOptPass());
           FPM.addPass(InstCombinePass());
           MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
         }
