@@ -36,6 +36,22 @@ opt -passes='default<O3>' -S /tmp/test-XXXXXX-pre.ll -o /dev/null
 
 Check that you see the same assertion message before proceeding.
 
+**Shortcut check**: also try `opt -passes='width-opt'` on the pre-reduced IR
+directly.  If it reproduces without the full pipeline, you can use that as the
+interestingness test (faster reduction).  If it only fires under `default<O3>`,
+use `-print-changed=diff-quiet` to identify which upstream pass transformed the
+IR into the triggering form:
+
+```sh
+opt -passes='default<O3>' --print-changed=diff-quiet -S input.ll -o /dev/null 2>&1 \
+  | grep -E "^\*\*\* IR Dump After|Running pass.*width-opt"
+```
+
+Once you know the upstream culprit (e.g. IPSCCPPass replacing a load with
+`undef`), you can often craft a simpler interestingness-test IR directly — e.g.
+replace `load i8, ptr null` with `undef` in the source — and verify that
+`-passes='width-opt'` alone reproduces the crash.
+
 ## 3. Write an interestingness test
 
 Create a small shell script that returns 0 when the crash is present and
@@ -67,22 +83,30 @@ still satisfies the interestingness test.
 
 Read the reduced IR and the stack trace together.  The stack trace names the
 function in `WidthOpt.cpp` where the crash occurs; the reduced IR shows the
-minimal pattern that exercises it.  In the example case:
+minimal pattern that exercises it.
 
-```llvm
-define i64 @main() {
-entry:
-  %load = load i24, ptr null, align 1
-  %ext1 = zext i24 %load to i32
-  %ext2 = zext i32 %ext1 to i64
-  ret i64 %ext2
-}
+The build is optimized (`-O3 -UNDEBUG`), so function names in the stack trace
+are often inlined away and only `WidthOptPass::run` is visible.  Use
+`llvm-symbolizer` on the shared-library offsets:
+
+```sh
+llvm-symbolizer --obj=build/lib/libLLVMScalarOpts.so.23.0git <offset>
 ```
 
-A chain of two `zext`s through an intermediate width (`i24→i32→i64`) reached
-`tryShrinkZExtOfZeroBounded`, where `IRBuilder::CreateZExt` was folded to a
-non-`Instruction` value but the result was immediately passed to
-`cast<Instruction>`, triggering the assertion.
+If the result is still `??:0:0` (debug info stripped), fall back to reasoning
+from the reduced IR: identify which worklist (ZExts, SExts, Truncs, Compares,
+component widening) would process the instructions in the reduced IR and trace
+through the relevant functions manually.
+
+**Example 1** — `zext i24→i32→i64` chain:
+`tryShrinkZExtOfZeroBounded` called `B.CreateZExt(NarrowSrc, WideType)`.  When
+the IRBuilder constant-folded the result to a non-`Instruction`, `cast<Instruction>`
+asserted.
+
+**Example 2** — `sext i8 undef to i16 → sext i16 to i32` chain:
+The singleton component widening path called `B.CreateSExt(undef, TargetTy)`,
+which folded to `UndefValue`.  The `undef` was introduced by IPSCCPPass
+replacing a `load i8, ptr null` — spotted via `--print-changed=diff-quiet`.
 
 ## 6. Fix the crash
 
@@ -91,13 +115,28 @@ in release mode (assertions disabled), so `cast<T>` on an incompatible type
 silently returned garbage.  Running as an internal pass with assertions enabled
 surfaces these.
 
-Typical fixes:
+**Root causes seen so far:**
 
-- Replace `cast<Instruction>(builder_call(...))` with the result stored as
-  `Value *`, then use `dyn_cast<Instruction>` only where the `Instruction*`
-  interface is actually needed (e.g. `setDebugLoc`).
-- Add `if (!isIntegerValue(&inst)) return false;` guards before any call to
-  `getValueWidth()` or `->getIntegerBitWidth()` when vector types could appear.
+1. **`cast<Instruction>(B.Create*(...))` on a folded result.**  IRBuilder
+   constant-folds results when operands are constants or `undef`.  For example:
+   - `B.CreateZExt(undef, i32)` → `UndefValue` (not a `ZExtInst`)
+   - `B.CreateSExt(undef, i32)` → `UndefValue`
+   - `B.CreateICmp(pred, C1, C2)` → `ConstantInt` (not an `ICmpInst`)
+   Fix: store the result as `Value *` and use `dyn_cast<Instruction>` only where
+   the `Instruction*` interface is needed (e.g. `setDebugLoc`).
+
+2. **`getValueWidth()` or `->getIntegerBitWidth()` called on vector types.**
+   Both assert `isa<IntegerType>`.  Csmith programs include vector operations.
+   Fix: add `if (!isIntegerValue(&inst)) return false;` before any such call.
+
+3. **`isIntegerValue` check ordered after `getValueWidth` call.**  If
+   `getValueWidth` appears before the `isIntegerValue` guard, vector types crash
+   before the guard can fire.
+   Fix: reorder so `isIntegerValue` is checked first.
+
+**`undef` as a trigger**: upstream passes like IPSCCPPass replace loads from
+null pointers with `undef`.  Any path in the pass that materializes a value from
+`undef` and then passes it to `B.Create*` may fold to a non-`Instruction`.
 
 After editing `WidthOpt.cpp`, rebuild and confirm:
 
@@ -109,12 +148,20 @@ opt -passes='default<O3>' -S /tmp/reduced.ll -o /dev/null && echo "no crash"
 ## 7. Add a regression test
 
 Create a `.ll` file under `llvm/test/Transforms/WidthOpt/` using the reduced IR
-as a starting point.  Prefer a clean, non-UB version (e.g. replace `ptr null`
-with a pointer argument).  A no-crash test only needs a `RUN` line — no
-`CHECK` lines required:
+as a starting point.  Prefer a clean version that exercises the same code path
+without relying on specific upstream-pass behavior:
+
+- Replace `ptr null` with a pointer argument (avoids UB from null dereference).
+- If the crash only fires after e.g. IPSCCPPass introduces `undef`, write the
+  `undef` directly in the test IR — this makes the test self-contained and
+  runnable with just `-passes='width-opt'`.
+
+A no-crash test only needs a `RUN` line — no `CHECK` lines required.  Use
+`-passes='width-opt'` when possible (faster, more targeted) and fall back to
+`-passes='default<O3>'` only if the simpler pipeline does not exercise the bug:
 
 ```llvm
-; RUN: opt -passes='default<O3>' -S %s -o /dev/null
+; RUN: opt -passes='width-opt' -S %s -o /dev/null
 ```
 
 Run the new test to confirm it passes:
@@ -128,3 +175,10 @@ Then run the full suite to confirm no regressions:
 ```sh
 llvm-lit -j$(nproc) llvm/test/Transforms/WidthOpt/
 ```
+
+## 8. Working directory
+
+Keep bug reduction artifacts in
+`width-optimization-scripts/bugs/` (under the repo root) rather than `/tmp/`,
+so the sandbox does not interrupt with permission prompts and files persist
+across sessions.
