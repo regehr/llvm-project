@@ -674,10 +674,13 @@ bool tryShrinkICmpZeroBounded(ICmpInst &Cmp) {
   Cmp.replaceAllUsesWith(NarrowCmp);
   Cmp.eraseFromParent();
 
-  if (auto *LI = dyn_cast<Instruction>(LHS))
+  // Use WeakTrackingVH so that if deleting LI recursively kills RI (because
+  // RI is only used by LI), we don't access a dangling pointer for RI.
+  WeakTrackingVH LHSHandle(LHS), RHSHandle(RHS);
+  if (auto *LI = dyn_cast_or_null<Instruction>(LHSHandle))
     if (LI->use_empty())
       RecursivelyDeleteTriviallyDeadInstructions(LI);
-  if (auto *RI = dyn_cast<Instruction>(RHS))
+  if (auto *RI = dyn_cast_or_null<Instruction>(RHSHandle))
     if (RI->use_empty())
       RecursivelyDeleteTriviallyDeadInstructions(RI);
 
