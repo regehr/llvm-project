@@ -5222,16 +5222,15 @@ bool tryWidenComponentFromPlan(const Component &C, const AnalysisResult &R,
       SingletonKind == SingletonWidenKind::SExt) {
     Instruction *I = C.Instructions.front();
     IRBuilder<> B(I);
-    Instruction *WideCast = nullptr;
+    Value *WideCast = nullptr;
     if (auto *Z = dyn_cast<ZExtInst>(I))
-      WideCast = cast<Instruction>(
-          B.CreateZExt(Z->getOperand(0), TargetTy, Z->getName()));
+      WideCast = B.CreateZExt(Z->getOperand(0), TargetTy, Z->getName());
     else if (auto *S = dyn_cast<SExtInst>(I))
-      WideCast = cast<Instruction>(
-          B.CreateSExt(S->getOperand(0), TargetTy, S->getName()));
+      WideCast = B.CreateSExt(S->getOperand(0), TargetTy, S->getName());
     else
       llvm_unreachable("Only zext/sext singleton components force widen kind");
-    WideCast->setDebugLoc(I->getDebugLoc());
+    if (auto *WI = dyn_cast<Instruction>(WideCast))
+      WI->setDebugLoc(I->getDebugLoc());
     NewValues[I] = WideCast;
   } else if (SingletonKind == SingletonWidenKind::Trunc) {
     auto *Tr = cast<TruncInst>(C.Instructions.front());
