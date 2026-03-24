@@ -8,10 +8,10 @@ import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import Iterable, Optional, Sequence
+from typing import Optional, Sequence
 
 
-FALLBACK_OPT = Path("/Users/regehr/llvm-project/for-alive/bin/opt")
+FALLBACK_OPT = Path("/home/regehr/tmp/llvm-project-regehr/build/bin/opt")
 WIDTH_OPCODES = ("sext", "zext", "trunc")
 OPCODES = {
     "add",
@@ -87,27 +87,6 @@ def run(cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(list(cmd), text=True, capture_output=True)
 
 
-def candidate_plugins(repo_root: Path) -> Iterable[Path]:
-    env_plugin = os.environ.get("WIDTH_OPT_PLUGIN")
-    if env_plugin:
-        yield Path(env_plugin)
-
-    for suffix in ("so", "dylib", "dll"):
-        yield repo_root / "build" / "lib" / f"libWidthOpt.{suffix}"
-        yield repo_root.parent / "tmp" / "llvm-width-optimization-build" / "lib" / f"libWidthOpt.{suffix}"
-        yield Path("/tmp/llvm-width-optimization-build") / "lib" / f"libWidthOpt.{suffix}"
-        yield Path("/tmp/llvm-width-optimization-build-fixpoint") / "lib" / f"libWidthOpt.{suffix}"
-        yield Path("/Users/regehr/tmp/llvm-width-optimization-build") / "lib" / f"libWidthOpt.{suffix}"
-        yield Path("/Users/regehr/tmp/llvm-width-optimization-build-fixpoint") / "lib" / f"libWidthOpt.{suffix}"
-
-
-def find_default_plugin(repo_root: Path) -> Optional[Path]:
-    for candidate in candidate_plugins(repo_root):
-        if candidate.exists():
-            return candidate.resolve()
-    return None
-
-
 def find_default_opt() -> Path:
     env_opt = os.environ.get("LLVM_OPT")
     if env_opt:
@@ -133,13 +112,11 @@ def render_input_as_text(opt_bin: Path, src: Path) -> subprocess.CompletedProces
     )
 
 
-def optimize_to_text(opt_bin: Path, plugin: Path, src: Path) -> subprocess.CompletedProcess[str]:
+def optimize_to_text(opt_bin: Path, src: Path) -> subprocess.CompletedProcess[str]:
     return run(
         [
             str(opt_bin),
             "-non-global-value-max-name-size=-1",
-            "-load-pass-plugin",
-            str(plugin),
             "-passes=width-opt",
             "-S",
             str(src),
@@ -253,8 +230,6 @@ def print_report(
 
 
 def main() -> int:
-    repo_root = Path(__file__).resolve().parents[1]
-    default_plugin = find_default_plugin(repo_root)
     default_opt = find_default_opt()
 
     parser = argparse.ArgumentParser(
@@ -270,12 +245,6 @@ def main() -> int:
         help=f"Path to opt (default: {default_opt}).",
     )
     parser.add_argument(
-        "--plugin",
-        type=Path,
-        default=default_plugin,
-        help="Path to libWidthOpt shared library.",
-    )
-    parser.add_argument(
         "inputs",
         nargs="+",
         type=Path,
@@ -284,17 +253,9 @@ def main() -> int:
     args = parser.parse_args()
 
     opt_bin = args.opt_bin.resolve()
-    plugin = args.plugin.resolve() if args.plugin is not None else None
 
     if not opt_bin.exists():
         print(f"error: opt not found: {opt_bin}", file=sys.stderr)
-        return 1
-
-    if plugin is None or not plugin.exists():
-        print(
-            "error: plugin not found; pass --plugin /path/to/libWidthOpt.so",
-            file=sys.stderr,
-        )
         return 1
 
     failures = 0
@@ -311,7 +272,7 @@ def main() -> int:
             failures += 1
             continue
 
-        optimized_proc = optimize_to_text(opt_bin, plugin, path)
+        optimized_proc = optimize_to_text(opt_bin, path)
         if optimized_proc.returncode != 0:
             print(format_failure("width-opt", path, optimized_proc), file=sys.stderr)
             failures += 1
