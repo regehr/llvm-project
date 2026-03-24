@@ -667,9 +667,9 @@ bool tryShrinkICmpZeroBounded(ICmpInst &Cmp) {
     return false;
 
   IRBuilder<> B(&Cmp);
-  auto *NarrowCmp =
-      cast<ICmpInst>(B.CreateICmp(Pred, NarrowLHS, NarrowRHS, Cmp.getName()));
-  NarrowCmp->setDebugLoc(Cmp.getDebugLoc());
+  Value *NarrowCmp = B.CreateICmp(Pred, NarrowLHS, NarrowRHS, Cmp.getName());
+  if (auto *NCI = dyn_cast<ICmpInst>(NarrowCmp))
+    NCI->setDebugLoc(Cmp.getDebugLoc());
 
   Cmp.replaceAllUsesWith(NarrowCmp);
   Cmp.eraseFromParent();
@@ -815,7 +815,7 @@ bool tryShrinkICmp(ICmpInst &Cmp) {
   IRBuilder<> B(&Cmp);
   Value *NewLHS = materializeAtWidth(B, *LHSInfo, TargetWidth);
   Value *NewRHS = materializeAtWidth(B, *RHSInfo, TargetWidth);
-  auto *NewCmp = cast<ICmpInst>(B.CreateICmp(NewPred, NewLHS, NewRHS));
+  Value *NewCmp = B.CreateICmp(NewPred, NewLHS, NewRHS);
 
   SmallVector<Instruction *, 2> DeadRoots;
   if (LHSInfo->Producer != RHSInfo->Producer)
@@ -872,8 +872,7 @@ bool tryWidenTruncEqualityICmp(ICmpInst &Cmp, const DataLayout &DL,
     return false;
 
   IRBuilder<> B(&Cmp);
-  auto *NewCmp =
-      cast<ICmpInst>(B.CreateICmp(Cmp.getPredicate(), WideLHS, WideRHS));
+  Value *NewCmp = B.CreateICmp(Cmp.getPredicate(), WideLHS, WideRHS);
   Cmp.replaceAllUsesWith(NewCmp);
   Cmp.eraseFromParent();
 
@@ -5067,10 +5066,11 @@ bool tryRetargetExternalICmp(ICmpInst &Cmp, const DenseSet<const Value *> &Compo
   }
 
   IRBuilder<> B(&Cmp);
-  auto *NewCmp =
-      cast<ICmpInst>(B.CreateICmp(Cmp.getPredicate(), NewOps[0], NewOps[1]));
-  NewCmp->setDebugLoc(Cmp.getDebugLoc());
-  NewCmp->takeName(&Cmp);
+  Value *NewCmp = B.CreateICmp(Cmp.getPredicate(), NewOps[0], NewOps[1]);
+  if (auto *NCI = dyn_cast<ICmpInst>(NewCmp)) {
+    NCI->setDebugLoc(Cmp.getDebugLoc());
+    NCI->takeName(&Cmp);
+  }
   Cmp.replaceAllUsesWith(NewCmp);
   Cmp.eraseFromParent();
   return true;
