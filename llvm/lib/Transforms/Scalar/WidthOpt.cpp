@@ -2173,10 +2173,9 @@ bool tryShrinkZExtOfZeroBounded(ZExtInst &ZExt) {
   if (NarrowWidth == WideWidth) {
     NewZExt = NarrowSrc;
   } else {
-    auto *NZ = cast<Instruction>(
-        B.CreateZExt(NarrowSrc, ZExt.getType(), ZExt.getName()));
-    NZ->setDebugLoc(ZExt.getDebugLoc());
-    NewZExt = NZ;
+    NewZExt = B.CreateZExt(NarrowSrc, ZExt.getType(), ZExt.getName());
+    if (auto *NZ = dyn_cast<Instruction>(NewZExt))
+      NZ->setDebugLoc(ZExt.getDebugLoc());
   }
 
   ZExt.replaceAllUsesWith(NewZExt);
