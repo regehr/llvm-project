@@ -1720,10 +1720,11 @@ bool tryWidenSubOverTruncThroughZExtNneg(ZExtInst &ZExt) {
     IRBuilder<> B(&ZExt);
     Value *WideOp0 = (TruncIdx == 0) ? X : WideC;
     Value *WideOp1 = (TruncIdx == 0) ? WideC : X;
-    auto *WideSub = cast<Instruction>(
-        B.CreateSub(WideOp0, WideOp1, Sub->getName() + ".wide"));
-    WideSub->setDebugLoc(Sub->getDebugLoc());
-    ZExt.replaceAllUsesWith(WideSub);
+    Value *WideSubV =
+        B.CreateSub(WideOp0, WideOp1, Sub->getName() + ".wide");
+    if (auto *WideSub = dyn_cast<Instruction>(WideSubV))
+      WideSub->setDebugLoc(Sub->getDebugLoc());
+    ZExt.replaceAllUsesWith(WideSubV);
     ZExt.eraseFromParent();
     if (Sub->use_empty())
       RecursivelyDeleteTriviallyDeadInstructions(Sub);
