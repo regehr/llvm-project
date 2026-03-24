@@ -3592,10 +3592,11 @@ bool tryShrinkTruncOfSelect(TruncInst &Tr) {
     return false;
 
   IRBuilder<> B(&Tr);
-  auto *NarrowSel = cast<SelectInst>(
-      B.CreateSelect(Sel->getCondition(), NarrowTV, NarrowFV, Tr.getName()));
-  NarrowSel->setDebugLoc(Tr.getDebugLoc());
-  Tr.replaceAllUsesWith(NarrowSel);
+  Value *NarrowSelV =
+      B.CreateSelect(Sel->getCondition(), NarrowTV, NarrowFV, Tr.getName());
+  if (auto *NarrowSel = dyn_cast<SelectInst>(NarrowSelV))
+    NarrowSel->setDebugLoc(Tr.getDebugLoc());
+  Tr.replaceAllUsesWith(NarrowSelV);
   Tr.eraseFromParent();
 
   if (Sel->use_empty())
