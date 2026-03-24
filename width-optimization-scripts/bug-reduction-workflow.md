@@ -52,14 +52,37 @@ Once you know the upstream culprit (e.g. IPSCCPPass replacing a load with
 replace `load i8, ptr null` with `undef` in the source — and verify that
 `-passes='width-opt'` alone reproduces the crash.
 
+**If neither `width-opt` alone nor `default<O3>` reproduces**: the crash only
+fires after inlining transforms the IR (CGSCC pipeline).  Capture the full
+module IR that `width-opt` actually sees at crash time:
+
+```sh
+clang -w -O3 -I... \
+  -mllvm -print-before=width-opt -mllvm -print-module-scope \
+  /tmp/test-XXXXXX.c -o /dev/null > /tmp/dump.txt 2>&1
+```
+
+Find the last `; ModuleID` line before the crash message and the crash line:
+
+```sh
+grep -n "^; ModuleID\|^clang-23:\|Assertion\|malloc_consolidate" /tmp/dump.txt | tail -10
+```
+
+Extract from the last `; ModuleID` line up to (but not including) the crash
+output, strip any trailing clang diagnostic lines, and verify
+`opt -passes='width-opt'` reproduces on the extracted module.
+
 ## 3. Write an interestingness test
 
 Create a small shell script that returns 0 when the crash is present and
-non-zero otherwise.  Grep for a distinctive string from the assertion message:
+non-zero otherwise.  Grep for a distinctive string from the crash output.
+For `cast<T>` assertion failures use `"Assertion.*cast"`.  For heap corruption
+or segfaults use a broader pattern:
 
 ```sh
 #!/bin/bash
-opt -passes='default<O3>' -S "$1" -o /dev/null 2>&1 | grep -q "Assertion.*cast"
+opt -passes='width-opt' -S "$1" -o /dev/null 2>&1 \
+  | grep -qE "Assertion.*cast|malloc_consolidate|unaligned fastbin|corrupted"
 ```
 
 Make it executable and verify it fires on the pre-reduced IR:
@@ -125,6 +148,22 @@ An icmp-narrowing function called `B.CreateICmp(pred, C1, C2)` on
 constant-valued operands (both zexts of constants), which folded to
 `ConstantInt` rather than a new `ICmpInst`, triggering `cast<ICmpInst>`.
 
+**Example 4** — `select i1 false, i32 0, i32 0; trunc i32 to i8`:
+`tryShrinkTruncOfSelect` called `B.CreateSelect(false, 0, 0)`, which folded to
+`i32 0`.  The `cast<SelectInst>` on the result then asserted.
+
+**Example 5** — `trunc i32 0 to i16; sub i16 0, %trunc; zext nneg i16 to i32`:
+`tryWidenSubOverTruncThroughZExtNneg` called `B.CreateSub(C, C)` on two
+constant operands, which folded to `ConstantInt`.  The `cast<Instruction>`
+on the result then asserted.
+
+**Example 6** — `zext i8 %v to i64; xor i64 %zext, 0; icmp ne i64 %xor, %zext`:
+`tryShrinkICmpZeroBounded` erased the icmp, then called
+`RecursivelyDeleteTriviallyDeadInstructions(%xor)`.  Since `%xor` was the last
+user of `%zext`, `%zext` was freed transitively.  The subsequent
+`dyn_cast<Instruction>(%zext)` was a use-after-free (heap corruption / segfault).
+Diagnosed via `valgrind --tool=memcheck`.
+
 ## 6. Fix the crash
 
 The common root cause for these crashes is that the pass was originally compiled
@@ -153,9 +192,23 @@ surfaces these.
    before the guard can fire.
    Fix: reorder so `isIntegerValue` is checked first.
 
+4. **Use-after-free when `RecursivelyDeleteTriviallyDeadInstructions` is called
+   on two related values.**  If LHS and RHS of an icmp are both erased after the
+   icmp is removed, and LHS uses RHS as an operand, deleting LHS recursively
+   frees RHS too.  A subsequent `dyn_cast<Instruction>(RHS)` then dereferences
+   freed memory (manifests as `malloc_consolidate` heap corruption or segfault,
+   diagnosed cleanly with `valgrind --tool=memcheck`).
+   Fix: save both operands as `WeakTrackingVH` before any `RecursivelyDelete...`
+   call, then use `dyn_cast_or_null` to check if they survived.
+
 **`undef` as a trigger**: upstream passes like IPSCCPPass replace loads from
 null pointers with `undef`.  Any path in the pass that materializes a value from
 `undef` and then passes it to `B.Create*` may fold to a non-`Instruction`.
+
+**Heap corruption diagnosis**: when the crash is `malloc_consolidate` /
+`unaligned fastbin` / segfault rather than a clean assertion, run
+`valgrind --tool=memcheck` on the reduced IR to get a precise use-after-free
+report with allocation and free sites.
 
 After editing `WidthOpt.cpp`, rebuild and confirm:
 

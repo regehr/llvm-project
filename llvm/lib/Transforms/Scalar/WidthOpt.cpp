@@ -4705,6 +4705,21 @@ bool runAnalysisAwareLocalRewrites(Function &F, LazyValueInfo &LVI,
 bool runStructuralLocalRewritesToFixpoint(Function &F) {
   bool ChangedAny = false;
 
+  auto DbgVerify = [&]() {
+    std::string Err;
+    raw_string_ostream OS(Err);
+    if (verifyFunction(F, &OS)) {
+      errs() << "VERIFY FAILED in runStructuralLocalRewritesToFixpoint:\n"
+             << Err << "\n";
+      for (auto &BB : F) {
+        errs() << BB.getName() << ":\n";
+        for (auto &I : BB)
+          errs() << "  " << I << "\n";
+      }
+      llvm_unreachable("IR broken");
+    }
+  };
+
   while (true) {
     LocalRewriteWorklists WL = collectLocalRewriteWorklists(F);
     bool ChangedThisRound = false;
@@ -4772,19 +4787,6 @@ bool runStructuralLocalRewritesToFixpoint(Function &F) {
       ChangedThisRound |= tryFoldZExtOfTruncToMask(*ZExt);
     }
 
-    auto DbgVerify = [&](const char *PassName) {
-      std::string Err;
-      raw_string_ostream OS(Err);
-      if (verifyFunction(F, &OS)) {
-        errs() << "VERIFY FAILED after " << PassName << ":\n" << Err << "\n";
-        for (auto &BB : F) {
-          errs() << BB.getName() << ":\n";
-          for (auto &I : BB)
-            errs() << "  " << I << "\n";
-        }
-        llvm_unreachable("IR broken");
-      }
-    };
     for (WeakTrackingVH &VH : WL.Truncs) {
       auto *Tr = dyn_cast_or_null<TruncInst>(VH);
       if (!Tr || Tr->getParent() == nullptr)
@@ -4826,89 +4828,72 @@ bool runStructuralLocalRewritesToFixpoint(Function &F) {
                                           C->getValue().trunc(getValueWidth(Tr)));
           Tr->replaceAllUsesWith(Folded);
           Tr->eraseFromParent();
-          DbgVerify("constant-fold-trunc");
           ChangedThisRound = true;
           continue;
         }
         done_const_fold:;
       }
       if (tryShrinkTruncGEPIndex(*Tr)) {
-        DbgVerify("tryShrinkTruncGEPIndex");
         ChangedThisRound = true;
         continue;
       }
       if (tryFoldTruncOfExt(*Tr)) {
-        DbgVerify("tryFoldTruncOfExt");
         ChangedThisRound = true;
         continue;
       }
       if (tryFoldTruncOfAndMask(*Tr)) {
-        DbgVerify("tryFoldTruncOfAndMask");
         ChangedThisRound = true;
         continue;
       }
       if (tryFoldTruncOfTrunc(*Tr)) {
-        DbgVerify("tryFoldTruncOfTrunc");
         ChangedThisRound = true;
         continue;
       }
       if (tryFoldTruncToI1WhenSrcIsZeroBounded(*Tr)) {
-        DbgVerify("tryFoldTruncToI1WhenSrcIsZeroBounded");
         ChangedThisRound = true;
         continue;
       }
       if (tryFoldTruncNuwToI1(*Tr)) {
-        DbgVerify("tryFoldTruncNuwToI1");
         ChangedThisRound = true;
         continue;
       }
       if (tryFoldTruncOfCtpop(*Tr)) {
-        DbgVerify("tryFoldTruncOfCtpop");
         ChangedThisRound = true;
         continue;
       }
       if (tryFoldTruncToI1ViaLShrAndMask(*Tr)) {
-        DbgVerify("tryFoldTruncToI1ViaLShrAndMask");
         ChangedThisRound = true;
         continue;
       }
       if (tryShrinkTruncOfShiftRecurrence(*Tr)) {
-        DbgVerify("tryShrinkTruncOfShiftRecurrence");
         ChangedThisRound = true;
         continue;
       }
       if (tryShrinkTruncOfLowBitsRecurrence(*Tr)) {
-        DbgVerify("tryShrinkTruncOfLowBitsRecurrence");
         ChangedThisRound = true;
         continue;
       }
       if (tryShrinkTruncOfSelect(*Tr)) {
-        DbgVerify("tryShrinkTruncOfSelect");
         ChangedThisRound = true;
         continue;
       }
       if (tryShrinkTruncOfZeroBoundedPhi(*Tr)) {
-        DbgVerify("tryShrinkTruncOfZeroBoundedPhi");
         ChangedThisRound = true;
         continue;
       }
       if (tryShrinkTruncOfMinMaxAbs(*Tr)) {
-        DbgVerify("tryShrinkTruncOfMinMaxAbs");
         ChangedThisRound = true;
         continue;
       }
       if (tryShrinkHighHalfSROA(*Tr)) {
-        DbgVerify("tryShrinkHighHalfSROA");
         ChangedThisRound = true;
         continue;
       }
       if (tryShrinkSROAI128Destruct(*Tr)) {
-        DbgVerify("tryShrinkSROAI128Destruct");
         ChangedThisRound = true;
         continue;
       }
       if (tryShrinkTruncOfLowBitsBinOp(*Tr)) {
-        DbgVerify("tryShrinkTruncOfLowBitsBinOp");
         ChangedThisRound = true;
       }
     }
@@ -4959,6 +4944,7 @@ bool runStructuralLocalRewritesToFixpoint(Function &F) {
     if (!ChangedThisRound)
       break;
     ChangedAny = true;
+    DbgVerify();
   }
 
   return ChangedAny;
@@ -5280,7 +5266,23 @@ bool tryWidenComponentFromPlan(const Component &C, const AnalysisResult &R,
 
   // PHIs must be created first so that later instructions in the component can
   // refer to the widened region without worrying about cycles.
+  //
+  // Pre-check: if any phi in the component has an incoming value that is itself
+  // a non-phi component member, that incoming value won't have a NewValues
+  // entry yet (non-phi values are widened after phis).  Bail out now, before
+  // creating any NewPhi nodes, to avoid leaving an orphan phi with an
+  // incomplete incoming-value list in the IR.
   if (SingletonKind == SingletonWidenKind::None) {
+    for (Instruction *I : C.Instructions) {
+      auto *Phi = dyn_cast<PHINode>(I);
+      if (!Phi)
+        continue;
+      for (unsigned Idx = 0, E = Phi->getNumIncomingValues(); Idx != E; ++Idx) {
+        Value *Incoming = Phi->getIncomingValue(Idx);
+        if (ComponentValues.count(Incoming) && !isa<PHINode>(Incoming))
+          return false;
+      }
+    }
     for (Instruction *I : C.Instructions) {
       if (auto *Phi = dyn_cast<PHINode>(I)) {
         auto *NewPhi = PHINode::Create(TargetTy, Phi->getNumIncomingValues(),
