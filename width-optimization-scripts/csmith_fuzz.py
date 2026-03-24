@@ -36,7 +36,7 @@ def extract_checksum(output: str):
     return None
 
 
-def worker(worker_id, stop_event, result_queue, print_lock):
+def worker(worker_id, stop_event, result_queue, print_lock, counter, counter_lock):
     while not stop_event.is_set():
         with tempfile.TemporaryDirectory() as tmp:
             src       = os.path.join(tmp, "test.c")
@@ -79,6 +79,9 @@ def worker(worker_id, stop_event, result_queue, print_lock):
                 result_queue.put(("mismatch", src, cs_gcc, cs_clang, gen.stdout))
                 return
 
+            with counter_lock:
+                worker_id = counter.value
+                counter.value += 1
             with print_lock:
                 print(f"worker {worker_id:3d}: gcc={cs_gcc}  clang={cs_clang}", flush=True)
 
@@ -91,9 +94,11 @@ def main():
     stop_event = multiprocessing.Event()
     result_queue = multiprocessing.Queue()
     print_lock = multiprocessing.Lock()
+    counter = multiprocessing.Value("i", 0)
+    counter_lock = multiprocessing.Lock()
 
     workers = [
-        multiprocessing.Process(target=worker, args=(i, stop_event, result_queue, print_lock), daemon=True)
+        multiprocessing.Process(target=worker, args=(i, stop_event, result_queue, print_lock, counter, counter_lock), daemon=True)
         for i in range(ncpus)
     ]
     for w in workers:
