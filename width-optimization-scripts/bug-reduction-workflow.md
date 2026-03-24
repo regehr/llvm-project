@@ -79,11 +79,23 @@ llvm-reduce --test=/tmp/check-crash.sh /tmp/test-XXXXXX-pre.ll -o /tmp/reduced.l
 functions, blocks, instructions, operands, etc.) and keep the smallest IR that
 still satisfies the interestingness test.
 
-## 5. Understand the reduced trigger
+## 5. Show the reduced trigger — **mandatory before fixing**
 
-Read the reduced IR and the stack trace together.  The stack trace names the
-function in `WidthOpt.cpp` where the crash occurs; the reduced IR shows the
-minimal pattern that exercises it.
+**Always display the reduced IR to the user before proceeding to fix the bug.**
+This serves as a checkpoint: the user can confirm the reduction looks correct,
+spot if llvm-reduce went in an unexpected direction, and understand the root
+cause before any code is changed.
+
+Print the reduced file and briefly explain the pattern:
+
+```sh
+cat bugs/reduced-XXXXXX.ll
+```
+
+Then reason aloud: which instructions are present, which worklist they land on,
+and why that triggers the assertion.  Only proceed to §6 once this is shown.
+
+---
 
 The build is optimized (`-O3 -UNDEBUG`), so function names in the stack trace
 are often inlined away and only `WidthOptPass::run` is visible.  Use
@@ -108,6 +120,11 @@ The singleton component widening path called `B.CreateSExt(undef, TargetTy)`,
 which folded to `UndefValue`.  The `undef` was introduced by IPSCCPPass
 replacing a `load i8, ptr null` — spotted via `--print-changed=diff-quiet`.
 
+**Example 3** — `zext i8 0 to i32; zext i1 false to i32; icmp sgt`:
+An icmp-narrowing function called `B.CreateICmp(pred, C1, C2)` on
+constant-valued operands (both zexts of constants), which folded to
+`ConstantInt` rather than a new `ICmpInst`, triggering `cast<ICmpInst>`.
+
 ## 6. Fix the crash
 
 The common root cause for these crashes is that the pass was originally compiled
@@ -117,13 +134,15 @@ surfaces these.
 
 **Root causes seen so far:**
 
-1. **`cast<Instruction>(B.Create*(...))` on a folded result.**  IRBuilder
-   constant-folds results when operands are constants or `undef`.  For example:
+1. **`cast<Instruction>(B.Create*(...))` or `cast<ICmpInst>(B.CreateICmp(...))`
+   on a folded result.**  IRBuilder constant-folds results when operands are
+   constants or `undef`.  For example:
    - `B.CreateZExt(undef, i32)` → `UndefValue` (not a `ZExtInst`)
    - `B.CreateSExt(undef, i32)` → `UndefValue`
    - `B.CreateICmp(pred, C1, C2)` → `ConstantInt` (not an `ICmpInst`)
-   Fix: store the result as `Value *` and use `dyn_cast<Instruction>` only where
-   the `Instruction*` interface is needed (e.g. `setDebugLoc`).
+   Fix: store the result as `Value *` and use `dyn_cast<Instruction>` /
+   `dyn_cast<ICmpInst>` only where the typed interface is needed (e.g.
+   `setDebugLoc`, `takeName`).
 
 2. **`getValueWidth()` or `->getIntegerBitWidth()` called on vector types.**
    Both assert `isa<IntegerType>`.  Csmith programs include vector operations.
