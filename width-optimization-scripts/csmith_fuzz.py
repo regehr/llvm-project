@@ -6,6 +6,7 @@ Stops on checksum mismatch or compiler crash; runs forever otherwise.
 
 import multiprocessing
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -22,10 +23,20 @@ CSMITH_INC = [
 COMPILE_FLAGS = ["-w", "-O3"] + [f"-I{d}" for d in CSMITH_INC]
 
 
-def run(cmd, **kwargs):
+def run(cmd, timeout=None, **kwargs):
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, **kwargs)
-    except subprocess.TimeoutExpired:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            start_new_session=True, **kwargs
+        )
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+            return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+        except subprocess.TimeoutExpired:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            proc.communicate()
+            return None
+    except Exception:
         return None
 
 
@@ -34,6 +45,13 @@ def extract_checksum(output: str):
         if line.startswith("checksum"):
             return line.strip()
     return None
+
+
+def save_slow(source: str, compiler: str):
+    fd, path = tempfile.mkstemp(prefix="slow_compile_", suffix=".c", dir=os.getcwd())
+    with os.fdopen(fd, "w") as f:
+        f.write(source)
+    print(f"slow {compiler} compile saved to {path}", flush=True)
 
 
 def worker(worker_id, stop_event, result_queue, print_lock, counter, counter_lock):
@@ -51,16 +69,18 @@ def worker(worker_id, stop_event, result_queue, print_lock, counter, counter_loc
                 f.write(gen.stdout)
 
             # Compile with gcc
-            r_gcc = run([GCC] + COMPILE_FLAGS + [src, "-o", bin_gcc], timeout=60)
+            r_gcc = run([GCC] + COMPILE_FLAGS + [src, "-o", bin_gcc], timeout=300)
             if r_gcc is None:
+                save_slow(gen.stdout, "gcc")
                 continue
             if r_gcc.returncode != 0:
                 result_queue.put(("compiler_crash", "gcc", src, r_gcc.stderr))
                 return
 
             # Compile with clang
-            r_clang = run([CLANG] + COMPILE_FLAGS + [src, "-o", bin_clang], timeout=60)
+            r_clang = run([CLANG] + COMPILE_FLAGS + [src, "-o", bin_clang], timeout=300)
             if r_clang is None:
+                save_slow(gen.stdout, "clang")
                 continue
             if r_clang.returncode != 0:
                 result_queue.put(("compiler_crash", "clang", src, r_clang.stderr))
