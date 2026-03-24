@@ -1,4 +1,4 @@
-#include "WidthOpt.h"
+#include "llvm/Transforms/Scalar/WidthOpt.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseSet.h"
@@ -18,13 +18,11 @@
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/PassManager.h"
-#include "llvm/Passes/PassBuilder.h"
-#include "llvm/Plugins/PassPlugin.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/Scalar/ADCE.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/IR/Verifier.h"
 #include <cassert>
@@ -258,46 +256,6 @@ std::string formatValue(const Value *V) {
   return S;
 }
 
-unsigned countModuleInstructions(const Module &M) {
-  unsigned Count = 0;
-  for (const Function &F : M) {
-    if (F.isDeclaration())
-      continue;
-    for (const Instruction &I : instructions(F)) {
-      (void)I;
-      ++Count;
-    }
-  }
-  return Count;
-}
-
-class ModuleInstructionCountPrinterPass
-    : public PassInfoMixin<ModuleInstructionCountPrinterPass> {
-  raw_ostream &OS;
-  std::string Stage;
-
-public:
-  ModuleInstructionCountPrinterPass(raw_ostream &OS, StringRef Stage)
-      : OS(OS), Stage(Stage.str()) {}
-
-  PreservedAnalyses run(Module &M, ModuleAnalysisManager &) {
-    OS << "WidthOpt module instruction count for '" << M.getName()
-       << "' after " << Stage << ": " << countModuleInstructions(M) << "\n";
-    return PreservedAnalyses::all();
-  }
-};
-
-FunctionPassManager createWidthOptMainPassManager() {
-  FunctionPassManager FPM;
-  FPM.addPass(WidthOptPass());
-  return FPM;
-}
-
-FunctionPassManager createADCEPassManager() {
-  FunctionPassManager FPM;
-  FPM.addPass(ADCEPass());
-  return FPM;
-}
 
 void addCandidateWidth(Component &C, unsigned W) {
   if (W == 0)
@@ -1807,6 +1765,8 @@ bool tryShrinkSExtGEPIndex(SExtInst &SExt) {
 }
 
 bool tryShrinkZExtGEPIndex(ZExtInst &ZExt) {
+  if (!isIntegerValue(&ZExt))
+    return false;
   // GEP sign-extends indices to pointer width, so replacing zext(X) with X
   // is valid only when sext(X) == zext(X), i.e., X is non-negative.
   // The nneg flag makes this explicit; alternatively, structural analysis can
@@ -1852,6 +1812,8 @@ bool tryShrinkZExtGEPIndex(ZExtInst &ZExt) {
 //   %p1 = gep ..., i8 %lo
 //   %p2 = gep ..., i8 %hi
 bool tryShrinkZExtThroughBinopToGEP(ZExtInst &ZExt) {
+  if (!isIntegerValue(&ZExt))
+    return false;
   if (ZExt.use_empty())
     return false;
 
@@ -1942,6 +1904,8 @@ bool tryShrinkZExtThroughBinopToGEP(ZExtInst &ZExt) {
 // zext only produces values in [0, 2^N), so we drop them (setting their
 // targets to the switch's default block — they become dead).
 bool tryShrinkZExtSwitch(ZExtInst &ZExt) {
+  if (!isIntegerValue(&ZExt))
+    return false;
   if (ZExt.use_empty())
     return false;
 
@@ -1995,6 +1959,8 @@ bool tryShrinkZExtSwitch(ZExtInst &ZExt) {
 // signed range [-2^(N-1), 2^(N-1) - 1], so cases outside that range are
 // unreachable and are removed; in-range constants are truncated to iN.
 bool tryShrinkSExtSwitch(SExtInst &SExt) {
+  if (!isIntegerValue(&SExt))
+    return false;
   if (SExt.use_empty())
     return false;
 
@@ -2283,6 +2249,8 @@ bool tryFoldZExtOfTruncToMask(ZExtInst &Ext) {
 // which holds iff X < 2^(N-1) (non-negative, fits in signed iN).
 // We check this via isZeroBoundedAtWidth(X, N-1).
 bool tryShrinkTruncGEPIndex(TruncInst &Tr) {
+  if (!isIntegerValue(&Tr))
+    return false;
   if (Tr.use_empty())
     return false;
 
@@ -2441,9 +2409,9 @@ bool tryFoldTruncOfTrunc(TruncInst &Tr) {
 //  - Operand is lshr with a constant shift K satisfying 0 < K < SrcWidth
 //  - The single-use condition for lshr is NOT required (we only mask X)
 bool tryFoldTruncToI1ViaLShrAndMask(TruncInst &Tr) {
-  if (getValueWidth(&Tr) != 1)
-    return false;
   if (!isIntegerValue(&Tr))
+    return false;
+  if (getValueWidth(&Tr) != 1)
     return false;
 
   auto *LShr = dyn_cast<BinaryOperator>(Tr.getOperand(0));
@@ -2489,9 +2457,9 @@ bool tryFoldTruncToI1ViaLShrAndMask(TruncInst &Tr) {
 // analysis), truncating to i1 extracts bit 0 which is X itself.
 // Replacing with icmp ne eliminates the trunc.
 bool tryFoldTruncToI1WhenSrcIsZeroBounded(TruncInst &Tr) {
-  if (getValueWidth(&Tr) != 1)
-    return false;
   if (!isIntegerValue(&Tr))
+    return false;
+  if (getValueWidth(&Tr) != 1)
     return false;
 
   Value *Src = Tr.getOperand(0);
@@ -2518,9 +2486,9 @@ bool tryFoldTruncToI1WhenSrcIsZeroBounded(TruncInst &Tr) {
 //   trunc nuw iN X to i1  is equivalent to  icmp ne iN X, 0
 // Both yield 0 when X=0 and 1 when X=1.  Replacing eliminates the trunc.
 bool tryFoldTruncNuwToI1(TruncInst &Tr) {
-  if (getValueWidth(&Tr) != 1)
-    return false;
   if (!isIntegerValue(&Tr))
+    return false;
+  if (getValueWidth(&Tr) != 1)
     return false;
   if (!Tr.hasNoUnsignedWrap())
     return false;
@@ -2695,6 +2663,8 @@ bool collectTruncRootedValueCost(
 /// because lo is zero in bits N+, and HIGH_MASK kills bits 0..N-1.
 /// Then lshr(shl(zext(hi), N), N) = zext(hi), and trunc(zext(hi), N) = hi.
 bool tryShrinkHighHalfSROA(TruncInst &Tr) {
+  if (!isIntegerValue(&Tr))
+    return false;
   unsigned TargetWidth = getValueWidth(&Tr);
   unsigned SrcWidth = Tr.getSrcTy()->getIntegerBitWidth();
   if (SrcWidth != 2 * TargetWidth)
@@ -2765,6 +2735,8 @@ bool tryShrinkHighHalfSROA(TruncInst &Tr) {
 /// Also: trunc(lshr(or(%mask, %lo_ext), N), N) == trunc(lshr(%mask, N), N)
 /// because %lo_ext occupies only bits 0..N-1 which shift out entirely.
 bool tryShrinkSROAI128Destruct(TruncInst &Tr) {
+  if (!isIntegerValue(&Tr))
+    return false;
   unsigned TargetWidth = getValueWidth(&Tr);
   unsigned SourceWidth = Tr.getSrcTy()->getIntegerBitWidth();
   if (TargetWidth >= SourceWidth)
@@ -5646,58 +5618,6 @@ PreservedAnalyses WidthOptPass::run(Function &F, FunctionAnalysisManager &AM) {
   if (!Changed)
     return PreservedAnalyses::all();
   return PreservedAnalyses::none();
-}
-
-PassPluginLibraryInfo getWidthOptPluginInfo() {
-  return {LLVM_PLUGIN_API_VERSION, "WidthOpt", LLVM_VERSION_STRING,
-          [](PassBuilder &PB) {
-            PB.registerAnalysisRegistrationCallback(
-                [](FunctionAnalysisManager &FAM) {
-                  FAM.registerPass([&] { return WidthComponentAnalysis(); });
-                  FAM.registerPass([&] { return WidthPlanAnalysis(); });
-                });
-
-            PB.registerPipelineParsingCallback(
-                [](StringRef Name, FunctionPassManager &FPM,
-                   ArrayRef<PassBuilder::PipelineElement>) {
-                  if (Name == "print<width-components>") {
-                    FPM.addPass(WidthComponentPrinter(errs()));
-                    return true;
-                  }
-                  if (Name == "print<width-candidates>") {
-                    FPM.addPass(WidthCandidatePrinter(errs()));
-                    return true;
-                  }
-                  if (Name == "print<width-plan>") {
-                    FPM.addPass(WidthPlanPrinter(errs()));
-                    return true;
-                  }
-                  return false;
-                });
-
-            PB.registerPipelineParsingCallback(
-                [](StringRef Name, ModulePassManager &MPM,
-                   ArrayRef<PassBuilder::PipelineElement>) {
-                  if (Name != "width-opt")
-                    return false;
-
-                  MPM.addPass(
-                      createModuleToFunctionPassAdaptor(createADCEPassManager()));
-                  MPM.addPass(
-                      ModuleInstructionCountPrinterPass(errs(), "initial ADCE"));
-                  MPM.addPass(createModuleToFunctionPassAdaptor(
-                      createWidthOptMainPassManager()));
-                  MPM.addPass(
-                      createModuleToFunctionPassAdaptor(createADCEPassManager()));
-                  MPM.addPass(
-                      ModuleInstructionCountPrinterPass(errs(), "final ADCE"));
-                  return true;
-                });
-          }};
-}
-
-extern "C" LLVM_ATTRIBUTE_WEAK PassPluginLibraryInfo llvmGetPassPluginInfo() {
-  return getWidthOptPluginInfo();
 }
 
 } // namespace widthopt
