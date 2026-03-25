@@ -9,7 +9,7 @@ define i32 @f(i8 %x) {
 }
 
 ; CHECK-LABEL: define i32 @f(
-; CHECK: %[[ZX:.*]] = zext nneg i8 %x to i32
+; CHECK: %[[ZX:.*]] = zext i8 %x to i32
 ; CHECK-NOT: sext i8 %x to i32
 ; CHECK: %[[R:.*]] = and i32 %[[ZX]], 255
 ; CHECK: ret i32 %[[R]]

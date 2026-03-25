@@ -1261,7 +1261,9 @@ bool tryFoldAndOfSExtToZExt(BinaryOperator &And) {
                                              "", Ext->getIterator());
   ZExt->setDebugLoc(Ext->getDebugLoc());
   ZExt->takeName(Ext);
-  ZExt->setNonNeg();
+  // Do NOT setNonNeg here: the transformation is valid because the mask zeroes
+  // out all bits above SrcWidth, so sext and zext agree on the unmasked bits.
+  // But this says nothing about whether the source value is non-negative.
   And.replaceUsesOfWith(Ext, ZExt);
   if (Ext->use_empty())
     Ext->eraseFromParent();
@@ -2197,6 +2199,12 @@ bool tryShrinkZExtOfZeroBounded(ZExtInst &ZExt) {
 }
 
 bool tryFoldZExtOfTruncToMask(ZExtInst &Ext) {
+  // Skip dead instructions: there is no benefit to transforming a value that
+  // has no uses, and doing so can create new dead instructions that perturb
+  // subsequent transforms in the fixpoint loop.
+  if (Ext.use_empty())
+    return false;
+
   auto *Tr = dyn_cast<TruncInst>(Ext.getOperand(0));
   if (!Tr)
     return false;
@@ -5626,21 +5634,23 @@ PreservedAnalyses WidthOptPass::run(Function &F, FunctionAnalysisManager &AM) {
     runStructuralLocalRewritesToFixpoint(F);
   }
 
-  AnalysisResult R = computeWidthComponents(F);
-  PlanResult Plan = computeWidthPlan(R);
+  {
+    AnalysisResult R = computeWidthComponents(F);
+    PlanResult Plan = computeWidthPlan(R);
 
-  // The plan is currently consumed only by widening transforms. Narrowing is
-  // still handled by the local folds above.
-  bool ChangedByPlan = false;
-  for (const Component &C : R.Components)
-    ChangedByPlan |= tryWidenComponentFromPlan(C, R, Plan);
-  Changed |= ChangedByPlan;
+    // The plan is currently consumed only by widening transforms. Narrowing is
+    // still handled by the local folds above.
+    bool ChangedByPlan = false;
+    for (const Component &C : R.Components)
+      ChangedByPlan |= tryWidenComponentFromPlan(C, R, Plan);
+    Changed |= ChangedByPlan;
 
-  // Plan-driven widening can create fresh structural cleanup opportunities
-  // such as zext(trunc(widened-value)) patterns that were not present before
-  // the global step ran.
-  if (ChangedByPlan)
-    Changed |= runStructuralLocalRewritesToFixpoint(F);
+    // Plan-driven widening can create fresh structural cleanup opportunities
+    // such as zext(trunc(widened-value)) patterns that were not present before
+    // the global step ran.
+    if (ChangedByPlan)
+      Changed |= runStructuralLocalRewritesToFixpoint(F);
+  }
 
   if (!Changed)
     return PreservedAnalyses::all();
