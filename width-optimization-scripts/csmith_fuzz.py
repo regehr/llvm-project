@@ -69,7 +69,7 @@ def worker(worker_id, stop_event, result_queue, print_lock, counter, counter_loc
                 f.write(gen.stdout)
 
             # Compile with gcc
-            r_gcc = run([GCC] + COMPILE_FLAGS + [src, "-o", bin_gcc], timeout=300)
+            r_gcc = run([GCC] + COMPILE_FLAGS + [src, "-o", bin_gcc], timeout=180)
             if r_gcc is None:
                 save_slow(gen.stdout, "gcc")
                 continue
@@ -78,7 +78,7 @@ def worker(worker_id, stop_event, result_queue, print_lock, counter, counter_loc
                 return
 
             # Compile with clang
-            r_clang = run([CLANG] + COMPILE_FLAGS + [src, "-o", bin_clang], timeout=300)
+            r_clang = run([CLANG] + COMPILE_FLAGS + [src, "-o", bin_clang], timeout=180)
             if r_clang is None:
                 save_slow(gen.stdout, "clang")
                 continue
