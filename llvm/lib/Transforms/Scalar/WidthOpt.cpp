@@ -1596,10 +1596,12 @@ bool tryWidenAddThroughZExt(BinaryOperator &BO) {
     Value *WideC =
         ConstantInt::get(IntegerType::get(BO.getContext(), WideWidth),
                          C->getValue().zextOrTrunc(WideWidth));
-    auto *WideAdd = cast<Instruction>(
-        B.CreateAdd(WideBase, WideC, BO.getName() + ".wide"));
-    WideAdd->setDebugLoc(BO.getDebugLoc());
-    WideZ->replaceAllUsesWith(WideAdd);
+    // CreateAdd may fold to a non-Instruction (e.g. ConstantInt) when both
+    // operands are constants; use Value* and dyn_cast only for setDebugLoc.
+    Value *WideAddV = B.CreateAdd(WideBase, WideC, BO.getName() + ".wide");
+    if (auto *WideAdd = dyn_cast<Instruction>(WideAddV))
+      WideAdd->setDebugLoc(BO.getDebugLoc());
+    WideZ->replaceAllUsesWith(WideAddV);
     WideZ->eraseFromParent();
 
     if (BO.use_empty())
@@ -1662,9 +1664,12 @@ bool tryWidenAddOverTruncThroughZExt(BinaryOperator &BO) {
     Value *WideC = ConstantInt::get(IntegerType::get(BO.getContext(), WideWidth),
                                     C->getValue().zext(WideWidth));
     IRBuilder<> B(WideZ);
-    auto *WideAdd = cast<Instruction>(B.CreateAdd(X, WideC, BO.getName() + ".wide"));
-    WideAdd->setDebugLoc(BO.getDebugLoc());
-    WideZ->replaceAllUsesWith(WideAdd);
+    // CreateAdd may fold to a non-Instruction when X is a constant; use Value*
+    // and dyn_cast only for setDebugLoc.
+    Value *WideAddV = B.CreateAdd(X, WideC, BO.getName() + ".wide");
+    if (auto *WideAdd = dyn_cast<Instruction>(WideAddV))
+      WideAdd->setDebugLoc(BO.getDebugLoc());
+    WideZ->replaceAllUsesWith(WideAddV);
     WideZ->eraseFromParent();
     if (BO.use_empty())
       RecursivelyDeleteTriviallyDeadInstructions(&BO);
