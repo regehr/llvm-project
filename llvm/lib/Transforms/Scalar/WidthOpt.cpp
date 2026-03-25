@@ -1591,6 +1591,17 @@ bool tryWidenAddThroughZExt(BinaryOperator &BO) {
     Value *WideBase =
         findExistingZExtToWidth(ExtInfo->NarrowValue, WideWidth);
     IRBuilder<> B(WideZ);
+    // Only reuse an existing zext if it is guaranteed to dominate the
+    // insertion point (immediately before WideZ).  A zext in a different
+    // basic block may not dominate WideZ's block, producing a use-before-def
+    // verifier error.  NarrowValue dominates WideZ (it flows BO→WideZ), so a
+    // freshly created zext here is always safe.
+    if (WideBase) {
+      auto *WideBaseI = cast<Instruction>(WideBase);
+      if (WideBaseI->getParent() != WideZ->getParent() ||
+          !WideBaseI->comesBefore(WideZ))
+        WideBase = nullptr;
+    }
     if (!WideBase)
       WideBase = B.CreateZExt(ExtInfo->NarrowValue,
                               IntegerType::get(BO.getContext(), WideWidth));
