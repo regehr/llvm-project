@@ -2915,10 +2915,12 @@ bool tryShrinkTruncOfLowBitsBinOp(TruncInst &Tr) {
           IRBuilder<> B(&Tr);
           auto *NarrowAmt = ConstantInt::get(
               IntegerType::get(Tr.getContext(), TargetWidth), TotalShift);
-          auto *NewAShr = cast<Instruction>(
-              B.CreateAShr(LHSInfo->NarrowValue, NarrowAmt, Tr.getName()));
-          NewAShr->setDebugLoc(Tr.getDebugLoc());
-          Tr.replaceAllUsesWith(NewAShr);
+          // CreateAShr may fold to a non-Instruction when NarrowValue is a constant.
+          Value *NewAShrV =
+              B.CreateAShr(LHSInfo->NarrowValue, NarrowAmt, Tr.getName());
+          if (auto *NewAShr = dyn_cast<Instruction>(NewAShrV))
+            NewAShr->setDebugLoc(Tr.getDebugLoc());
+          Tr.replaceAllUsesWith(NewAShrV);
           Tr.eraseFromParent();
           // Clean up the lshr chain bottom-up.
           if (BO->use_empty())
@@ -2960,19 +2962,22 @@ bool tryShrinkTruncOfLowBitsBinOp(TruncInst &Tr) {
           IRBuilder<> B(&Tr);
           auto *NarrowAmt = ConstantInt::get(
               IntegerType::get(Tr.getContext(), TargetWidth), TotalShift);
-          Instruction *NewShift;
+          // CreateAShr/CreateLShr may fold to a non-Instruction when NarrowValue
+          // is a constant; use Value* and dyn_cast only for setDebugLoc.
+          Value *NewShiftV;
           if (LHSInfo->Kind == ExtKind::SExt) {
             // trunc(ashr*(sext(a:N→W), k_total), N) = ashr(a, k_total)
-            NewShift = cast<Instruction>(
-                B.CreateAShr(LHSInfo->NarrowValue, NarrowAmt, Tr.getName()));
+            NewShiftV =
+                B.CreateAShr(LHSInfo->NarrowValue, NarrowAmt, Tr.getName());
           } else {
             // trunc(ashr*(zext(a:N→W), k_total), N) = lshr(a, k_total)
             // because zext fills upper bits with 0, making ashr == lshr.
-            NewShift = cast<Instruction>(
-                B.CreateLShr(LHSInfo->NarrowValue, NarrowAmt, Tr.getName()));
+            NewShiftV =
+                B.CreateLShr(LHSInfo->NarrowValue, NarrowAmt, Tr.getName());
           }
-          NewShift->setDebugLoc(Tr.getDebugLoc());
-          Tr.replaceAllUsesWith(NewShift);
+          if (auto *NewShift = dyn_cast<Instruction>(NewShiftV))
+            NewShift->setDebugLoc(Tr.getDebugLoc());
+          Tr.replaceAllUsesWith(NewShiftV);
           Tr.eraseFromParent();
           if (BO->use_empty())
             RecursivelyDeleteTriviallyDeadInstructions(BO);
@@ -2990,10 +2995,12 @@ bool tryShrinkTruncOfLowBitsBinOp(TruncInst &Tr) {
         IRBuilder<> B(&Tr);
         auto *NarrowAmt = ConstantInt::get(
             IntegerType::get(Tr.getContext(), TargetWidth), ShiftAmt);
-        auto *NewLShr = cast<Instruction>(
-            B.CreateLShr(LHSInfo->NarrowValue, NarrowAmt, Tr.getName()));
-        NewLShr->setDebugLoc(Tr.getDebugLoc());
-        Tr.replaceAllUsesWith(NewLShr);
+        // CreateLShr may fold to a non-Instruction when NarrowValue is a constant.
+        Value *NewLShrV =
+            B.CreateLShr(LHSInfo->NarrowValue, NarrowAmt, Tr.getName());
+        if (auto *NewLShr = dyn_cast<Instruction>(NewLShrV))
+          NewLShr->setDebugLoc(Tr.getDebugLoc());
+        Tr.replaceAllUsesWith(NewLShrV);
         Tr.eraseFromParent();
         if (BO->use_empty())
           RecursivelyDeleteTriviallyDeadInstructions(BO);
