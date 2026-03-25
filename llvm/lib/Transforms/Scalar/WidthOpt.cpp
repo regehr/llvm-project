@@ -5226,18 +5226,21 @@ bool tryWidenComponentFromPlan(const Component &C, const AnalysisResult &R,
   } else if (SingletonKind == SingletonWidenKind::Trunc) {
     auto *Tr = cast<TruncInst>(C.Instructions.front());
     IRBuilder<> B(Tr);
-    auto *NarrowTrunc = cast<Instruction>(
-        B.CreateTrunc(Tr->getOperand(0), Tr->getType(), Tr->getName() + ".n"));
-    NarrowTrunc->setDebugLoc(Tr->getDebugLoc());
+    // IRBuilder may fold CreateTrunc/CreateZExt/CreateSExt to a non-Instruction
+    // (e.g. PoisonValue) when the operand is poison or undef.  Use Value* and
+    // dyn_cast only where the typed interface is needed.
+    Value *NarrowTruncV =
+        B.CreateTrunc(Tr->getOperand(0), Tr->getType(), Tr->getName() + ".n");
+    if (auto *NarrowTrunc = dyn_cast<Instruction>(NarrowTruncV))
+      NarrowTrunc->setDebugLoc(Tr->getDebugLoc());
 
-    Instruction *WideValue = nullptr;
+    Value *WideValue = nullptr;
     if (InternalKind == ExtKind::ZExt)
-      WideValue = cast<Instruction>(
-          B.CreateZExt(NarrowTrunc, TargetTy, Tr->getName()));
+      WideValue = B.CreateZExt(NarrowTruncV, TargetTy, Tr->getName());
     else
-      WideValue = cast<Instruction>(
-          B.CreateSExt(NarrowTrunc, TargetTy, Tr->getName()));
-    WideValue->setDebugLoc(Tr->getDebugLoc());
+      WideValue = B.CreateSExt(NarrowTruncV, TargetTy, Tr->getName());
+    if (auto *WideInst = dyn_cast<Instruction>(WideValue))
+      WideInst->setDebugLoc(Tr->getDebugLoc());
     NewValues[Tr] = WideValue;
   } else if (SingletonKind == SingletonWidenKind::SignedMinMax ||
              SingletonKind == SingletonWidenKind::UnsignedMinMax) {
