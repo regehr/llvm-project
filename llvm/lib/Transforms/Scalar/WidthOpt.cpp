@@ -5020,10 +5020,13 @@ bool tryRetargetExternalUnsignedCompareViaSelect(ICmpInst &Cmp,
 
   Value *TrueCmp = buildArm(TrueC, Cmp.getName() + ".true");
   Value *FalseCmp = buildArm(FalseC, Cmp.getName() + ".false");
-  auto *NewSel = cast<SelectInst>(B.CreateSelect(Sel->getCondition(), TrueCmp,
-                                                 FalseCmp, Cmp.getName()));
-  NewSel->setDebugLoc(Cmp.getDebugLoc());
-  Cmp.replaceAllUsesWith(NewSel);
+  // CreateSelect may fold to a non-SelectInst (e.g. when the condition is a
+  // constant i1); use Value* and dyn_cast only for setDebugLoc.
+  Value *NewSelV = B.CreateSelect(Sel->getCondition(), TrueCmp,
+                                  FalseCmp, Cmp.getName());
+  if (auto *NewSel = dyn_cast<Instruction>(NewSelV))
+    NewSel->setDebugLoc(Cmp.getDebugLoc());
+  Cmp.replaceAllUsesWith(NewSelV);
   Cmp.eraseFromParent();
   return true;
 }
@@ -5345,11 +5348,15 @@ bool tryWidenComponentFromPlan(const Component &C, const AnalysisResult &R,
           continue;
 
         IRBuilder<> B(Sel);
-        auto *WideSel = cast<SelectInst>(
-            B.CreateSelect(Sel->getCondition(), WideTV, WideFV, ""));
-        WideSel->setDebugLoc(Sel->getDebugLoc());
-        WideSel->takeName(Sel);
-        NewValues[Sel] = WideSel;
+        // CreateSelect may fold to a non-SelectInst when the condition is a
+        // constant; use Value* and dyn_cast only where the typed interface is needed.
+        Value *WideSelV =
+            B.CreateSelect(Sel->getCondition(), WideTV, WideFV, "");
+        if (auto *WideSelI = dyn_cast<Instruction>(WideSelV)) {
+          WideSelI->setDebugLoc(Sel->getDebugLoc());
+          WideSelI->takeName(Sel);
+        }
+        NewValues[Sel] = WideSelV;
         Progress = true;
         --Remaining;
         continue;
