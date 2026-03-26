@@ -3844,17 +3844,28 @@ bool tryShrinkTruncOfZeroBoundedPhi(TruncInst &Tr) {
                                     Phi->getIterator());
   NarrowPhi->setDebugLoc(Phi->getDebugLoc());
 
+  // Keep a result per predecessor block so that duplicate predecessors (e.g.
+  // multiple switch cases targeting the same block) reuse the same materialized
+  // value.  A fresh instruction-level cache is still used per block so that
+  // values materialized in one predecessor don't leak into a sibling block
+  // where they don't dominate.
+  DenseMap<BasicBlock *, Value *> PerBlockResult;
   for (unsigned I = 0; I != N; ++I) {
     BasicBlock *BB = Phi->getIncomingBlock(I);
-    // Use a per-block cache so materialized values from one incoming block are
-    // not reused in a sibling block where they don't dominate.
-    DenseMap<Value *, Value *> Cache;
-    Value *NarrowVal = materializeTruncRootedValueAtWidth(
-        Phi->getIncomingValue(I), TargetWidth, BB->getTerminator(), &Cache);
-    if (!NarrowVal) {
-      // Bail out: remove the partially-built phi.
-      NarrowPhi->eraseFromParent();
-      return false;
+    Value *NarrowVal;
+    auto It = PerBlockResult.find(BB);
+    if (It != PerBlockResult.end()) {
+      NarrowVal = It->second;
+    } else {
+      DenseMap<Value *, Value *> Cache;
+      NarrowVal = materializeTruncRootedValueAtWidth(
+          Phi->getIncomingValue(I), TargetWidth, BB->getTerminator(), &Cache);
+      if (!NarrowVal) {
+        // Bail out: remove the partially-built phi.
+        NarrowPhi->eraseFromParent();
+        return false;
+      }
+      PerBlockResult[BB] = NarrowVal;
     }
     NarrowPhi->addIncoming(NarrowVal, BB);
   }
