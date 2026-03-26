@@ -1206,10 +1206,17 @@ bool tryShrinkSelectOfExts(SelectInst &Sel) {
 
   Sel.eraseFromParent();
 
-  if (TrueExt && TrueExt->Producer->use_empty())
-    RecursivelyDeleteTriviallyDeadInstructions(TrueExt->Producer);
-  if (FalseExt && FalseExt->Producer->use_empty())
-    RecursivelyDeleteTriviallyDeadInstructions(FalseExt->Producer);
+  // Capture producers before any deletion; both arms may share the same
+  // producer (e.g. select i1 %c, %ext, %ext), in which case deleting through
+  // TrueExt's producer first would leave FalseExt->Producer dangling.
+  Instruction *TrueProducer  = TrueExt  ? TrueExt->Producer  : nullptr;
+  Instruction *FalseProducer = FalseExt ? FalseExt->Producer : nullptr;
+
+  if (TrueProducer && TrueProducer->use_empty())
+    RecursivelyDeleteTriviallyDeadInstructions(TrueProducer);
+  if (FalseProducer && FalseProducer != TrueProducer &&
+      FalseProducer->use_empty())
+    RecursivelyDeleteTriviallyDeadInstructions(FalseProducer);
 
   return true;
 }
