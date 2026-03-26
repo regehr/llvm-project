@@ -3597,8 +3597,14 @@ bool collectTruncRootedValueCost(
       return true;
     case Intrinsic::abs: {
       // abs(a, false) is narrowable when a is sext-bounded at TargetWidth.
+      // Without this check, abs(add(sext(x), 100)) with TargetWidth=8 could
+      // narrow to abs(add.i8(x, 100)) even when the add overflows i8, giving
+      // the wrong sign and thus the wrong absolute value.
+      // e.g. a=34: abs.i32(134)=134, trunc.i8=-122; but abs.i8(-122)=122.
       auto *PoisonFlag = dyn_cast<ConstantInt>(II->getArgOperand(1));
       if (!PoisonFlag || !PoisonFlag->isZero())
+        return false;
+      if (!isSextBoundedAtWidth(II->getArgOperand(0), TargetWidth))
         return false;
       if (!collectTruncRootedValueCost(II->getArgOperand(0), TargetWidth,
                                        AddedValues, RemovedInstructions,
