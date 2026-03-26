@@ -2656,6 +2656,17 @@ bool isZeroBoundedAtWidth(Value *V, unsigned Width) {
   return false;
 }
 
+// Returns true when V's value is guaranteed to fit in a Width-bit signed
+// integer, i.e. trunc(V, Width) sign-extends back to V's original value.
+// This is the signed analogue of isZeroBoundedAtWidth.
+bool isSextBoundedAtWidth(Value *V, unsigned Width) {
+  if (auto Ext = getExtOperandInfo(V))
+    return Ext->Kind == ExtKind::SExt && Ext->NarrowWidth <= Width;
+  if (auto *C = dyn_cast<ConstantInt>(V))
+    return C->getValue().isSignedIntN(Width);
+  return false;
+}
+
 bool isTruncRootedLowBitsPreservingOpcode(unsigned Opcode);
 
 Value *materializeTruncRootedValueAtWidth(Value *V, unsigned TargetWidth,
@@ -3543,7 +3554,14 @@ bool collectTruncRootedValueCost(
       return true;
     case Intrinsic::smin:
     case Intrinsic::smax:
-      // Narrowable when both args are sext-bounded at TargetWidth.
+      // Narrowable only when both args are sext-bounded at TargetWidth,
+      // i.e. trunc(arg, TargetWidth) sign-extends back to the original value.
+      // Without this check the signed comparison order can change after
+      // truncation (e.g. smin.i32(129, 0) = 0 but smin.i8(trunc(129), 0) =
+      // smin.i8(-127, 0) = -127).
+      if (!isSextBoundedAtWidth(II->getArgOperand(0), TargetWidth) ||
+          !isSextBoundedAtWidth(II->getArgOperand(1), TargetWidth))
+        return false;
       if (!collectTruncRootedValueCost(II->getArgOperand(0), TargetWidth,
                                        AddedValues, RemovedInstructions,
                                        Visited) ||

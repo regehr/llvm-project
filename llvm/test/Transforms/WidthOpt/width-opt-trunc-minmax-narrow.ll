@@ -84,6 +84,46 @@ define i8 @trunc_abs_sext(i8 %a) {
 ; CHECK: %[[R:.*]] = call i8 @llvm.abs.i8(i8 %a, i1 false)
 ; CHECK: ret i8 %[[R]]
 
+; smin/smax with an unextended i32 arg must NOT be narrowed: the i32 sign bit
+; does not match the i8 sign bit after truncation.
+; e.g. smin.i32(129, 0) = 0 but smin.i8(trunc(129), 0) = smin.i8(-127, 0) = -127.
+define i8 @trunc_smin_unbounded_nochange(i32 %x) {
+  %m = call i32 @llvm.smin.i32(i32 %x, i32 0)
+  %t = trunc i32 %m to i8
+  ret i8 %t
+}
+
+; CHECK-LABEL: define i8 @trunc_smin_unbounded_nochange(
+; CHECK: call i32 @llvm.smin.i32(i32 %x, i32 0)
+; CHECK: trunc i32
+; CHECK: ret i8
+
+define i8 @trunc_smax_unbounded_nochange(i32 %x) {
+  %m = call i32 @llvm.smax.i32(i32 %x, i32 0)
+  %t = trunc i32 %m to i8
+  ret i8 %t
+}
+
+; CHECK-LABEL: define i8 @trunc_smax_unbounded_nochange(
+; CHECK: call i32 @llvm.smax.i32(i32 %x, i32 0)
+; CHECK: trunc i32
+; CHECK: ret i8
+
+; smin with a constant that fits in i8 signed range and a sext arg: valid to narrow.
+define i8 @trunc_smin_sext_const(i8 %a) {
+  %a32 = sext i8 %a to i32
+  %m = call i32 @llvm.smin.i32(i32 %a32, i32 42)
+  %t = trunc i32 %m to i8
+  ret i8 %t
+}
+
+; CHECK-LABEL: define i8 @trunc_smin_sext_const(
+; CHECK-NOT: sext
+; CHECK-NOT: smin i32
+; CHECK-NOT: trunc
+; CHECK: call i8 @llvm.smin.i8(i8 %a, i8 42)
+; CHECK: ret i8
+
 ; umin with constant that fits in i8
 define i8 @trunc_umin_zext_const(i8 %a) {
   %a32 = zext i8 %a to i32
