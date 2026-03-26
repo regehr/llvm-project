@@ -1494,14 +1494,19 @@ bool tryNarrowUDivWithRange(BinaryOperator &BO, LazyValueInfo &LVI) {
     case NarrowUDivOperandKind::Existing:
       return Plan.Source;
     case NarrowUDivOperandKind::NewZExt: {
-      auto *Z = cast<Instruction>(B.CreateZExt(Plan.Source, TargetTy, Name));
-      Z->setDebugLoc(BO.getDebugLoc());
-      return Z;
+      // CreateZExt may fold to a constant when Plan.Source is a ConstantInt
+      // (e.g. the NarrowValue of a zext of a literal).  Use dyn_cast so we
+      // only call setDebugLoc when the result is actually an instruction.
+      Value *ZV = B.CreateZExt(Plan.Source, TargetTy, Name);
+      if (auto *Z = dyn_cast<Instruction>(ZV))
+        Z->setDebugLoc(BO.getDebugLoc());
+      return ZV;
     }
     case NarrowUDivOperandKind::NewTrunc: {
-      auto *Tr = cast<Instruction>(B.CreateTrunc(Plan.Source, TargetTy, Name));
-      Tr->setDebugLoc(BO.getDebugLoc());
-      return Tr;
+      Value *TrV = B.CreateTrunc(Plan.Source, TargetTy, Name);
+      if (auto *Tr = dyn_cast<Instruction>(TrV))
+        Tr->setDebugLoc(BO.getDebugLoc());
+      return TrV;
     }
     }
     llvm_unreachable("Unexpected narrow udiv operand plan");
@@ -1509,21 +1514,27 @@ bool tryNarrowUDivWithRange(BinaryOperator &BO, LazyValueInfo &LVI) {
 
   Value *NarrowLHS = materializeOperand(*LHSPlan, BO.getName() + ".lhs.narrow");
   Value *NarrowRHS = materializeOperand(*RHSPlan, BO.getName() + ".rhs.narrow");
-  auto *NarrowDiv = cast<Instruction>(B.CreateBinOp(
+  // CreateBinOp may fold to a constant when both operands are constants
+  // (e.g. both LHS and RHS plans are Existing ConstantInts).  Use Value* and
+  // dyn_cast so we only call setDebugLoc / setIsExact when the result is an
+  // actual instruction.
+  Value *NarrowDivV = B.CreateBinOp(
       (Instruction::BinaryOps)BO.getOpcode(), NarrowLHS, NarrowRHS,
-      BO.getName() + ".narrow"));
-  NarrowDiv->setDebugLoc(BO.getDebugLoc());
-  if (BO.getOpcode() == Instruction::UDiv && BO.isExact())
-    cast<BinaryOperator>(NarrowDiv)->setIsExact(true);
+      BO.getName() + ".narrow");
+  if (auto *NarrowDiv = dyn_cast<Instruction>(NarrowDivV)) {
+    NarrowDiv->setDebugLoc(BO.getDebugLoc());
+    if (BO.getOpcode() == Instruction::UDiv && BO.isExact())
+      cast<BinaryOperator>(NarrowDiv)->setIsExact(true);
+  }
 
   if (ResultPlan.TruncUser != nullptr) {
-    ResultPlan.TruncUser->replaceAllUsesWith(NarrowDiv);
+    ResultPlan.TruncUser->replaceAllUsesWith(NarrowDivV);
     ResultPlan.TruncUser->eraseFromParent();
   } else {
-    auto *WideDiv =
-        cast<Instruction>(B.CreateZExt(NarrowDiv, BO.getType(), BO.getName()));
-    WideDiv->setDebugLoc(BO.getDebugLoc());
-    BO.replaceAllUsesWith(WideDiv);
+    Value *WideDivV = B.CreateZExt(NarrowDivV, BO.getType(), BO.getName());
+    if (auto *WideDiv = dyn_cast<Instruction>(WideDivV))
+      WideDiv->setDebugLoc(BO.getDebugLoc());
+    BO.replaceAllUsesWith(WideDivV);
   }
   BO.eraseFromParent();
 
@@ -2420,10 +2431,11 @@ bool tryFoldTruncOfTrunc(TruncInst &Tr) {
   if (TargetWidth >= InnerWidth || InnerWidth >= SourceWidth)
     return false;
   IRBuilder<> B(&Tr);
-  auto *NewTr = cast<Instruction>(
-      B.CreateTrunc(Inner->getOperand(0), Tr.getType(), Tr.getName()));
-  NewTr->setDebugLoc(Tr.getDebugLoc());
-  Tr.replaceAllUsesWith(NewTr);
+  // CreateTrunc may fold to a constant if the source is a ConstantInt.
+  Value *NewTrV = B.CreateTrunc(Inner->getOperand(0), Tr.getType(), Tr.getName());
+  if (auto *NewTr = dyn_cast<Instruction>(NewTrV))
+    NewTr->setDebugLoc(Tr.getDebugLoc());
+  Tr.replaceAllUsesWith(NewTrV);
   Tr.eraseFromParent();
   if (Inner->use_empty())
     RecursivelyDeleteTriviallyDeadInstructions(Inner);
@@ -2465,19 +2477,20 @@ bool tryFoldTruncToI1ViaLShrAndMask(TruncInst &Tr) {
     return false;
 
   // Build: and X, (1 << K); icmp ne ..., 0
+  // CreateAnd/CreateICmpNE may fold to a constant if X is a ConstantInt.
   Value *X = LShr->getOperand(0);
   IRBuilder<> B(&Tr);
   APInt BitMask = APInt::getOneBitSet(SrcWidth, (unsigned)K);
-  auto *AndInst = cast<Instruction>(
-      B.CreateAnd(X, ConstantInt::get(LShr->getType(), BitMask),
-                  Twine("bit") + Twine((unsigned)K)));
-  AndInst->setDebugLoc(Tr.getDebugLoc());
-  auto *Cmp = cast<Instruction>(
-      B.CreateICmpNE(AndInst, ConstantInt::get(LShr->getType(), 0),
-                     Tr.getName()));
-  Cmp->setDebugLoc(Tr.getDebugLoc());
+  Value *AndV = B.CreateAnd(X, ConstantInt::get(LShr->getType(), BitMask),
+                             Twine("bit") + Twine((unsigned)K));
+  if (auto *AndInst = dyn_cast<Instruction>(AndV))
+    AndInst->setDebugLoc(Tr.getDebugLoc());
+  Value *CmpV = B.CreateICmpNE(AndV, ConstantInt::get(LShr->getType(), 0),
+                                Tr.getName());
+  if (auto *Cmp = dyn_cast<Instruction>(CmpV))
+    Cmp->setDebugLoc(Tr.getDebugLoc());
 
-  Tr.replaceAllUsesWith(Cmp);
+  Tr.replaceAllUsesWith(CmpV);
   Tr.eraseFromParent();
   if (LShr->use_empty())
     RecursivelyDeleteTriviallyDeadInstructions(LShr);
@@ -2504,10 +2517,11 @@ bool tryFoldTruncToI1WhenSrcIsZeroBounded(TruncInst &Tr) {
     return false;
 
   IRBuilder<> B(&Tr);
-  auto *Cmp = cast<Instruction>(
-      B.CreateICmpNE(Src, ConstantInt::get(Src->getType(), 0), Tr.getName()));
-  Cmp->setDebugLoc(Tr.getDebugLoc());
-  Tr.replaceAllUsesWith(Cmp);
+  // CreateICmpNE may fold to a ConstantInt when Src is a ConstantInt.
+  Value *CmpV = B.CreateICmpNE(Src, ConstantInt::get(Src->getType(), 0), Tr.getName());
+  if (auto *Cmp = dyn_cast<Instruction>(CmpV))
+    Cmp->setDebugLoc(Tr.getDebugLoc());
+  Tr.replaceAllUsesWith(CmpV);
   Tr.eraseFromParent();
   return true;
 }
@@ -2528,11 +2542,12 @@ bool tryFoldTruncNuwToI1(TruncInst &Tr) {
 
   Value *Src = Tr.getOperand(0);
   IRBuilder<> B(&Tr);
-  auto *Cmp = cast<Instruction>(
-      B.CreateICmpNE(Src, ConstantInt::get(Src->getType(), 0), Tr.getName()));
-  Cmp->setDebugLoc(Tr.getDebugLoc());
+  // CreateICmpNE may fold to a ConstantInt when Src is a ConstantInt.
+  Value *CmpV = B.CreateICmpNE(Src, ConstantInt::get(Src->getType(), 0), Tr.getName());
+  if (auto *Cmp = dyn_cast<Instruction>(CmpV))
+    Cmp->setDebugLoc(Tr.getDebugLoc());
 
-  Tr.replaceAllUsesWith(Cmp);
+  Tr.replaceAllUsesWith(CmpV);
   Tr.eraseFromParent();
   return true;
 }
