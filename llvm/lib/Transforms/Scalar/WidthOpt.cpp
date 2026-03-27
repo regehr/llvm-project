@@ -2578,10 +2578,13 @@ bool tryFoldTruncOfCtpop(TruncInst &Tr) {
   IRBuilder<> B(&Tr);
   Function *NarrowCtpop = Intrinsic::getOrInsertDeclaration(
       II->getModule(), Intrinsic::ctpop, {NarrowTy});
-  auto *Result = cast<Instruction>(
-      B.CreateCall(NarrowCtpop, {Ext->NarrowValue}, Tr.getName()));
-  Result->setDebugLoc(Tr.getDebugLoc());
-  Tr.replaceAllUsesWith(Result);
+  // Use Value* rather than Instruction*: IRBuilder may fold ctpop to a
+  // ConstantInt when NarrowValue is a constant (e.g., from a pass-created
+  // ZExtInst with a constant operand that hasn't been folded yet).
+  Value *ResultV = B.CreateCall(NarrowCtpop, {Ext->NarrowValue}, Tr.getName());
+  if (auto *ResultI = dyn_cast<Instruction>(ResultV))
+    ResultI->setDebugLoc(Tr.getDebugLoc());
+  Tr.replaceAllUsesWith(ResultV);
   Tr.eraseFromParent();
   if (II->use_empty())
     RecursivelyDeleteTriviallyDeadInstructions(II);
@@ -2737,17 +2740,27 @@ bool tryShrinkHighHalfSROA(TruncInst &Tr) {
   if (!ShiftAmt || ShiftAmt->getZExtValue() != TargetWidth)
     return false;
 
-  // lshr's source is and(V, HIGH_MASK) where HIGH_MASK has zeros in bits 0..N-1.
+  // lshr's source is and(V, HIGH_MASK) where HIGH_MASK has zeros in bits 0..N-1
+  // and ones in bits N..2N-1.  Both conditions are required: the low zeros
+  // discard the low half, and the high ones preserve all of the high half.
+  // Checking only the low zeros is not enough: a partial mask like 0x0F00
+  // would lose the top 4 bits of the high half, making the result hi & 0x0F
+  // rather than hi.
   auto *MaskBO = dyn_cast<BinaryOperator>(LShr->getOperand(0));
   if (!MaskBO || MaskBO->getOpcode() != Instruction::And)
     return false;
   Value *V = nullptr;
   for (unsigned Idx = 0; Idx < 2; ++Idx) {
     if (auto *C = dyn_cast<ConstantInt>(MaskBO->getOperand(Idx))) {
-      if (C->getValue().trunc(TargetWidth).isZero()) {
-        V = MaskBO->getOperand(1 - Idx);
-        break;
-      }
+      APInt MaskVal = C->getValue();
+      // Low N bits must be zero.
+      if (!MaskVal.trunc(TargetWidth).isZero())
+        continue;
+      // High N bits must be all ones — ensures the full hi half is kept.
+      if (!MaskVal.lshr(TargetWidth).trunc(TargetWidth).isAllOnes())
+        continue;
+      V = MaskBO->getOperand(1 - Idx);
+      break;
     }
   }
   if (!V)
@@ -3728,6 +3741,12 @@ bool tryShrinkTruncOfShiftRecurrence(TruncInst &Tr) {
       materializeTruncRootedValueAtWidth(Init, TargetWidth,
                                          InitBB->getTerminator());
   if (!NarrowInit)
+    return false;
+
+  // If the shift amount is >= the target width, the narrow shift shl iN x, K
+  // would be poison (shift by >= bit width is UB). The original
+  // trunc(shl.iW(phi, K), N) would be 0, not poison — don't narrow.
+  if (AmtC->getValue().uge(TargetWidth))
     return false;
 
   auto *TargetTy = IntegerType::get(Tr.getContext(), TargetWidth);
@@ -5351,11 +5370,14 @@ bool tryWidenComponentFromPlan(const Component &C, const AnalysisResult &R,
     if (!WideLHS || !WideRHS)
       return false;
 
-    auto *WideCall =
-        cast<Instruction>(B.CreateBinaryIntrinsic(ID, WideLHS, WideRHS));
-    WideCall->setDebugLoc(CB->getDebugLoc());
-    WideCall->takeName(CB);
-    NewValues[CB] = WideCall;
+    // materializeValueAtWidth can return constants; CreateBinaryIntrinsic
+    // folds constant min/max to a constant, so use Value* + dyn_cast.
+    Value *WideCallV = B.CreateBinaryIntrinsic(ID, WideLHS, WideRHS);
+    if (auto *WideCall = dyn_cast<Instruction>(WideCallV)) {
+      WideCall->setDebugLoc(CB->getDebugLoc());
+      WideCall->takeName(CB);
+    }
+    NewValues[CB] = WideCallV;
   }
 
   // PHIs must be created first so that later instructions in the component can

@@ -90,3 +90,22 @@ define i8 @narrow_udiv_zext_bounded(i8 %a, i8 %b) {
 ; CHECK-LABEL: define i8 @narrow_udiv_zext_bounded(
 ; CHECK: udiv i8 %a, %b
 ; CHECK: ret i8
+
+; ---- tryFoldTruncOfCtpop (zext-bounded ctpop source) --------------------
+; trunc(ctpop(zext(a:i8) to i32), i8) → ctpop.i8(a)
+; The fixed code uses Value* + dyn_cast<Instruction> for B.CreateCall in case
+; the NarrowValue is a constant (ctpop of a constant would fold).
+
+define i8 @trunc_ctpop_zext(i8 %a) {
+  %wide = zext i8 %a to i32
+  %pop = call i32 @llvm.ctpop.i32(i32 %wide)
+  %tr = trunc i32 %pop to i8
+  ret i8 %tr
+}
+; CHECK-LABEL: define i8 @trunc_ctpop_zext(
+; CHECK-NOT: zext
+; CHECK-NOT: ctpop i32
+; CHECK: @llvm.ctpop.i8(i8 %a)
+; CHECK: ret i8
+
+declare i32 @llvm.ctpop.i32(i32)
