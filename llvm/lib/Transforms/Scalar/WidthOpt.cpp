@@ -1355,7 +1355,9 @@ bool tryConvertWholeSExtToZExt(SExtInst &Ext) {
                                              "", Ext.getIterator());
   ZExt->setDebugLoc(Ext.getDebugLoc());
   ZExt->takeName(&Ext);
-  ZExt->setNonNeg();
+  // This shared-value rewrite is justified only because every use ignores the
+  // sign-propagated high bits of the sext. That does not imply the source
+  // itself is non-negative, so the replacement must not carry nneg.
   Ext.replaceAllUsesWith(ZExt);
   Ext.eraseFromParent();
   return true;

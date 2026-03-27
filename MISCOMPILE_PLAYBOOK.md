@@ -477,6 +477,10 @@ build/bin/llvm-lit llvm/test/Transforms/WidthOpt/width-opt-trunc-minmax-narrow.l
 
 ### Alive-TV
 
+- **Always disable undef input.** Alive-TV can run much faster if it does not
+    have to consider LLVM's "undef" values, which are not interesting to us
+    anyway. Therefore, always run Alive-TV as `alive-tv --disable-undef-input`.
+    
 - **Metadata causes errors.** TBAA and other metadata (`!tbaa`, `!range`, etc.)
   trigger "Unsupported metadata" in alive-tv. Either strip them or write minimal
   IR without metadata for the oracle test.

@@ -13,7 +13,8 @@ entry:
 }
 
 ; CHECK-LABEL: define i32 @f(
-; CHECK: %[[EXT:.*]] = zext nneg i16 %a to i32
+; CHECK: %[[EXT:.*]] = zext i16 %a to i32
+; CHECK-NOT: zext nneg
 ; CHECK-NOT: sext i16 %a to i32
 ; CHECK: %[[AND:.*]] = and i32 %[[EXT]], 65280
 ; CHECK: %[[LSR:.*]] = lshr i32 %[[EXT]], 8
