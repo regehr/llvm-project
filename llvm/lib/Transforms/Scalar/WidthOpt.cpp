@@ -2341,10 +2341,10 @@ bool tryFoldTruncOfExt(TruncInst &Tr) {
     if (auto *C = dyn_cast<ConstantInt>(Ext->NarrowValue)) {
       Replacement = convertConstantToNarrow(*C, TargetWidth);
     } else {
-      auto *NewTr =
-          cast<Instruction>(B.CreateTrunc(Ext->NarrowValue, Tr.getType(),
-                                          Tr.getName()));
-      NewTr->setDebugLoc(Tr.getDebugLoc());
+      Value *NewTr =
+          B.CreateTrunc(Ext->NarrowValue, Tr.getType(), Tr.getName());
+      if (auto *NewTrI = dyn_cast<Instruction>(NewTr))
+        NewTrI->setDebugLoc(Tr.getDebugLoc());
       Replacement = NewTr;
     }
   } else if (TargetWidth < Ext->WideWidth) {
@@ -2356,14 +2356,13 @@ bool tryFoldTruncOfExt(TruncInst &Tr) {
                            : C->getValue().sext(TargetWidth);
       Replacement = ConstantInt::get(Tr.getType(), Extended);
     } else {
-      Instruction *NewExt;
+      Value *NewExt;
       if (Ext->Kind == ExtKind::ZExt)
-        NewExt = cast<Instruction>(
-            B.CreateZExt(Ext->NarrowValue, Tr.getType(), Tr.getName()));
+        NewExt = B.CreateZExt(Ext->NarrowValue, Tr.getType(), Tr.getName());
       else
-        NewExt = cast<Instruction>(
-            B.CreateSExt(Ext->NarrowValue, Tr.getType(), Tr.getName()));
-      NewExt->setDebugLoc(Tr.getDebugLoc());
+        NewExt = B.CreateSExt(Ext->NarrowValue, Tr.getType(), Tr.getName());
+      if (auto *NewExtI = dyn_cast<Instruction>(NewExt))
+        NewExtI->setDebugLoc(Tr.getDebugLoc());
       Replacement = NewExt;
     }
   } else {
