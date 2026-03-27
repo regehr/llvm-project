@@ -1221,9 +1221,12 @@ bool tryShrinkSelectOfExts(SelectInst &Sel) {
   return true;
 }
 
-bool tryConvertSExtToNonNegZExt(SExtInst &Ext, LazyValueInfo &LVI) {
+bool tryConvertSExtToNonNegZExt(SExtInst &Ext, LazyValueInfo &LVI,
+                                AssumptionCache &AC, DominatorTree &DT) {
   const Use &Base = Ext.getOperandUse(0);
   if (!LVI.getConstantRangeAtUse(Base, /*UndefAllowed=*/false).isAllNonNegative())
+    return false;
+  if (!isGuaranteedNotToBeUndef(Base.get(), &AC, &Ext, &DT))
     return false;
 
   // Once the operand is known non-negative at this use, sign extension and
@@ -4791,7 +4794,7 @@ bool runAnalysisAwareLocalRewrites(Function &F, LazyValueInfo &LVI,
     auto *SExt = dyn_cast_or_null<SExtInst>(VH);
     if (!SExt || SExt->getParent() == nullptr)
       continue;
-    Changed |= tryConvertSExtToNonNegZExt(*SExt, LVI);
+    Changed |= tryConvertSExtToNonNegZExt(*SExt, LVI, AC, DT);
   }
 
   // When LVI proves the source of a zext is non-negative at this use, mark
