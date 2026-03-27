@@ -4123,8 +4123,16 @@ Value *materializeValueAtWidth(Value *V, ExtKind Kind, unsigned TargetWidth,
       return ConstantInt::get(TargetTy, C->getValue().trunc(TargetWidth));
     return extendConstant(*C, Kind, TargetWidth);
   }
-  if (isa<UndefValue>(V))
-    return UndefValue::get(TargetTy);
+  if (isa<UndefValue>(V)) {
+    if (TargetWidth < CurrentWidth)
+      return UndefValue::get(TargetTy);
+    assert(Kind != ExtKind::None &&
+           "Need an extension kind when materializing wider undef");
+    unsigned Opcode =
+        Kind == ExtKind::ZExt ? Instruction::ZExt : Instruction::SExt;
+    return CastInst::Create((Instruction::CastOps)Opcode, V, TargetTy, "",
+                            InsertBefore->getIterator());
+  }
   if (isa<PoisonValue>(V))
     return PoisonValue::get(TargetTy);
 

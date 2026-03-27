@@ -20,7 +20,8 @@ merge:
 
 ; CHECK-LABEL: define i32 @f(
 ; CHECK: merge:
-; CHECK: %[[P:.*]] = phi i32 [ undef, %left ], [ 7, %right ]
+; CHECK: %[[P:.*]] = phi i8 [ undef, %left ], [ 7, %right ]
+; CHECK: %[[W:.*]] = zext i8 %[[P]] to i32
 ; CHECK-NOT: zext i8 %p to i32
-; CHECK: %[[R:.*]] = add i32 %[[P]], %[[P]]
+; CHECK: %[[R:.*]] = add i32 %[[W]], %[[W]]
 ; CHECK: ret i32 %[[R]]
