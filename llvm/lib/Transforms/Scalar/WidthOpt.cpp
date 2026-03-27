@@ -1221,12 +1221,23 @@ bool tryShrinkSelectOfExts(SelectInst &Sel) {
   return true;
 }
 
-bool tryConvertSExtToNonNegZExt(SExtInst &Ext, LazyValueInfo &LVI,
-                                AssumptionCache &AC, DominatorTree &DT) {
+bool mayMergeActualUndef(Value *V) {
+  if (isa<UndefValue>(V))
+    return true;
+  if (auto *Phi = dyn_cast<PHINode>(V))
+    return llvm::any_of(Phi->incoming_values(),
+                        [](Value *Incoming) { return isa<UndefValue>(Incoming); });
+  if (auto *Sel = dyn_cast<SelectInst>(V))
+    return isa<UndefValue>(Sel->getTrueValue()) ||
+           isa<UndefValue>(Sel->getFalseValue());
+  return false;
+}
+
+bool tryConvertSExtToNonNegZExt(SExtInst &Ext, LazyValueInfo &LVI) {
   const Use &Base = Ext.getOperandUse(0);
   if (!LVI.getConstantRangeAtUse(Base, /*UndefAllowed=*/false).isAllNonNegative())
     return false;
-  if (!isGuaranteedNotToBeUndef(Base.get(), &AC, &Ext, &DT))
+  if (mayMergeActualUndef(Base.get()))
     return false;
 
   // Once the operand is known non-negative at this use, sign extension and
@@ -4794,7 +4805,7 @@ bool runAnalysisAwareLocalRewrites(Function &F, LazyValueInfo &LVI,
     auto *SExt = dyn_cast_or_null<SExtInst>(VH);
     if (!SExt || SExt->getParent() == nullptr)
       continue;
-    Changed |= tryConvertSExtToNonNegZExt(*SExt, LVI, AC, DT);
+    Changed |= tryConvertSExtToNonNegZExt(*SExt, LVI);
   }
 
   // When LVI proves the source of a zext is non-negative at this use, mark
