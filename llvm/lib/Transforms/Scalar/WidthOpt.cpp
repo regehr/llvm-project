@@ -1713,10 +1713,14 @@ bool tryWidenAddOverTruncThroughZExt(BinaryOperator &BO) {
 }
 
 // Handle: zext nneg iN(sub iN(C, trunc iW X)) or zext nneg iN(sub iN(trunc iW X, C))
-// where X is zero-bounded at N bits and C is a non-negative constant.
+// where both operands are known to be in the signed non-negative iN range.
 //
-// The zext nneg flag guarantees the sub result is non-negative, so no underflow.
-// The trunc is lossless (X ≤ 2^N - 1). Therefore the iN sub equals the iW sub.
+// The zext nneg flag alone is not enough: a wrapped iN subtraction can still
+// land in the non-negative half of the narrow type (e.g. i8 0 - 253 == 3),
+// so widening would be wrong.  To make the narrow subtraction equal the wide
+// one, both operands must already fit in the signed non-negative iN range.
+// Then `zext nneg` on the result implies the narrow subtraction did not cross
+// below zero, so the iN sub equals the iW sub without wrap.
 //
 // Transforms: zext nneg(sub(C, trunc(X))) → sub iW(C_wide, X)
 //             zext nneg(sub(trunc(X), C)) → sub iW(X, C_wide)
@@ -1751,8 +1755,11 @@ bool tryWidenSubOverTruncThroughZExtNneg(ZExtInst &ZExt) {
     if (getValueWidth(X) != WideWidth)
       return false;
 
-    // Trunc must be lossless: X zero-bounded at MidWidth bits.
-    if (!isZeroBoundedAtWidth(X, MidWidth))
+    // Trunc must be lossless and both operands must fit in the signed
+    // non-negative iN range so `zext nneg` rules out narrow wraparound.
+    if (!isZeroBoundedAtWidth(X, MidWidth - 1))
+      return false;
+    if (!C->getValue().isIntN(MidWidth - 1))
       return false;
 
     // Build wider sub: sub iW(Op0_wide, Op1_wide)
