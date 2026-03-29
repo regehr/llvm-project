@@ -879,10 +879,17 @@ bool tryWidenTruncEqualityICmp(ICmpInst &Cmp, const DataLayout &DL,
   Cmp.replaceAllUsesWith(NewCmp);
   Cmp.eraseFromParent();
 
-  if (LHS->use_empty())
-    RecursivelyDeleteTriviallyDeadInstructions(LHS);
-  if (RHS->use_empty())
-    RecursivelyDeleteTriviallyDeadInstructions(RHS);
+  // Guard against LHS == RHS (same trunc used for both sides): deleting through
+  // LHS first would leave RHS dangling.
+  if (LHS != RHS) {
+    if (LHS->use_empty())
+      RecursivelyDeleteTriviallyDeadInstructions(LHS);
+    if (RHS->use_empty())
+      RecursivelyDeleteTriviallyDeadInstructions(RHS);
+  } else {
+    if (LHS->use_empty())
+      RecursivelyDeleteTriviallyDeadInstructions(LHS);
+  }
 
   return true;
 }
