@@ -1565,6 +1565,10 @@ bool tryNarrowUDivWithRange(BinaryOperator &BO, LazyValueInfo &LVI) {
 }
 
 Value *findExistingZExtToWidth(Value *Src, unsigned TargetWidth) {
+  // ConstantData (ConstantInt, undef, poison, …) has no use list;
+  // guard before calling users() which asserts hasUseList().
+  if (!Src->hasUseList())
+    return nullptr;
   for (User *U : Src->users()) {
     auto *Z = dyn_cast<ZExtInst>(U);
     if (!Z)
