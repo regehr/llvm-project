@@ -4,6 +4,7 @@ Differential testing: compare gcc -O3 vs clang -O3 on random Csmith programs.
 Stops on checksum mismatch or compiler crash; runs forever otherwise.
 """
 
+import argparse
 import multiprocessing
 import os
 import signal
@@ -13,6 +14,7 @@ import tempfile
 from pathlib import Path
 
 CSMITH     = "/home/regehr/csmith/build/src/csmith"
+YARPGEN    = "/home/regehr/yarpgen/build/yarpgen"
 GCC        = "gcc"
 CLANG      = "/home/regehr/tmp/llvm-project-regehr/build/bin/clang"
 CSMITH_INC = [
@@ -20,7 +22,8 @@ CSMITH_INC = [
     "/home/regehr/csmith/build/runtime",
 ]
 
-COMPILE_FLAGS = ["-w", "-O3"] + [f"-I{d}" for d in CSMITH_INC]
+CSMITH_COMPILE_FLAGS = ["-w", "-O3", "-mcmodel=large"] + [f"-I{d}" for d in CSMITH_INC]
+YARPGEN_COMPILE_FLAGS = ["-w", "-O3", "-mcmodel=large"]
 
 
 def run(cmd, timeout=None, **kwargs):
@@ -47,14 +50,17 @@ def extract_checksum(output: str):
     return None
 
 
-def save_slow(source: str, compiler: str):
-    fd, path = tempfile.mkstemp(prefix="slow_compile_", suffix=".c", dir=os.getcwd())
-    with os.fdopen(fd, "w") as f:
-        f.write(source)
-    print(f"slow {compiler} compile saved to {path}", flush=True)
+def save_slow(source: str, compiler: str, save: bool):
+    if save:
+        fd, path = tempfile.mkstemp(prefix="slow_compile_", suffix=".c", dir=os.getcwd())
+        with os.fdopen(fd, "w") as f:
+            f.write(source)
+        print(f"slow {compiler} compile saved to {path}", flush=True)
+    else:
+        print(f"slow {compiler} compile (skipped saving; use --save-slow to save)", flush=True)
 
 
-def worker(worker_id, stop_event, result_queue, print_lock, counter, counter_lock):
+def worker_csmith(worker_id, stop_event, result_queue, print_lock, counter, counter_lock, save_slow_files):
     while not stop_event.is_set():
         with tempfile.TemporaryDirectory() as tmp:
             src       = os.path.join(tmp, "test.c")
@@ -69,18 +75,18 @@ def worker(worker_id, stop_event, result_queue, print_lock, counter, counter_loc
                 f.write(gen.stdout)
 
             # Compile with gcc
-            r_gcc = run([GCC] + COMPILE_FLAGS + [src, "-o", bin_gcc], timeout=180)
+            r_gcc = run([GCC] + CSMITH_COMPILE_FLAGS + [src, "-o", bin_gcc], timeout=180)
             if r_gcc is None:
-                save_slow(gen.stdout, "gcc")
+                save_slow(gen.stdout, "gcc", save_slow_files)
                 continue
             if r_gcc.returncode != 0:
                 result_queue.put(("compiler_crash", "gcc", src, r_gcc.stderr))
                 return
 
             # Compile with clang
-            r_clang = run([CLANG] + COMPILE_FLAGS + [src, "-o", bin_clang], timeout=180)
+            r_clang = run([CLANG] + CSMITH_COMPILE_FLAGS + [src, "-o", bin_clang], timeout=180)
             if r_clang is None:
-                save_slow(gen.stdout, "clang")
+                save_slow(gen.stdout, "clang", save_slow_files)
                 continue
             if r_clang.returncode != 0:
                 result_queue.put(("compiler_crash", "clang", src, r_clang.stderr))
@@ -106,9 +112,84 @@ def worker(worker_id, stop_event, result_queue, print_lock, counter, counter_loc
                 print(f"worker {worker_id:3d}: gcc={cs_gcc}  clang={cs_clang}", flush=True)
 
 
+def worker_yarpgen(worker_id, stop_event, result_queue, print_lock, counter, counter_lock, save_slow_files):
+    while not stop_event.is_set():
+        with tempfile.TemporaryDirectory() as tmp:
+            gen_dir   = os.path.join(tmp, "gen")
+            bin_gcc   = os.path.join(tmp, "out_gcc")
+            bin_clang = os.path.join(tmp, "out_clang")
+            os.makedirs(gen_dir)
+
+            # Generate
+            gen = run([YARPGEN, "--std=c", "-o", gen_dir], timeout=30)
+            if gen is None or gen.returncode != 0:
+                continue
+
+            src_files = sorted(str(p) for p in Path(gen_dir).glob("*.c"))
+            if not src_files:
+                continue
+
+            # Read source for saving on crash/mismatch
+            source = "\n".join(open(f).read() for f in src_files)
+
+            # Compile with gcc
+            r_gcc = run([GCC] + YARPGEN_COMPILE_FLAGS + src_files + ["-o", bin_gcc], timeout=180)
+            if r_gcc is None:
+                save_slow(source, "gcc", save_slow_files)
+                continue
+            if r_gcc.returncode != 0:
+                result_queue.put(("compiler_crash", "gcc", src_files[0], r_gcc.stderr))
+                return
+
+            # Compile with clang
+            r_clang = run([CLANG] + YARPGEN_COMPILE_FLAGS + src_files + ["-o", bin_clang], timeout=180)
+            if r_clang is None:
+                save_slow(source, "clang", save_slow_files)
+                continue
+            if r_clang.returncode != 0:
+                result_queue.put(("compiler_crash", "clang", src_files[0], r_clang.stderr))
+                return
+
+            # Run both; timeout means the program ran forever — skip this test case
+            r_run_gcc   = run([bin_gcc],   timeout=10)
+            r_run_clang = run([bin_clang], timeout=10)
+            if r_run_gcc is None or r_run_clang is None:
+                continue
+
+            cs_gcc   = r_run_gcc.stdout.strip()
+            cs_clang = r_run_clang.stdout.strip()
+
+            if cs_gcc != cs_clang:
+                result_queue.put(("mismatch", src_files[0], cs_gcc, cs_clang, source))
+                return
+
+            with counter_lock:
+                worker_id = counter.value
+                counter.value += 1
+            with print_lock:
+                print(f"worker {worker_id:3d}: gcc={cs_gcc}  clang={cs_clang}", flush=True)
+
+
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    mode_group = parser.add_mutually_exclusive_group(required=True)
+    mode_group.add_argument("--csmith", action="store_true",
+                            help="Generate test programs using Csmith")
+    mode_group.add_argument("--yarpgen-v2", action="store_true",
+                            help="Generate test programs using YARPGen v2")
+    parser.add_argument("--save-slow", action="store_true",
+                        help="Save programs that time out during compilation to disk")
+    args = parser.parse_args()
+
+    if args.yarpgen_v2:
+        worker_fn = worker_yarpgen
+        gen_label = f"yarpgen={YARPGEN}"
+    else:
+        worker_fn = worker_csmith
+        gen_label = f"csmith={CSMITH}"
+
     ncpus = multiprocessing.cpu_count()
-    print(f"Starting {ncpus} workers (gcc={GCC}, clang={CLANG})")
+    print(f"Starting {ncpus} workers ({gen_label}, gcc={GCC}, clang={CLANG})")
     sys.stdout.flush()
 
     stop_event = multiprocessing.Event()
@@ -118,7 +199,7 @@ def main():
     counter_lock = multiprocessing.Lock()
 
     workers = [
-        multiprocessing.Process(target=worker, args=(i, stop_event, result_queue, print_lock, counter, counter_lock), daemon=True)
+        multiprocessing.Process(target=worker_fn, args=(i, stop_event, result_queue, print_lock, counter, counter_lock, args.save_slow), daemon=True)
         for i in range(ncpus)
     ]
     for w in workers:
