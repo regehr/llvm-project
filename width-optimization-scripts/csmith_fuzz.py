@@ -4,6 +4,7 @@ Differential testing: compare gcc -O3 vs clang -O3 on random Csmith programs.
 Stops on checksum mismatch or compiler crash; runs forever otherwise.
 """
 
+import argparse
 import multiprocessing
 import os
 import signal
@@ -47,14 +48,17 @@ def extract_checksum(output: str):
     return None
 
 
-def save_slow(source: str, compiler: str):
-    fd, path = tempfile.mkstemp(prefix="slow_compile_", suffix=".c", dir=os.getcwd())
-    with os.fdopen(fd, "w") as f:
-        f.write(source)
-    print(f"slow {compiler} compile saved to {path}", flush=True)
+def save_slow(source: str, compiler: str, save: bool):
+    if save:
+        fd, path = tempfile.mkstemp(prefix="slow_compile_", suffix=".c", dir=os.getcwd())
+        with os.fdopen(fd, "w") as f:
+            f.write(source)
+        print(f"slow {compiler} compile saved to {path}", flush=True)
+    else:
+        print(f"slow {compiler} compile (skipped saving; use --save-slow to save)", flush=True)
 
 
-def worker(worker_id, stop_event, result_queue, print_lock, counter, counter_lock):
+def worker(worker_id, stop_event, result_queue, print_lock, counter, counter_lock, save_slow_files):
     while not stop_event.is_set():
         with tempfile.TemporaryDirectory() as tmp:
             src       = os.path.join(tmp, "test.c")
@@ -71,7 +75,7 @@ def worker(worker_id, stop_event, result_queue, print_lock, counter, counter_loc
             # Compile with gcc
             r_gcc = run([GCC] + COMPILE_FLAGS + [src, "-o", bin_gcc], timeout=180)
             if r_gcc is None:
-                save_slow(gen.stdout, "gcc")
+                save_slow(gen.stdout, "gcc", save_slow_files)
                 continue
             if r_gcc.returncode != 0:
                 result_queue.put(("compiler_crash", "gcc", src, r_gcc.stderr))
@@ -80,7 +84,7 @@ def worker(worker_id, stop_event, result_queue, print_lock, counter, counter_loc
             # Compile with clang
             r_clang = run([CLANG] + COMPILE_FLAGS + [src, "-o", bin_clang], timeout=180)
             if r_clang is None:
-                save_slow(gen.stdout, "clang")
+                save_slow(gen.stdout, "clang", save_slow_files)
                 continue
             if r_clang.returncode != 0:
                 result_queue.put(("compiler_crash", "clang", src, r_clang.stderr))
@@ -107,6 +111,11 @@ def worker(worker_id, stop_event, result_queue, print_lock, counter, counter_loc
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--save-slow", action="store_true",
+                        help="Save programs that time out during compilation to disk")
+    args = parser.parse_args()
+
     ncpus = multiprocessing.cpu_count()
     print(f"Starting {ncpus} workers (gcc={GCC}, clang={CLANG})")
     sys.stdout.flush()
@@ -118,7 +127,7 @@ def main():
     counter_lock = multiprocessing.Lock()
 
     workers = [
-        multiprocessing.Process(target=worker, args=(i, stop_event, result_queue, print_lock, counter, counter_lock), daemon=True)
+        multiprocessing.Process(target=worker, args=(i, stop_event, result_queue, print_lock, counter, counter_lock, args.save_slow), daemon=True)
         for i in range(ncpus)
     ]
     for w in workers:
