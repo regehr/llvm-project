@@ -4045,6 +4045,15 @@ bool tryShrinkTruncOfZeroBoundedPhi(TruncInst &Tr) {
   DenseMap<BasicBlock *, Value *> PerBlockResult;
   for (unsigned I = 0; I != N; ++I) {
     BasicBlock *BB = Phi->getIncomingBlock(I);
+    // This rewrite materializes narrowed incoming values immediately before the
+    // predecessor terminator. That is not a legal placement when the incoming
+    // value is the predecessor's invoke result, because the invoke does not
+    // dominate instructions inserted before itself.
+    if (Phi->getIncomingValue(I) == BB->getTerminator() &&
+        isa<InvokeInst>(BB->getTerminator())) {
+      NarrowPhi->eraseFromParent();
+      return false;
+    }
     Value *NarrowVal;
     auto It = PerBlockResult.find(BB);
     if (It != PerBlockResult.end()) {
