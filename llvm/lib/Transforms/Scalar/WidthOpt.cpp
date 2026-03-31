@@ -684,6 +684,24 @@ unsigned getStructuralNarrowWidth(Value *V) {
       return Result;
     }
   }
+  // umin result <= both operands; bounded by whichever operand is bounded
+  // (analogous to `and`).
+  // umax result = the larger operand; bounded only if both are bounded
+  // (analogous to `or`).
+  if (auto *II = dyn_cast<IntrinsicInst>(V)) {
+    if (II->getIntrinsicID() == Intrinsic::umin) {
+      unsigned W0 = getStructuralNarrowWidth(II->getArgOperand(0));
+      unsigned W1 = getStructuralNarrowWidth(II->getArgOperand(1));
+      if (W0 != 0 && W1 != 0) return std::min(W0, W1);
+      return W0 != 0 ? W0 : W1;
+    }
+    if (II->getIntrinsicID() == Intrinsic::umax) {
+      unsigned W0 = getStructuralNarrowWidth(II->getArgOperand(0));
+      unsigned W1 = getStructuralNarrowWidth(II->getArgOperand(1));
+      if (W0 == 0 || W1 == 0) return 0;
+      return std::max(W0, W1);
+    }
+  }
   return 0;
 }
 
