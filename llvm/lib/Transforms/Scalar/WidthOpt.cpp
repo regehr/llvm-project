@@ -4663,6 +4663,25 @@ unsigned computePlanCost(const AnalysisResult &R,
 
 bool applyBestPairwiseImprovement(const AnalysisResult &R,
                                   MutableArrayRef<unsigned> ChosenWidths) {
+  // Only pairs of components that directly interact in the cost function can
+  // benefit from joint optimization. Non-interacting pairs decompose into two
+  // independent single-component improvements, which the per-component sweep
+  // already handles. Building this set reduces the search from O(N^2) pairs to
+  // O(E + affinities + pressures) pairs.
+  DenseSet<std::pair<unsigned, unsigned>> InteractingPairs;
+  auto addPair = [&](unsigned A, unsigned B) {
+    if (A != B)
+      InteractingPairs.insert({std::min(A, B), std::max(A, B)});
+  };
+  for (const ComponentEdge &E : R.Edges)
+    addPair(E.From, E.To);
+  for (const CompareAffinity &A : R.CompareAffinities)
+    addPair(A.LHS, A.RHS);
+  for (const ExtensionPressure &E : R.ExtensionPressures)
+    addPair(E.Source, E.User);
+  for (const EqualityCompareRepairPressure &P : R.EqualityCompareRepairPressures)
+    addPair(P.LHS, P.RHS);
+
   unsigned CurrentCost = computePlanCost(R, ChosenWidths);
   unsigned BestCost = CurrentCost;
   std::optional<unsigned> BestA;
@@ -4671,30 +4690,28 @@ bool applyBestPairwiseImprovement(const AnalysisResult &R,
   unsigned BestWidthB = 0;
 
   SmallVector<unsigned, 8> TrialWidths(ChosenWidths.begin(), ChosenWidths.end());
-  for (const Component &A : R.Components) {
-    if (A.Fixed)
+  for (auto [AID, BID] : InteractingPairs) {
+    const Component &A = R.Components[AID];
+    const Component &B = R.Components[BID];
+    if (A.Fixed || B.Fixed)
       continue;
     SmallVector<unsigned, 4> WidthsA = getPlanningCandidateWidths(A);
-    for (const Component &B : R.Components) {
-      if (B.ID <= A.ID || B.Fixed)
-        continue;
-      SmallVector<unsigned, 4> WidthsB = getPlanningCandidateWidths(B);
-      for (unsigned WidthA : WidthsA) {
-        for (unsigned WidthB : WidthsB) {
-          if (WidthA == ChosenWidths[A.ID] && WidthB == ChosenWidths[B.ID])
-            continue;
-          TrialWidths.assign(ChosenWidths.begin(), ChosenWidths.end());
-          TrialWidths[A.ID] = WidthA;
-          TrialWidths[B.ID] = WidthB;
-          unsigned Cost = computePlanCost(R, TrialWidths);
-          if (Cost >= BestCost)
-            continue;
-          BestCost = Cost;
-          BestA = A.ID;
-          BestB = B.ID;
-          BestWidthA = WidthA;
-          BestWidthB = WidthB;
-        }
+    SmallVector<unsigned, 4> WidthsB = getPlanningCandidateWidths(B);
+    for (unsigned WidthA : WidthsA) {
+      for (unsigned WidthB : WidthsB) {
+        if (WidthA == ChosenWidths[AID] && WidthB == ChosenWidths[BID])
+          continue;
+        TrialWidths.assign(ChosenWidths.begin(), ChosenWidths.end());
+        TrialWidths[AID] = WidthA;
+        TrialWidths[BID] = WidthB;
+        unsigned Cost = computePlanCost(R, TrialWidths);
+        if (Cost >= BestCost)
+          continue;
+        BestCost = Cost;
+        BestA = AID;
+        BestB = BID;
+        BestWidthA = WidthA;
+        BestWidthB = WidthB;
       }
     }
   }
