@@ -404,6 +404,10 @@ def format_metric_cell(before: int, after: int) -> str:
     return f"{before} -> {after} ({format_percent_change(before, after)})"
 
 
+def format_seconds(seconds: float) -> str:
+    return f"{seconds:.3g}"
+
+
 def escape_markdown_cell(text: str) -> str:
     return text.replace("\\", "\\\\").replace("|", "\\|")
 
@@ -425,7 +429,7 @@ def print_function_row(row: FunctionCounts) -> None:
         f"{format_metric_cell(row.before['zext'], row.after['zext'])} | "
         f"{format_metric_cell(row.before['trunc'], row.after['trunc'])} | "
         f"{format_metric_cell(before_total, after_total)} | "
-        f"{row.width_opt_seconds:.6f} |"
+        f"{format_seconds(row.width_opt_seconds)} |"
     )
 
 
@@ -446,7 +450,7 @@ def print_total_row(
         f"{format_metric_cell(before['zext'], after['zext'])} | "
         f"{format_metric_cell(before['trunc'], after['trunc'])} | "
         f"{format_metric_cell(before_total, after_total)} | "
-        f"{width_opt_seconds:.6f} |"
+        f"{format_seconds(width_opt_seconds)} |"
     )
 
 
