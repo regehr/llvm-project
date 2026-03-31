@@ -11,10 +11,11 @@ define i16 @f(i16 %x, i8 %y) {
   ret i16 %r
 }
 
+; The pass now reuses the single zext for both the icmp and the select,
+; eliminating the duplicate that used to appear in earlier output.
 ; CHECK-LABEL: define i16 @f(
-; CHECK: %[[YCMP:.*]] = zext i8 %y to i16
-; CHECK: %[[CMP:.*]] = icmp ne i16 %x, %[[YCMP]]
-; CHECK: %[[YSEL:.*]] = zext i8 %y to i16
-; CHECK: %[[R:.*]] = select i1 %[[CMP]], i16 %[[YSEL]], i16 %x
-; CHECK-NOT: icmp ne i32
-; CHECK: ret i16 %[[R]]
+; CHECK:      %[[Y16:.*]] = zext i8 %y to i16
+; CHECK-NEXT: %[[CMP:.*]] = icmp ne i16 %x, %[[Y16]]
+; CHECK-NEXT: %[[R:.*]] = select i1 %[[CMP]], i16 %[[Y16]], i16 %x
+; CHECK-NEXT: ret i16 %[[R]]
+; CHECK-NOT:  zext i8 %y to i16

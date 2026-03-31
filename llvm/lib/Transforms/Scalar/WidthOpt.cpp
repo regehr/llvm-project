@@ -363,7 +363,8 @@ unsigned computeShrinkWidth(ICmpInst::Predicate Pred, const ExtOperandInfo &LHS,
 }
 
 Value *materializeAtWidth(IRBuilder<> &B, const ExtOperandInfo &Info,
-                          unsigned TargetWidth) {
+                          unsigned TargetWidth,
+                          DominatorTree *DT = nullptr) {
   assert(TargetWidth >= Info.NarrowWidth && "Cannot shrink below source width");
   assert(Info.Kind != ExtKind::None && "Expected explicit extension kind");
 
@@ -371,6 +372,45 @@ Value *materializeAtWidth(IRBuilder<> &B, const ExtOperandInfo &Info,
     return Info.NarrowValue;
 
   Type *TargetTy = IntegerType::get(B.getContext(), TargetWidth);
+  Instruction::CastOps CastOp =
+      (Info.Kind == ExtKind::ZExt) ? Instruction::ZExt : Instruction::SExt;
+  BasicBlock *InsertBB = B.GetInsertBlock();
+  BasicBlock::iterator InsertPt = B.GetInsertPoint();
+  Instruction *InsertInst =
+      (InsertPt != InsertBB->end()) ? &*InsertPt : nullptr;
+
+  // ConstantData values (e.g. ConstantInt) have no use list, so skip the
+  // existing-cast searches below — they can only find instructions anyway.
+  if (!isa<ConstantData>(Info.NarrowValue)) {
+    // Prefer an existing cast in the same basic block; move it before the
+    // insertion point if needed.  This is always safe: Info.NarrowValue must
+    // dominate the insertion point (it is an operand of the wide extension that
+    // precedes the icmp), so any cast of it can legally be placed there.
+    for (User *U : Info.NarrowValue->users()) {
+      auto *Cast = dyn_cast<CastInst>(U);
+      if (!Cast || Cast->getOpcode() != CastOp || Cast->getType() != TargetTy)
+        continue;
+      if (Cast->getParent() != InsertBB)
+        continue;
+      if (InsertInst != nullptr && !Cast->comesBefore(InsertInst))
+        Cast->moveBefore(InsertInst);
+      return Cast;
+    }
+
+    // Next, look for an identical cast in a block that strictly dominates the
+    // insertion block.  Such a cast is already in scope and needs no movement.
+    if (DT) {
+      for (User *U : Info.NarrowValue->users()) {
+        auto *Cast = dyn_cast<CastInst>(U);
+        if (!Cast || Cast->getOpcode() != CastOp || Cast->getType() != TargetTy)
+          continue;
+        BasicBlock *CastBB = Cast->getParent();
+        if (CastBB != InsertBB && DT->dominates(CastBB, InsertBB))
+          return Cast;
+      }
+    }
+  }
+
   if (Info.Kind == ExtKind::ZExt)
     return B.CreateZExt(Info.NarrowValue, TargetTy);
   if (Info.Kind == ExtKind::SExt)
@@ -604,6 +644,45 @@ unsigned getStructuralNarrowWidth(Value *V) {
       if (W0 == 0 || W1 == 0) return 0;
       return std::max(W0, W1);
     }
+    // add nuw: the sum fits in max(W0, W1) + 1 bits when both operands are
+    // zero-bounded.  For constants, use the number of active bits as the width.
+    if (BO->getOpcode() == Instruction::Add && BO->hasNoUnsignedWrap()) {
+      auto getOperandWidth = [](Value *V) -> unsigned {
+        if (auto *CI = dyn_cast<ConstantInt>(V)) {
+          if (CI->isNegative()) return 0;
+          unsigned Bits = (unsigned)CI->getValue().getActiveBits();
+          return Bits == 0 ? 0 : Bits; // constant 0 → return 0 (identity)
+        }
+        return getStructuralNarrowWidth(V);
+      };
+      unsigned W0 = getOperandWidth(BO->getOperand(0));
+      unsigned W1 = getOperandWidth(BO->getOperand(1));
+      // If either is unknown treat as unbounded.  If one is 0 (constant zero)
+      // the sum equals the other operand; handle conservatively.
+      if (W0 == 0 || W1 == 0) return 0;
+      unsigned Result = std::max(W0, W1) + 1;
+      // Sanity: don't claim a width ≥ the value's actual type width.
+      unsigned ActualWidth = BO->getType()->getIntegerBitWidth();
+      if (Result >= ActualWidth) return 0;
+      return Result;
+    }
+    // sub nuw: result <= LHS (no borrow), so bounded by LHS's width.
+    if (BO->getOpcode() == Instruction::Sub && BO->hasNoUnsignedWrap()) {
+      unsigned W = getStructuralNarrowWidth(BO->getOperand(0));
+      unsigned ActualWidth = BO->getType()->getIntegerBitWidth();
+      if (W != 0 && W < ActualWidth) return W;
+      return 0;
+    }
+    // mul nuw: product of W0-bit and W1-bit values fits in W0+W1 bits.
+    if (BO->getOpcode() == Instruction::Mul && BO->hasNoUnsignedWrap()) {
+      unsigned W0 = getStructuralNarrowWidth(BO->getOperand(0));
+      unsigned W1 = getStructuralNarrowWidth(BO->getOperand(1));
+      if (W0 == 0 || W1 == 0) return 0;
+      unsigned Result = W0 + W1;
+      unsigned ActualWidth = BO->getType()->getIntegerBitWidth();
+      if (Result >= ActualWidth) return 0;
+      return Result;
+    }
   }
   return 0;
 }
@@ -794,7 +873,7 @@ bool tryShrinkICmpExtConst(ICmpInst &Cmp) {
   return false;
 }
 
-bool tryShrinkICmp(ICmpInst &Cmp) {
+bool tryShrinkICmp(ICmpInst &Cmp, DominatorTree *DT = nullptr) {
   auto LHSInfo = getExtOperandInfo(Cmp.getOperand(0));
   auto RHSInfo = getExtOperandInfo(Cmp.getOperand(1));
   if (!LHSInfo || !RHSInfo)
@@ -816,8 +895,8 @@ bool tryShrinkICmp(ICmpInst &Cmp) {
     return false;
 
   IRBuilder<> B(&Cmp);
-  Value *NewLHS = materializeAtWidth(B, *LHSInfo, TargetWidth);
-  Value *NewRHS = materializeAtWidth(B, *RHSInfo, TargetWidth);
+  Value *NewLHS = materializeAtWidth(B, *LHSInfo, TargetWidth, DT);
+  Value *NewRHS = materializeAtWidth(B, *RHSInfo, TargetWidth, DT);
   Value *NewCmp = B.CreateICmp(NewPred, NewLHS, NewRHS);
 
   SmallVector<Instruction *, 2> DeadRoots;
@@ -2683,6 +2762,22 @@ bool isZeroBoundedAtWidth(Value *V, unsigned Width) {
         BO->getOpcode() == Instruction::Xor)
       return isZeroBoundedAtWidth(BO->getOperand(0), Width) &&
              isZeroBoundedAtWidth(BO->getOperand(1), Width);
+    // add nuw: sum < 2^Width when both operands are < 2^(Width-1).
+    if (BO->getOpcode() == Instruction::Add && BO->hasNoUnsignedWrap()) {
+      if (Width == 0) return false;
+      return isZeroBoundedAtWidth(BO->getOperand(0), Width - 1) &&
+             isZeroBoundedAtWidth(BO->getOperand(1), Width - 1);
+    }
+    // sub nuw: result <= LHS (no borrow), so bounded if LHS is bounded.
+    if (BO->getOpcode() == Instruction::Sub && BO->hasNoUnsignedWrap())
+      return isZeroBoundedAtWidth(BO->getOperand(0), Width);
+    // mul nuw: product of W0-bit and W1-bit values fits in W0+W1 bits.
+    // Use getStructuralNarrowWidth to determine the widths.
+    if (BO->getOpcode() == Instruction::Mul && BO->hasNoUnsignedWrap()) {
+      unsigned W0 = getStructuralNarrowWidth(BO->getOperand(0));
+      unsigned W1 = getStructuralNarrowWidth(BO->getOperand(1));
+      return W0 != 0 && W1 != 0 && W0 + W1 <= Width;
+    }
     // udiv result <= dividend, so bounded if dividend is bounded.
     if (BO->getOpcode() == Instruction::UDiv)
       return isZeroBoundedAtWidth(BO->getOperand(0), Width);
@@ -4850,7 +4945,8 @@ bool runAnalysisAwareLocalRewrites(Function &F, LazyValueInfo &LVI,
   return Changed;
 }
 
-bool runStructuralLocalRewritesToFixpoint(Function &F) {
+bool runStructuralLocalRewritesToFixpoint(Function &F,
+                                          DominatorTree *DT = nullptr) {
   bool ChangedAny = false;
 
   auto DbgVerify = [&]() {
@@ -5064,7 +5160,7 @@ bool runStructuralLocalRewritesToFixpoint(Function &F) {
       auto *Cmp = dyn_cast_or_null<ICmpInst>(VH);
       if (!Cmp || Cmp->getParent() == nullptr)
         continue;
-      if (tryShrinkICmp(*Cmp)) {
+      if (tryShrinkICmp(*Cmp, DT)) {
         ChangedThisRound = true;
         continue;
       }
@@ -5753,7 +5849,7 @@ PreservedAnalyses WidthOptPass::run(Function &F, FunctionAnalysisManager &AM) {
   // snapshots, then iterate the purely structural local rewrites to a fixed
   // point so one local fold can expose another later in the pass.
   Changed |= runAnalysisAwareLocalRewrites(F, LVI, AC, DT);
-  Changed |= runStructuralLocalRewritesToFixpoint(F);
+  Changed |= runStructuralLocalRewritesToFixpoint(F, &DT);
 
   // The structural pass may have converted sext-based comparisons (e.g.,
   // icmp sgt i32 (sext i8 %x), 0) to narrower forms (icmp sgt i8 %x, 0).
@@ -5762,7 +5858,7 @@ PreservedAnalyses WidthOptPass::run(Function &F, FunctionAnalysisManager &AM) {
   LVI.clear();
   if (runAnalysisAwareLocalRewrites(F, LVI, AC, DT)) {
     Changed = true;
-    runStructuralLocalRewritesToFixpoint(F);
+    runStructuralLocalRewritesToFixpoint(F, &DT);
   }
 
   {
@@ -5780,7 +5876,7 @@ PreservedAnalyses WidthOptPass::run(Function &F, FunctionAnalysisManager &AM) {
     // such as zext(trunc(widened-value)) patterns that were not present before
     // the global step ran.
     if (ChangedByPlan)
-      Changed |= runStructuralLocalRewritesToFixpoint(F);
+      Changed |= runStructuralLocalRewritesToFixpoint(F, &DT);
   }
 
   if (!Changed)
