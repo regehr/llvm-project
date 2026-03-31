@@ -621,88 +621,104 @@ Value *materializeTruncRootedValueAtWidth(Value *V, unsigned TargetWidth,
 // Return the structural narrow width of V if its high bits are provably zero
 // by structure alone (direct zext, bitwise trees of such), or 0 if unknown.
 // Constants return 0 (they are width-flexible and not the source of the bound).
-unsigned getStructuralNarrowWidth(Value *V) {
-  if (auto Ext = getExtOperandInfo(V))
-    return Ext->Kind == ExtKind::ZExt ? Ext->NarrowWidth : 0;
-  if (isa<ConstantInt>(V))
-    return 0;
-  if (auto *BO = dyn_cast<BinaryOperator>(V)) {
-    // lshr preserves zero-boundedness.
-    if (BO->getOpcode() == Instruction::LShr)
-      return getStructuralNarrowWidth(BO->getOperand(0));
-    if (BO->getOpcode() == Instruction::And) {
-      unsigned W0 = getStructuralNarrowWidth(BO->getOperand(0));
-      unsigned W1 = getStructuralNarrowWidth(BO->getOperand(1));
-      // and: zero-bounded by whichever operand is bounded; take the narrower.
-      if (W0 != 0 && W1 != 0) return std::min(W0, W1);
-      return W0 != 0 ? W0 : W1;
-    }
-    if (BO->getOpcode() == Instruction::Or ||
-        BO->getOpcode() == Instruction::Xor) {
-      unsigned W0 = getStructuralNarrowWidth(BO->getOperand(0));
-      unsigned W1 = getStructuralNarrowWidth(BO->getOperand(1));
-      if (W0 == 0 || W1 == 0) return 0;
-      return std::max(W0, W1);
-    }
-    // add nuw: the sum fits in max(W0, W1) + 1 bits when both operands are
-    // zero-bounded.  For constants, use the number of active bits as the width.
-    if (BO->getOpcode() == Instruction::Add && BO->hasNoUnsignedWrap()) {
-      auto getOperandWidth = [](Value *V) -> unsigned {
-        if (auto *CI = dyn_cast<ConstantInt>(V)) {
-          if (CI->isNegative()) return 0;
-          unsigned Bits = (unsigned)CI->getValue().getActiveBits();
-          return Bits == 0 ? 0 : Bits; // constant 0 → return 0 (identity)
-        }
-        return getStructuralNarrowWidth(V);
-      };
-      unsigned W0 = getOperandWidth(BO->getOperand(0));
-      unsigned W1 = getOperandWidth(BO->getOperand(1));
-      // If either is unknown treat as unbounded.  If one is 0 (constant zero)
-      // the sum equals the other operand; handle conservatively.
-      if (W0 == 0 || W1 == 0) return 0;
-      unsigned Result = std::max(W0, W1) + 1;
-      // Sanity: don't claim a width ≥ the value's actual type width.
-      unsigned ActualWidth = BO->getType()->getIntegerBitWidth();
-      if (Result >= ActualWidth) return 0;
-      return Result;
-    }
-    // sub nuw: result <= LHS (no borrow), so bounded by LHS's width.
-    if (BO->getOpcode() == Instruction::Sub && BO->hasNoUnsignedWrap()) {
-      unsigned W = getStructuralNarrowWidth(BO->getOperand(0));
-      unsigned ActualWidth = BO->getType()->getIntegerBitWidth();
-      if (W != 0 && W < ActualWidth) return W;
+unsigned getStructuralNarrowWidth(Value *V,
+                                  DenseMap<Value *, unsigned> &Cache) {
+  auto [It, Inserted] = Cache.try_emplace(V, 0u);
+  if (!Inserted)
+    return It->second;
+
+  auto compute = [&]() -> unsigned {
+    if (auto Ext = getExtOperandInfo(V))
+      return Ext->Kind == ExtKind::ZExt ? Ext->NarrowWidth : 0;
+    if (isa<ConstantInt>(V))
       return 0;
+    if (auto *BO = dyn_cast<BinaryOperator>(V)) {
+      // lshr preserves zero-boundedness.
+      if (BO->getOpcode() == Instruction::LShr)
+        return getStructuralNarrowWidth(BO->getOperand(0), Cache);
+      if (BO->getOpcode() == Instruction::And) {
+        unsigned W0 = getStructuralNarrowWidth(BO->getOperand(0), Cache);
+        unsigned W1 = getStructuralNarrowWidth(BO->getOperand(1), Cache);
+        // and: zero-bounded by whichever operand is bounded; take the narrower.
+        if (W0 != 0 && W1 != 0) return std::min(W0, W1);
+        return W0 != 0 ? W0 : W1;
+      }
+      if (BO->getOpcode() == Instruction::Or ||
+          BO->getOpcode() == Instruction::Xor) {
+        unsigned W0 = getStructuralNarrowWidth(BO->getOperand(0), Cache);
+        unsigned W1 = getStructuralNarrowWidth(BO->getOperand(1), Cache);
+        if (W0 == 0 || W1 == 0) return 0;
+        return std::max(W0, W1);
+      }
+      // add nuw: the sum fits in max(W0, W1) + 1 bits when both operands are
+      // zero-bounded.  For constants, use the number of active bits as the width.
+      if (BO->getOpcode() == Instruction::Add && BO->hasNoUnsignedWrap()) {
+        auto getOperandWidth = [&](Value *V) -> unsigned {
+          if (auto *CI = dyn_cast<ConstantInt>(V)) {
+            if (CI->isNegative()) return 0;
+            unsigned Bits = (unsigned)CI->getValue().getActiveBits();
+            return Bits == 0 ? 0 : Bits; // constant 0 → return 0 (identity)
+          }
+          return getStructuralNarrowWidth(V, Cache);
+        };
+        unsigned W0 = getOperandWidth(BO->getOperand(0));
+        unsigned W1 = getOperandWidth(BO->getOperand(1));
+        // If either is unknown treat as unbounded.  If one is 0 (constant zero)
+        // the sum equals the other operand; handle conservatively.
+        if (W0 == 0 || W1 == 0) return 0;
+        unsigned Result = std::max(W0, W1) + 1;
+        // Sanity: don't claim a width ≥ the value's actual type width.
+        unsigned ActualWidth = BO->getType()->getIntegerBitWidth();
+        if (Result >= ActualWidth) return 0;
+        return Result;
+      }
+      // sub nuw: result <= LHS (no borrow), so bounded by LHS's width.
+      if (BO->getOpcode() == Instruction::Sub && BO->hasNoUnsignedWrap()) {
+        unsigned W = getStructuralNarrowWidth(BO->getOperand(0), Cache);
+        unsigned ActualWidth = BO->getType()->getIntegerBitWidth();
+        if (W != 0 && W < ActualWidth) return W;
+        return 0;
+      }
+      // mul nuw: product of W0-bit and W1-bit values fits in W0+W1 bits.
+      if (BO->getOpcode() == Instruction::Mul && BO->hasNoUnsignedWrap()) {
+        unsigned W0 = getStructuralNarrowWidth(BO->getOperand(0), Cache);
+        unsigned W1 = getStructuralNarrowWidth(BO->getOperand(1), Cache);
+        if (W0 == 0 || W1 == 0) return 0;
+        unsigned Result = W0 + W1;
+        unsigned ActualWidth = BO->getType()->getIntegerBitWidth();
+        if (Result >= ActualWidth) return 0;
+        return Result;
+      }
     }
-    // mul nuw: product of W0-bit and W1-bit values fits in W0+W1 bits.
-    if (BO->getOpcode() == Instruction::Mul && BO->hasNoUnsignedWrap()) {
-      unsigned W0 = getStructuralNarrowWidth(BO->getOperand(0));
-      unsigned W1 = getStructuralNarrowWidth(BO->getOperand(1));
-      if (W0 == 0 || W1 == 0) return 0;
-      unsigned Result = W0 + W1;
-      unsigned ActualWidth = BO->getType()->getIntegerBitWidth();
-      if (Result >= ActualWidth) return 0;
-      return Result;
+    // umin result <= both operands; bounded by whichever operand is bounded
+    // (analogous to `and`).
+    // umax result = the larger operand; bounded only if both are bounded
+    // (analogous to `or`).
+    if (auto *II = dyn_cast<IntrinsicInst>(V)) {
+      if (II->getIntrinsicID() == Intrinsic::umin) {
+        unsigned W0 = getStructuralNarrowWidth(II->getArgOperand(0), Cache);
+        unsigned W1 = getStructuralNarrowWidth(II->getArgOperand(1), Cache);
+        if (W0 != 0 && W1 != 0) return std::min(W0, W1);
+        return W0 != 0 ? W0 : W1;
+      }
+      if (II->getIntrinsicID() == Intrinsic::umax) {
+        unsigned W0 = getStructuralNarrowWidth(II->getArgOperand(0), Cache);
+        unsigned W1 = getStructuralNarrowWidth(II->getArgOperand(1), Cache);
+        if (W0 == 0 || W1 == 0) return 0;
+        return std::max(W0, W1);
+      }
     }
-  }
-  // umin result <= both operands; bounded by whichever operand is bounded
-  // (analogous to `and`).
-  // umax result = the larger operand; bounded only if both are bounded
-  // (analogous to `or`).
-  if (auto *II = dyn_cast<IntrinsicInst>(V)) {
-    if (II->getIntrinsicID() == Intrinsic::umin) {
-      unsigned W0 = getStructuralNarrowWidth(II->getArgOperand(0));
-      unsigned W1 = getStructuralNarrowWidth(II->getArgOperand(1));
-      if (W0 != 0 && W1 != 0) return std::min(W0, W1);
-      return W0 != 0 ? W0 : W1;
-    }
-    if (II->getIntrinsicID() == Intrinsic::umax) {
-      unsigned W0 = getStructuralNarrowWidth(II->getArgOperand(0));
-      unsigned W1 = getStructuralNarrowWidth(II->getArgOperand(1));
-      if (W0 == 0 || W1 == 0) return 0;
-      return std::max(W0, W1);
-    }
-  }
-  return 0;
+    return 0;
+  };
+
+  unsigned Result = compute();
+  Cache[V] = Result;
+  return Result;
+}
+
+unsigned getStructuralNarrowWidth(Value *V) {
+  DenseMap<Value *, unsigned> Cache;
+  return getStructuralNarrowWidth(V, Cache);
 }
 
 // Narrow  icmp pred LHS, RHS  when both sides are structurally zero-bounded
