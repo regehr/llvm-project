@@ -254,6 +254,8 @@ def format_percent_change(before: int, after: int) -> str:
         return "n/a"
 
     change = ((after - before) / before) * 100.0
+    if round(change, 1) == 0.0:
+        return "0.0%"
     return f"{change:+.1f}%"
 
 

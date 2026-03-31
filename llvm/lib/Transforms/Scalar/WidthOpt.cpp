@@ -1119,11 +1119,54 @@ bool tryShrinkPhiOfExts(PHINode &Phi) {
   if (!SawExt)
     return false;
 
+  auto *NarrowTy = IntegerType::get(Phi.getContext(), Info.NarrowWidth);
+  Instruction::CastOps NarrowCastOp =
+      (Info.Kind == ExtKind::ZExt) ? Instruction::ZExt : Instruction::SExt;
+
+  // Account exactly for the instructions this rewrite would add or remove
+  // locally. The transform always replaces the original wide phi with:
+  //  1. a narrow phi at the merged width, and
+  //  2. a recreated wide extension for the original users.
+  // It may also need to materialize some incoming values at the merged narrow
+  // width, but materializeAtWidth can reuse an existing cast in the same block
+  // (or one we already planned earlier for another incoming edge). On the
+  // removal side, only count instructions that are guaranteed to become dead as
+  // a direct consequence of removing this phi; deeper recursive DCE is a bonus
+  // and should not be required for profitability.
+  unsigned AddedInstructions = 2;   // NarrowPhi + recreated wide result.
+  unsigned RemovedInstructions = 1; // The original wide phi.
+  SmallVector<std::pair<BasicBlock *, Value *>, 8>
+      PlannedIncomingMaterializations;
+  auto wouldAddIncomingMaterialization =
+      [&](BasicBlock *BB, const ExtOperandInfo &Ext) {
+        if (Info.NarrowWidth == Ext.NarrowWidth)
+          return false;
+
+        auto PlannedKey = std::make_pair(BB, Ext.NarrowValue);
+        if (llvm::is_contained(PlannedIncomingMaterializations, PlannedKey))
+          return false;
+
+        for (User *U : Ext.NarrowValue->users()) {
+          auto *Cast = dyn_cast<CastInst>(U);
+          if (!Cast || Cast->getOpcode() != NarrowCastOp ||
+              Cast->getType() != NarrowTy)
+            continue;
+          if (Cast->getParent() == BB)
+            return false;
+        }
+
+        PlannedIncomingMaterializations.push_back(PlannedKey);
+        return true;
+      };
+
   for (unsigned I = 0, E = Phi.getNumIncomingValues(); I != E; ++I) {
     Value *Incoming = Phi.getIncomingValue(I);
     IncomingBlocks.push_back(Phi.getIncomingBlock(I));
 
     if (auto Ext = getExtOperandInfo(Incoming)) {
+      if (wouldAddIncomingMaterialization(IncomingBlocks.back(), *Ext))
+        ++AddedInstructions;
+
       Value *NarrowIncoming = Ext->NarrowValue;
       if (Info.NarrowWidth != Ext->NarrowWidth) {
         IRBuilder<> B(IncomingBlocks.back()->getTerminator());
@@ -1141,7 +1184,23 @@ bool tryShrinkPhiOfExts(PHINode &Phi) {
     NarrowIncomingValues.push_back(convertConstantToNarrow(*CI, Info.NarrowWidth));
   }
 
-  auto *NarrowTy = IntegerType::get(Phi.getContext(), Info.NarrowWidth);
+  SmallPtrSet<Instruction *, 8> CountedProducers;
+  for (Instruction *Producer : Info.Producers) {
+    if (Producer == nullptr || !CountedProducers.insert(Producer).second)
+      continue;
+
+    unsigned UsesFromPhi = 0;
+    for (Use &U : Producer->uses())
+      if (U.getUser() == &Phi)
+        ++UsesFromPhi;
+
+    if (Producer->getNumUses() == UsesFromPhi)
+      ++RemovedInstructions;
+  }
+
+  if (AddedInstructions > RemovedInstructions)
+    return false;
+
   auto *NarrowPhi = PHINode::Create(NarrowTy, Phi.getNumIncomingValues(),
                                     Phi.getName() + ".narrow",
                                     Phi.getIterator());
