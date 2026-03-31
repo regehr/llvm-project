@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Iterable
 
@@ -50,6 +51,12 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Path to the opt executable. Defaults to $LLVM_OPT, then PATH, then the local build/bin/opt.",
+    )
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=os.cpu_count() or 1,
+        help="Number of files to process in parallel within each application (default: CPU count).",
     )
     return parser.parse_args()
 
@@ -169,6 +176,17 @@ def run_width_opt_to_temp(opt_bin: Path, ir_path: Path) -> Path:
     return temp_path
 
 
+def process_ir_file(opt_bin: Path, ir_file: Path) -> tuple[Counter[str], Counter[str]]:
+    before_counts = run_instcount(opt_bin, ir_file)
+    temp_ir = run_width_opt_to_temp(opt_bin, ir_file)
+    try:
+        after_counts = run_instcount(opt_bin, temp_ir)
+    finally:
+        temp_ir.unlink(missing_ok=True)
+
+    return before_counts, after_counts
+
+
 def find_optimized_ir_files(app_dir: Path) -> list[Path]:
     optimized_dir = app_dir / "optimized"
     if not optimized_dir.is_dir():
@@ -222,6 +240,7 @@ def main() -> int:
     args = parse_args()
     bench_root = args.bench_root.expanduser().resolve()
     opt_bin = find_opt(args.opt_bin)
+    jobs = max(1, args.jobs)
 
     if not bench_root.is_dir():
         print(f"error: benchmark root does not exist: {bench_root}", file=sys.stderr)
@@ -257,13 +276,14 @@ def main() -> int:
 
             app_counts: Counter[str] = Counter()
             app_width_opt_counts: Counter[str] = Counter()
-            for ir_file in ir_files:
-                app_counts.update(run_instcount(opt_bin, ir_file))
-                temp_ir = run_width_opt_to_temp(opt_bin, ir_file)
-                try:
-                    app_width_opt_counts.update(run_instcount(opt_bin, temp_ir))
-                finally:
-                    temp_ir.unlink(missing_ok=True)
+            max_workers = min(jobs, len(ir_files))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                for before_counts, after_counts in executor.map(
+                    lambda path: process_ir_file(opt_bin, path),
+                    ir_files,
+                ):
+                    app_counts.update(before_counts)
+                    app_width_opt_counts.update(after_counts)
 
             print_table_row(app_dir.name, len(ir_files), app_counts, app_width_opt_counts)
             total_counts.update(app_counts)
