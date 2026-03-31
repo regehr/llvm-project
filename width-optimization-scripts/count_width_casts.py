@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -264,11 +265,17 @@ def format_metric_cell(before: int, after: int) -> str:
 
 
 def print_table_header() -> None:
-    print("| Benchmark | Files | SExt | ZExt | Trunc | Total |")
-    print("| --- | ---: | ---: | ---: | ---: | ---: |")
+    print("| Benchmark | Files | SExt | ZExt | Trunc | Total | Time (s) |")
+    print("| --- | ---: | ---: | ---: | ---: | ---: | ---: |")
 
 
-def print_table_row(name: str, num_files: int, before: Counter[str], after: Counter[str]) -> None:
+def print_table_row(
+    name: str,
+    num_files: int,
+    before: Counter[str],
+    after: Counter[str],
+    wall_clock_seconds: float,
+) -> None:
     before_total = sum(before[opcode] for opcode in WIDTH_OPCODES)
     after_total = sum(after[opcode] for opcode in WIDTH_OPCODES)
     print(
@@ -276,7 +283,8 @@ def print_table_row(name: str, num_files: int, before: Counter[str], after: Coun
         f"{format_metric_cell(before['sext'], after['sext'])} | "
         f"{format_metric_cell(before['zext'], after['zext'])} | "
         f"{format_metric_cell(before['trunc'], after['trunc'])} | "
-        f"{format_metric_cell(before_total, after_total)} |"
+        f"{format_metric_cell(before_total, after_total)} | "
+        f"{wall_clock_seconds:.6f} |"
     )
 
 
@@ -327,6 +335,7 @@ def main() -> int:
     total_counts: Counter[str] = Counter()
     total_width_opt_counts: Counter[str] = Counter()
     total_files = 0
+    total_wall_clock_seconds = 0.0
     missing_apps: list[str] = []
     apps_with_no_ir: list[str] = []
     crashes: list[CrashRecord] = []
@@ -346,6 +355,7 @@ def main() -> int:
         app_counts: Counter[str] = Counter()
         app_width_opt_counts: Counter[str] = Counter()
         app_successful_files = 0
+        app_start = time.perf_counter()
         max_workers = min(jobs, len(ir_files))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             for result in executor.map(lambda path: process_ir_file(opt_bin, path), ir_files):
@@ -356,11 +366,19 @@ def main() -> int:
                 app_counts.update(result.before)
                 app_width_opt_counts.update(result.after)
                 app_successful_files += 1
+        app_wall_clock_seconds = time.perf_counter() - app_start
 
-        print_table_row(app_dir.name, app_successful_files, app_counts, app_width_opt_counts)
+        print_table_row(
+            app_dir.name,
+            app_successful_files,
+            app_counts,
+            app_width_opt_counts,
+            app_wall_clock_seconds,
+        )
         total_counts.update(app_counts)
         total_width_opt_counts.update(app_width_opt_counts)
         total_files += app_successful_files
+        total_wall_clock_seconds += app_wall_clock_seconds
 
     if missing_apps:
         for app_name in missing_apps:
@@ -370,7 +388,13 @@ def main() -> int:
         for app_name in apps_with_no_ir:
             print(f"warning: no optimized .ll files found for: {app_name}", file=sys.stderr)
 
-    print_table_row("TOTAL", total_files, total_counts, total_width_opt_counts)
+    print_table_row(
+        "TOTAL",
+        total_files,
+        total_counts,
+        total_width_opt_counts,
+        total_wall_clock_seconds,
+    )
 
     print_crash_report(crashes)
 
