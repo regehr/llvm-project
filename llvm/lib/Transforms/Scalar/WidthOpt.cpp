@@ -1162,6 +1162,11 @@ bool tryShrinkPhiOfExts(PHINode &Phi) {
         if (llvm::is_contained(PlannedIncomingMaterializations, PlannedKey))
           return false;
 
+        // ConstantData values (e.g. ConstantInt) have no use list; casting
+        // them folds to a constant at no instruction cost.
+        if (isa<ConstantData>(Ext.NarrowValue))
+          return false;
+
         for (User *U : Ext.NarrowValue->users()) {
           auto *Cast = dyn_cast<CastInst>(U);
           if (!Cast || Cast->getOpcode() != NarrowCastOp ||
