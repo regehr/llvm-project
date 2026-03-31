@@ -21,6 +21,7 @@ STAT_LABELS = {
 }
 BENCH_ROOT = Path.home() / "llvm-opt-benchmark" / "bench"
 FALLBACK_OPT = Path("/home/regehr/tmp/llvm-project-regehr/build/bin/opt")
+OPT_NAME_FLAG = "-non-global-value-max-name-size=-1"
 STAT_RE = re.compile(
     r"^\s*(\d+)\s+instcount - Number of (SExt|ZExt|Trunc) insts$",
     re.MULTILINE,
@@ -91,7 +92,7 @@ def find_opt(opt_bin_arg: Path | None) -> Path:
 
 def supports_required_passes(opt_bin: Path) -> bool:
     proc = subprocess.run(
-        [str(opt_bin), "--print-passes"],
+        [str(opt_bin), OPT_NAME_FLAG, "--print-passes"],
         text=True,
         capture_output=True,
     )
@@ -106,6 +107,7 @@ def run_instcount(opt_bin: Path, ir_path: Path) -> Counter[str]:
     proc = subprocess.run(
         [
             str(opt_bin),
+            OPT_NAME_FLAG,
             "-stats",
             "-passes=instcount",
             "-disable-output",
@@ -148,6 +150,7 @@ def run_width_opt_to_temp(opt_bin: Path, ir_path: Path) -> Path:
     proc = subprocess.run(
         [
             str(opt_bin),
+            OPT_NAME_FLAG,
             "-passes=width-opt",
             "-S",
             str(ir_path),
