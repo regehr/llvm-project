@@ -4264,8 +4264,8 @@ bool tryPushFreezeThroughExt(FreezeInst &FI) {
     return false;
 
   Value *Src = Cast->getOperand(0);
-  assert(isIntegerValue(Src) && isIntegerValue(&FI) &&
-         "Freeze-through-cast expects integer values");
+  if (!isIntegerValue(Src) || !isIntegerValue(&FI))
+    return false;
 
   IRBuilder<> B(Cast);
   auto *FrozenSrc = cast<FreezeInst>(
