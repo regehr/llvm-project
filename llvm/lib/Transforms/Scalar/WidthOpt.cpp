@@ -1206,13 +1206,6 @@ bool tryShrinkPhiOfExts(PHINode &Phi) {
     if (auto Ext = getExtOperandInfo(Incoming)) {
       if (wouldAddIncomingMaterialization(IncomingBlocks.back(), *Ext))
         ++AddedInstructions;
-
-      Value *NarrowIncoming = Ext->NarrowValue;
-      if (Info.NarrowWidth != Ext->NarrowWidth) {
-        IRBuilder<> B(IncomingBlocks.back()->getTerminator());
-        NarrowIncoming = materializeAtWidth(B, *Ext, Info.NarrowWidth);
-      }
-      NarrowIncomingValues.push_back(NarrowIncoming);
       Info.Producers.push_back(Ext->Producer);
       continue;
     }
@@ -1220,8 +1213,6 @@ bool tryShrinkPhiOfExts(PHINode &Phi) {
     auto *CI = cast<ConstantInt>(Incoming);
     if (!canRepresentConstant(*CI, Info.Kind, Info.NarrowWidth))
       return false;
-
-    NarrowIncomingValues.push_back(convertConstantToNarrow(*CI, Info.NarrowWidth));
   }
 
   SmallPtrSet<Instruction *, 8> CountedProducers;
@@ -1240,6 +1231,25 @@ bool tryShrinkPhiOfExts(PHINode &Phi) {
 
   if (AddedInstructions > RemovedInstructions)
     return false;
+
+  // Profitability confirmed: now materialise any incomings that need widening.
+  // This must happen after the profitability check to avoid leaving dead cast
+  // instructions in the IR when the check fails.
+  NarrowIncomingValues.clear();
+  for (unsigned I = 0, E = Phi.getNumIncomingValues(); I != E; ++I) {
+    Value *Incoming = Phi.getIncomingValue(I);
+    if (auto Ext = getExtOperandInfo(Incoming)) {
+      Value *NarrowIncoming = Ext->NarrowValue;
+      if (Info.NarrowWidth != Ext->NarrowWidth) {
+        IRBuilder<> B(IncomingBlocks[I]->getTerminator());
+        NarrowIncoming = materializeAtWidth(B, *Ext, Info.NarrowWidth);
+      }
+      NarrowIncomingValues.push_back(NarrowIncoming);
+      continue;
+    }
+    auto *CI = cast<ConstantInt>(Incoming);
+    NarrowIncomingValues.push_back(convertConstantToNarrow(*CI, Info.NarrowWidth));
+  }
 
   auto *NarrowPhi = PHINode::Create(NarrowTy, Phi.getNumIncomingValues(),
                                     Phi.getName() + ".narrow",
