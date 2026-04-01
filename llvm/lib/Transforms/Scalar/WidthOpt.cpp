@@ -928,6 +928,25 @@ bool tryShrinkICmp(ICmpInst &Cmp, DominatorTree *DT = nullptr) {
   if (TargetWidth == 0 || TargetWidth >= LHSInfo->WideWidth)
     return false;
 
+  // Profitability: each operand whose TargetWidth differs from its NarrowWidth
+  // needs a new cast (materializeAtWidth will emit one).  A producer is
+  // removable only if this icmp is its sole user.  If the same producer feeds
+  // both operands it is counted once for removal.
+  unsigned AddedBoundaryCost = 0;
+  unsigned RemovedBoundaryCost = 0;
+  if (TargetWidth != LHSInfo->NarrowWidth)
+    ++AddedBoundaryCost;
+  if (TargetWidth != RHSInfo->NarrowWidth)
+    ++AddedBoundaryCost;
+  bool SameProducer =
+      LHSInfo->Producer && LHSInfo->Producer == RHSInfo->Producer;
+  if (!SameProducer && LHSInfo->Producer && LHSInfo->Producer->hasOneUse())
+    ++RemovedBoundaryCost;
+  if (RHSInfo->Producer && RHSInfo->Producer->hasOneUse())
+    ++RemovedBoundaryCost;
+  if (AddedBoundaryCost > RemovedBoundaryCost)
+    return false;
+
   IRBuilder<> B(&Cmp);
   Value *NewLHS = materializeAtWidth(B, *LHSInfo, TargetWidth, DT);
   Value *NewRHS = materializeAtWidth(B, *RHSInfo, TargetWidth, DT);
