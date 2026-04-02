@@ -98,6 +98,14 @@ def parse_args() -> argparse.Namespace:
         default=os.cpu_count() or 1,
         help="Number of files to process in parallel within each application (default: CPU count).",
     )
+    parser.add_argument(
+        "--adce",
+        action="store_true",
+        help=(
+            "Run adce before counting 'before' instructions, then run width-opt, "
+            "then run adce again before counting 'after' instructions."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -175,9 +183,22 @@ def run_instcount(opt_bin: Path, ir_path: Path) -> Counter[str]:
     return counts
 
 
-def run_width_opt_to_temp(opt_bin: Path, ir_path: Path) -> Path:
+
+def extract_crashing_functions(stderr: str) -> tuple[str, ...]:
+    functions: list[str] = []
+    seen: set[str] = set()
+    for match in PASS_FUNCTION_RE.finditer(stderr):
+        function_name = match.group(1)
+        if function_name in seen:
+            continue
+        seen.add(function_name)
+        functions.append(function_name)
+    return tuple(functions)
+
+
+def run_pass_to_temp(opt_bin: Path, ir_path: Path, pass_name: str) -> Path:
     with tempfile.NamedTemporaryFile(
-        prefix="width-opt-",
+        prefix=f"{pass_name}-",
         suffix=".ll",
         delete=False,
     ) as tmp:
@@ -187,7 +208,7 @@ def run_width_opt_to_temp(opt_bin: Path, ir_path: Path) -> Path:
         [
             str(opt_bin),
             OPT_NAME_FLAG,
-            "-passes=width-opt",
+            f"-passes={pass_name}",
             "-S",
             str(ir_path),
             "-o",
@@ -202,38 +223,39 @@ def run_width_opt_to_temp(opt_bin: Path, ir_path: Path) -> Path:
             temp_path.unlink(missing_ok=True)
         except OSError:
             pass
-
-        raise OptFailure("width-opt", ir_path, opt_bin, proc)
+        raise OptFailure(pass_name, ir_path, opt_bin, proc)
 
     return temp_path
 
 
-def extract_crashing_functions(stderr: str) -> tuple[str, ...]:
-    functions: list[str] = []
-    seen: set[str] = set()
-    for match in PASS_FUNCTION_RE.finditer(stderr):
-        function_name = match.group(1)
-        if function_name in seen:
-            continue
-        seen.add(function_name)
-        functions.append(function_name)
-    return tuple(functions)
-
-
-def process_ir_file(opt_bin: Path, ir_file: Path) -> FileCounts | CrashRecord:
+def process_ir_file(opt_bin: Path, ir_file: Path, adce: bool = False) -> FileCounts | CrashRecord:
+    temps: list[Path] = []
     try:
-        before_counts = run_instcount(opt_bin, ir_file)
-        temp_ir = run_width_opt_to_temp(opt_bin, ir_file)
-        try:
-            after_counts = run_instcount(opt_bin, temp_ir)
-        finally:
-            temp_ir.unlink(missing_ok=True)
+        src = ir_file
+        if adce:
+            t = run_pass_to_temp(opt_bin, src, "adce")
+            temps.append(t)
+            src = t
+        before_counts = run_instcount(opt_bin, src)
+
+        t = run_pass_to_temp(opt_bin, src, "width-opt")
+        temps.append(t)
+        src = t
+
+        if adce:
+            t = run_pass_to_temp(opt_bin, src, "adce")
+            temps.append(t)
+            src = t
+        after_counts = run_instcount(opt_bin, src)
     except OptFailure as err:
         return CrashRecord(
             ir_file=ir_file,
             phase=err.phase,
             functions=extract_crashing_functions(err.stderr),
         )
+    finally:
+        for t in temps:
+            t.unlink(missing_ok=True)
 
     return FileCounts(ir_file=ir_file, before=before_counts, after=after_counts)
 
@@ -370,7 +392,7 @@ def main() -> int:
         app_start = time.perf_counter()
         max_workers = min(jobs, len(ir_files))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            for result in executor.map(lambda path: process_ir_file(opt_bin, path), ir_files):
+            for result in executor.map(lambda path: process_ir_file(opt_bin, path, args.adce), ir_files):
                 if isinstance(result, CrashRecord):
                     crashes.append(result)
                     continue
