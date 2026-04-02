@@ -383,17 +383,27 @@ Value *materializeAtWidth(IRBuilder<> &B, const ExtOperandInfo &Info,
   // existing-cast searches below — they can only find instructions anyway.
   if (!isa<ConstantData>(Info.NarrowValue)) {
     // Prefer an existing cast in the same basic block; move it before the
-    // insertion point if needed.  This is always safe: Info.NarrowValue must
-    // dominate the insertion point (it is an operand of the wide extension that
-    // precedes the icmp), so any cast of it can legally be placed there.
+    // insertion point if needed.
     for (User *U : Info.NarrowValue->users()) {
       auto *Cast = dyn_cast<CastInst>(U);
       if (!Cast || Cast->getOpcode() != CastOp || Cast->getType() != TargetTy)
         continue;
       if (Cast->getParent() != InsertBB)
         continue;
-      if (InsertInst != nullptr && !Cast->comesBefore(InsertInst))
+      if (InsertInst != nullptr && !Cast->comesBefore(InsertInst)) {
+        // If Cast IS the insertion point, moving it "before itself" is a
+        // no-op, and the caller will then insert a new instruction before
+        // InsertInst (= Cast), creating a use-before-def violation.
+        if (Cast == InsertInst)
+          continue;
+        // Only move if NarrowValue is already defined before the insertion
+        // point; if NarrowValue is an instruction later in the same block,
+        // moving Cast here would violate dominance.
+        if (auto *NVI = dyn_cast<Instruction>(Info.NarrowValue))
+          if (NVI->getParent() == InsertBB && !NVI->comesBefore(InsertInst))
+            continue;
         Cast->moveBefore(*InsertInst->getParent(), InsertInst->getIterator());
+      }
       return Cast;
     }
 
