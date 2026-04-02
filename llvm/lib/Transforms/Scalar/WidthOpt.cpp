@@ -393,7 +393,7 @@ Value *materializeAtWidth(IRBuilder<> &B, const ExtOperandInfo &Info,
       if (Cast->getParent() != InsertBB)
         continue;
       if (InsertInst != nullptr && !Cast->comesBefore(InsertInst))
-        Cast->moveBefore(InsertInst);
+        Cast->moveBefore(*InsertInst->getParent(), InsertInst->getIterator());
       return Cast;
     }
 
@@ -6036,9 +6036,7 @@ PreservedAnalyses WidthOptPass::run(Function &F, FunctionAnalysisManager &AM) {
     }
   }
 
-  if (!Changed)
-    return PreservedAnalyses::all();
-  return PreservedAnalyses::none();
+  return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
 }
 
 } // namespace widthopt
