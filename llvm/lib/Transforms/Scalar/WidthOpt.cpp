@@ -5101,9 +5101,14 @@ bool runAnalysisAwareLocalRewrites(Function &F, LazyValueInfo &LVI,
 bool runStructuralLocalRewritesToFixpoint(Function &F,
                                           DominatorTree *DT = nullptr) {
   bool ChangedAny = false;
+  // Build the worklist once. WeakTrackingVH handles auto-null when instructions
+  // are deleted mid-round, so the existing dyn_cast_or_null / getParent()
+  // checks in each loop body still handle that correctly. New instructions
+  // created by transforms are not added to the worklist, but they will be
+  // picked up on the next invocation of this function.
+  LocalRewriteWorklists WL = collectLocalRewriteWorklists(F);
 
   while (true) {
-    LocalRewriteWorklists WL = collectLocalRewriteWorklists(F);
     bool ChangedThisRound = false;
 
     for (WeakTrackingVH &VH : WL.Adds) {
