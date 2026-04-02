@@ -28,6 +28,10 @@ STAT_RE = re.compile(
     r"^\s*(\d+)\s+instcount - Number of (SExt|ZExt|Trunc) insts$",
     re.MULTILINE,
 )
+TOTAL_INST_RE = re.compile(
+    r"^\s*(\d+)\s+instcount - Number of instructions \(of all types\)$",
+    re.MULTILINE,
+)
 PASS_FUNCTION_RE = re.compile(r'Running pass ".*?" on function "([^"]+)"')
 
 
@@ -164,6 +168,10 @@ def run_instcount(opt_bin: Path, ir_path: Path) -> Counter[str]:
                 counts[opcode] = count
                 break
 
+    total_match = TOTAL_INST_RE.search(proc.stderr)
+    if total_match:
+        counts["total"] = int(total_match.group(1))
+
     return counts
 
 
@@ -269,7 +277,7 @@ def format_seconds(seconds: float) -> str:
 
 
 def print_table_header() -> None:
-    print("| Benchmark | Files | SExt | ZExt | Trunc | Total | Time (s) |")
+    print("| Benchmark | Files | SExt | ZExt | Trunc | Total Width Change Instructions | Total Instructions |")
     print("| --- | ---: | ---: | ---: | ---: | ---: | ---: |")
 
 
@@ -288,7 +296,7 @@ def print_table_row(
         f"{format_metric_cell(before['zext'], after['zext'])} | "
         f"{format_metric_cell(before['trunc'], after['trunc'])} | "
         f"{format_metric_cell(before_total, after_total)} | "
-        f"{format_seconds(wall_clock_seconds)} |"
+        f"{format_metric_cell(before['total'], after['total'])} |"
     )
 
 
