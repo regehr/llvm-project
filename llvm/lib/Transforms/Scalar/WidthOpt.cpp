@@ -5102,21 +5102,6 @@ bool runStructuralLocalRewritesToFixpoint(Function &F,
                                           DominatorTree *DT = nullptr) {
   bool ChangedAny = false;
 
-  auto DbgVerify = [&]() {
-    std::string Err;
-    raw_string_ostream OS(Err);
-    if (verifyFunction(F, &OS)) {
-      errs() << "VERIFY FAILED in runStructuralLocalRewritesToFixpoint:\n"
-             << Err << "\n";
-      for (auto &BB : F) {
-        errs() << BB.getName() << ":\n";
-        for (auto &I : BB)
-          errs() << "  " << I << "\n";
-      }
-      llvm_unreachable("IR broken");
-    }
-  };
-
   while (true) {
     LocalRewriteWorklists WL = collectLocalRewriteWorklists(F);
     bool ChangedThisRound = false;
@@ -5341,7 +5326,6 @@ bool runStructuralLocalRewritesToFixpoint(Function &F,
     if (!ChangedThisRound)
       break;
     ChangedAny = true;
-    DbgVerify();
   }
 
   return ChangedAny;
@@ -6030,6 +6014,21 @@ PreservedAnalyses WidthOptPass::run(Function &F, FunctionAnalysisManager &AM) {
     // the global step ran.
     if (ChangedByPlan)
       Changed |= runStructuralLocalRewritesToFixpoint(F, &DT);
+  }
+
+  {
+    std::string Err;
+    raw_string_ostream OS(Err);
+    if (verifyFunction(F, &OS)) {
+      errs() << "VERIFY FAILED:\n"
+             << Err << "\n";
+      for (auto &BB : F) {
+        errs() << BB.getName() << ":\n";
+        for (auto &I : BB)
+          errs() << "  " << I << "\n";
+      }
+      llvm_unreachable("IR broken");
+    }
   }
 
   if (!Changed)
