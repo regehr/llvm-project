@@ -647,7 +647,6 @@ ConstantRange ConstantRange::intersectWith(const ConstantRange &CR,
                                            PreferredRangeType Type) const {
   assert(getBitWidth() == CR.getBitWidth() &&
          "ConstantRange types don't agree!");
-  ConstantRange Result = [&]() -> ConstantRange {
 
   // Handle common cases.
   if (   isEmptySet() || CR.isFullSet()) return *this;
@@ -748,16 +747,13 @@ ConstantRange ConstantRange::intersectWith(const ConstantRange &CR,
   // --U L------ : this
   // ------U L-- : CR
   return getPreferredRange(*this, CR, Type);
-  }();
-  logBinaryTF("intersect", *this, CR, Result);
-  return Result;
 }
 
 ConstantRange ConstantRange::unionWith(const ConstantRange &CR,
                                        PreferredRangeType Type) const {
   assert(getBitWidth() == CR.getBitWidth() &&
          "ConstantRange types don't agree!");
-  ConstantRange Result = [&]() -> ConstantRange {
+
   if (   isFullSet() || CR.isEmptySet()) return *this;
   if (CR.isFullSet() ||    isEmptySet()) return CR;
 
@@ -824,9 +820,6 @@ ConstantRange ConstantRange::unionWith(const ConstantRange &CR,
   APInt U = CR.Upper.ugt(Upper) ? CR.Upper : Upper;
 
   return ConstantRange(std::move(L), std::move(U));
-  }();
-  logBinaryTF("union", *this, CR, Result);
-  return Result;
 }
 
 std::optional<ConstantRange>
@@ -844,10 +837,8 @@ std::optional<ConstantRange>
 ConstantRange::exactUnionWith(const ConstantRange &CR) const {
   // TODO: This can be implemented more efficiently.
   ConstantRange Result = unionWith(CR);
-  if (Result == inverse().intersectWith(CR.inverse()).inverse()) {
-    logBinaryTF("exact_union", *this, CR, Result);
+  if (Result == inverse().intersectWith(CR.inverse()).inverse())
     return Result;
-  }
   return std::nullopt;
 }
 
@@ -2184,15 +2175,11 @@ ConstantRange ConstantRange::sshl_sat(const ConstantRange &Other) const {
 }
 
 ConstantRange ConstantRange::inverse() const {
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isFullSet())
-      return getEmpty();
-    if (isEmptySet())
-      return getFull();
-    return ConstantRange(Upper, Lower);
-  }();
-  logUnaryTF("inverse", *this, Result);
-  return Result;
+  if (isFullSet())
+    return getEmpty();
+  if (isEmptySet())
+    return getFull();
+  return ConstantRange(Upper, Lower);
 }
 
 ConstantRange ConstantRange::abs(bool IntMinIsPoison) const {
