@@ -69,30 +69,28 @@ static std::string crStr(const ConstantRange &CR) {
 }
 
 static void logBinaryTF(const char *Op, const ConstantRange &LHS,
-                        const ConstantRange &RHS, const ConstantRange &Result) {
+                        const ConstantRange &RHS) {
   FILE *F = getCRLogFile();
   if (!F)
     return;
-  fprintf(F, "%s i%u %s %s %s\n", Op, LHS.getBitWidth(), crStr(LHS).c_str(),
-          crStr(RHS).c_str(), crStr(Result).c_str());
+  fprintf(F, "%s i%u %s %s\n", Op, LHS.getBitWidth(), crStr(LHS).c_str(),
+          crStr(RHS).c_str());
 }
 
-static void logUnaryTF(const char *Op, const ConstantRange &Input,
-                       const ConstantRange &Result) {
+static void logUnaryTF(const char *Op, const ConstantRange &Input) {
   FILE *F = getCRLogFile();
   if (!F)
     return;
-  fprintf(F, "%s i%u %s %s\n", Op, Input.getBitWidth(), crStr(Input).c_str(),
-          crStr(Result).c_str());
+  fprintf(F, "%s i%u %s\n", Op, Input.getBitWidth(), crStr(Input).c_str());
 }
 
 static void logCastTF(const char *Op, const ConstantRange &Input,
-                      const ConstantRange &Result) {
+                      uint32_t DstBW) {
   FILE *F = getCRLogFile();
   if (!F)
     return;
-  fprintf(F, "%s i%u->i%u %s %s\n", Op, Input.getBitWidth(),
-          Result.getBitWidth(), crStr(Input).c_str(), crStr(Result).c_str());
+  fprintf(F, "%s i%u->i%u %s\n", Op, Input.getBitWidth(), DstBW,
+          crStr(Input).c_str());
 }
 
 ConstantRange::ConstantRange(uint32_t BitWidth, bool Full)
@@ -618,9 +616,7 @@ ConstantRange ConstantRange::subtract(const APInt &Val) const {
 }
 
 ConstantRange ConstantRange::difference(const ConstantRange &CR) const {
-  ConstantRange Result = intersectWith(CR.inverse());
-  logBinaryTF("difference", *this, CR, Result);
-  return Result;
+  return intersectWith(CR.inverse());
 }
 
 static ConstantRange getPreferredRange(
@@ -826,10 +822,8 @@ std::optional<ConstantRange>
 ConstantRange::exactIntersectWith(const ConstantRange &CR) const {
   // TODO: This can be implemented more efficiently.
   ConstantRange Result = intersectWith(CR);
-  if (Result == inverse().unionWith(CR.inverse()).inverse()) {
-    logBinaryTF("exact_intersect", *this, CR, Result);
+  if (Result == inverse().unionWith(CR.inverse()).inverse())
     return Result;
-  }
   return std::nullopt;
 }
 
@@ -895,55 +889,50 @@ ConstantRange ConstantRange::castOp(Instruction::CastOps CastOp,
 }
 
 ConstantRange ConstantRange::zeroExtend(uint32_t DstTySize) const {
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet()) return getEmpty(DstTySize);
+  logCastTF("zext", *this, DstTySize);
+  if (isEmptySet()) return getEmpty(DstTySize);
 
-    unsigned SrcTySize = getBitWidth();
-    if (DstTySize == SrcTySize)
-      return *this;
-    assert(SrcTySize < DstTySize && "Not a value extension");
-    if (isFullSet() || isUpperWrapped()) {
-      // Change into [0, 1 << src bit width)
-      APInt LowerExt(DstTySize, 0);
-      if (!Upper) // special case: [X, 0) -- not really wrapping around
-        LowerExt = Lower.zext(DstTySize);
-      return ConstantRange(std::move(LowerExt),
-                           APInt::getOneBitSet(DstTySize, SrcTySize));
-    }
+  unsigned SrcTySize = getBitWidth();
+  if (DstTySize == SrcTySize)
+    return *this;
+  assert(SrcTySize < DstTySize && "Not a value extension");
+  if (isFullSet() || isUpperWrapped()) {
+    // Change into [0, 1 << src bit width)
+    APInt LowerExt(DstTySize, 0);
+    if (!Upper) // special case: [X, 0) -- not really wrapping around
+      LowerExt = Lower.zext(DstTySize);
+    return ConstantRange(std::move(LowerExt),
+                         APInt::getOneBitSet(DstTySize, SrcTySize));
+  }
 
-    return ConstantRange(Lower.zext(DstTySize), Upper.zext(DstTySize));
-  }();
-  logCastTF("zext", *this, Result);
-  return Result;
+  return ConstantRange(Lower.zext(DstTySize), Upper.zext(DstTySize));
 }
 
 ConstantRange ConstantRange::signExtend(uint32_t DstTySize) const {
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet()) return getEmpty(DstTySize);
+  logCastTF("sext", *this, DstTySize);
+  if (isEmptySet()) return getEmpty(DstTySize);
 
-    unsigned SrcTySize = getBitWidth();
-    if (DstTySize == SrcTySize)
-      return *this;
-    assert(SrcTySize < DstTySize && "Not a value extension");
+  unsigned SrcTySize = getBitWidth();
+  if (DstTySize == SrcTySize)
+    return *this;
+  assert(SrcTySize < DstTySize && "Not a value extension");
 
-    // special case: [X, INT_MIN) -- not really wrapping around
-    if (Upper.isMinSignedValue())
-      return ConstantRange(Lower.sext(DstTySize), Upper.zext(DstTySize));
+  // special case: [X, INT_MIN) -- not really wrapping around
+  if (Upper.isMinSignedValue())
+    return ConstantRange(Lower.sext(DstTySize), Upper.zext(DstTySize));
 
-    if (isFullSet() || isSignWrappedSet()) {
-      return ConstantRange(APInt::getHighBitsSet(DstTySize,DstTySize-SrcTySize+1),
-                           APInt::getLowBitsSet(DstTySize, SrcTySize-1) + 1);
-    }
+  if (isFullSet() || isSignWrappedSet()) {
+    return ConstantRange(APInt::getHighBitsSet(DstTySize,DstTySize-SrcTySize+1),
+                         APInt::getLowBitsSet(DstTySize, SrcTySize-1) + 1);
+  }
 
-    return ConstantRange(Lower.sext(DstTySize), Upper.sext(DstTySize));
-  }();
-  logCastTF("sext", *this, Result);
-  return Result;
+  return ConstantRange(Lower.sext(DstTySize), Upper.sext(DstTySize));
 }
 
 ConstantRange ConstantRange::truncate(uint32_t DstTySize,
                                       unsigned NoWrapKind) const {
-  ConstantRange Result = [&]() -> ConstantRange {
+  logCastTF((NoWrapKind & TruncInst::NoUnsignedWrap) ? "trunc nuw" : "trunc",
+            *this, DstTySize);
   if (DstTySize == getBitWidth())
     return *this;
   assert(getBitWidth() > DstTySize && "Not a value truncation");
@@ -1014,11 +1003,6 @@ ConstantRange ConstantRange::truncate(uint32_t DstTySize,
   }
 
   return getFull(DstTySize);
-  }();
-  const char *OpName =
-      (NoWrapKind & TruncInst::NoUnsignedWrap) ? "trunc nuw" : "trunc";
-  logCastTF(OpName, *this, Result);
-  return Result;
 }
 
 ConstantRange ConstantRange::zextOrTrunc(uint32_t DstTySize) const {
@@ -1172,26 +1156,23 @@ ConstantRange ConstantRange::intrinsic(Intrinsic::ID IntrinsicID,
 
 ConstantRange
 ConstantRange::add(const ConstantRange &Other) const {
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet() || Other.isEmptySet())
-      return getEmpty();
-    if (isFullSet() || Other.isFullSet())
-      return getFull();
+  logBinaryTF("add", *this, Other);
+  if (isEmptySet() || Other.isEmptySet())
+    return getEmpty();
+  if (isFullSet() || Other.isFullSet())
+    return getFull();
 
-    APInt NewLower = getLower() + Other.getLower();
-    APInt NewUpper = getUpper() + Other.getUpper() - 1;
-    if (NewLower == NewUpper)
-      return getFull();
+  APInt NewLower = getLower() + Other.getLower();
+  APInt NewUpper = getUpper() + Other.getUpper() - 1;
+  if (NewLower == NewUpper)
+    return getFull();
 
-    ConstantRange X = ConstantRange(std::move(NewLower), std::move(NewUpper));
-    if (X.isSizeStrictlySmallerThan(*this) ||
-        X.isSizeStrictlySmallerThan(Other))
-      // We've wrapped, therefore, full set.
-      return getFull();
-    return X;
-  }();
-  logBinaryTF("add", *this, Other, Result);
-  return Result;
+  ConstantRange X = ConstantRange(std::move(NewLower), std::move(NewUpper));
+  if (X.isSizeStrictlySmallerThan(*this) ||
+      X.isSizeStrictlySmallerThan(Other))
+    // We've wrapped, therefore, full set.
+    return getFull();
+  return X;
 }
 
 ConstantRange ConstantRange::addWithNoWrap(const ConstantRange &Other,
@@ -1199,61 +1180,54 @@ ConstantRange ConstantRange::addWithNoWrap(const ConstantRange &Other,
                                            PreferredRangeType RangeType) const {
   // Calculate the range for "X + Y" which is guaranteed not to wrap(overflow).
   // (X is from this, and Y is from Other)
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet() || Other.isEmptySet())
-      return getEmpty();
-    if (isFullSet() && Other.isFullSet())
-      return getFull();
-
-    using OBO = OverflowingBinaryOperator;
-    ConstantRange R = add(Other);
-
-    // If an overflow happens for every value pair in these two constant ranges,
-    // we must return Empty set. In this case, we get that for free, because we
-    // get lucky that intersection of add() with uadd_sat()/sadd_sat() results
-    // in an empty set.
-
-    if (NoWrapKind & OBO::NoSignedWrap)
-      R = R.intersectWith(sadd_sat(Other), RangeType);
-
-    if (NoWrapKind & OBO::NoUnsignedWrap)
-      R = R.intersectWith(uadd_sat(Other), RangeType);
-
-    return R;
-  }();
   using OBO = OverflowingBinaryOperator;
   bool HasNSW = NoWrapKind & OBO::NoSignedWrap;
   bool HasNUW = NoWrapKind & OBO::NoUnsignedWrap;
-  const char *OpName = (HasNSW && HasNUW) ? "add nsw nuw"
-                       : HasNSW           ? "add nsw"
-                       : HasNUW           ? "add nuw"
-                                          : "add";
-  logBinaryTF(OpName, *this, Other, Result);
+  logBinaryTF((HasNSW && HasNUW) ? "add nsw nuw"
+              : HasNSW           ? "add nsw"
+              : HasNUW           ? "add nuw"
+                                 : "add",
+              *this, Other);
+  if (isEmptySet() || Other.isEmptySet())
+    return getEmpty();
+  if (isFullSet() && Other.isFullSet())
+    return getFull();
+
+  ConstantRange Result = add(Other);
+
+  // If an overflow happens for every value pair in these two constant ranges,
+  // we must return Empty set. In this case, we get that for free, because we
+  // get lucky that intersection of add() with uadd_sat()/sadd_sat() results
+  // in an empty set.
+
+  if (NoWrapKind & OBO::NoSignedWrap)
+    Result = Result.intersectWith(sadd_sat(Other), RangeType);
+
+  if (NoWrapKind & OBO::NoUnsignedWrap)
+    Result = Result.intersectWith(uadd_sat(Other), RangeType);
+
   return Result;
 }
 
 ConstantRange
 ConstantRange::sub(const ConstantRange &Other) const {
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet() || Other.isEmptySet())
-      return getEmpty();
-    if (isFullSet() || Other.isFullSet())
-      return getFull();
+  logBinaryTF("sub", *this, Other);
+  if (isEmptySet() || Other.isEmptySet())
+    return getEmpty();
+  if (isFullSet() || Other.isFullSet())
+    return getFull();
 
-    APInt NewLower = getLower() - Other.getUpper() + 1;
-    APInt NewUpper = getUpper() - Other.getLower();
-    if (NewLower == NewUpper)
-      return getFull();
+  APInt NewLower = getLower() - Other.getUpper() + 1;
+  APInt NewUpper = getUpper() - Other.getLower();
+  if (NewLower == NewUpper)
+    return getFull();
 
-    ConstantRange X = ConstantRange(std::move(NewLower), std::move(NewUpper));
-    if (X.isSizeStrictlySmallerThan(*this) ||
-        X.isSizeStrictlySmallerThan(Other))
-      // We've wrapped, therefore, full set.
-      return getFull();
-    return X;
-  }();
-  logBinaryTF("sub", *this, Other, Result);
-  return Result;
+  ConstantRange X = ConstantRange(std::move(NewLower), std::move(NewUpper));
+  if (X.isSizeStrictlySmallerThan(*this) ||
+      X.isSizeStrictlySmallerThan(Other))
+    // We've wrapped, therefore, full set.
+    return getFull();
+  return X;
 }
 
 ConstantRange ConstantRange::subWithNoWrap(const ConstantRange &Other,
@@ -1261,39 +1235,35 @@ ConstantRange ConstantRange::subWithNoWrap(const ConstantRange &Other,
                                            PreferredRangeType RangeType) const {
   // Calculate the range for "X - Y" which is guaranteed not to wrap(overflow).
   // (X is from this, and Y is from Other)
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet() || Other.isEmptySet())
-      return getEmpty();
-    if (isFullSet() && Other.isFullSet())
-      return getFull();
-
-    using OBO = OverflowingBinaryOperator;
-    ConstantRange R = sub(Other);
-
-    // If an overflow happens for every value pair in these two constant ranges,
-    // we must return Empty set. In signed case, we get that for free, because
-    // we get lucky that intersection of sub() with ssub_sat() results in an
-    // empty set. But for unsigned we must perform the overflow check manually.
-
-    if (NoWrapKind & OBO::NoSignedWrap)
-      R = R.intersectWith(ssub_sat(Other), RangeType);
-
-    if (NoWrapKind & OBO::NoUnsignedWrap) {
-      if (getUnsignedMax().ult(Other.getUnsignedMin()))
-        return getEmpty(); // Always overflows.
-      R = R.intersectWith(usub_sat(Other), RangeType);
-    }
-
-    return R;
-  }();
   using OBO = OverflowingBinaryOperator;
   bool HasNSW = NoWrapKind & OBO::NoSignedWrap;
   bool HasNUW = NoWrapKind & OBO::NoUnsignedWrap;
-  const char *OpName = (HasNSW && HasNUW) ? "sub nsw nuw"
-                       : HasNSW           ? "sub nsw"
-                       : HasNUW           ? "sub nuw"
-                                          : "sub";
-  logBinaryTF(OpName, *this, Other, Result);
+  logBinaryTF((HasNSW && HasNUW) ? "sub nsw nuw"
+              : HasNSW           ? "sub nsw"
+              : HasNUW           ? "sub nuw"
+                                 : "sub",
+              *this, Other);
+  if (isEmptySet() || Other.isEmptySet())
+    return getEmpty();
+  if (isFullSet() && Other.isFullSet())
+    return getFull();
+
+  ConstantRange Result = sub(Other);
+
+  // If an overflow happens for every value pair in these two constant ranges,
+  // we must return Empty set. In signed case, we get that for free, because we
+  // get lucky that intersection of sub() with ssub_sat() results in an
+  // empty set. But for unsigned we must perform the overflow check manually.
+
+  if (NoWrapKind & OBO::NoSignedWrap)
+    Result = Result.intersectWith(ssub_sat(Other), RangeType);
+
+  if (NoWrapKind & OBO::NoUnsignedWrap) {
+    if (getUnsignedMax().ult(Other.getUnsignedMin()))
+      return getEmpty(); // Always overflows.
+    Result = Result.intersectWith(usub_sat(Other), RangeType);
+  }
+
   return Result;
 }
 
@@ -1303,235 +1273,210 @@ ConstantRange::multiply(const ConstantRange &Other) const {
   // be non-wrapping, round the result min and max value to the appropriate
   // multiple of that element. If wrapping is possible, at least adjust the
   // range according to the greatest power-of-two factor of the single element.
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet() || Other.isEmptySet())
-      return getEmpty();
+  logBinaryTF("mul", *this, Other);
+  if (isEmptySet() || Other.isEmptySet())
+    return getEmpty();
 
-    if (const APInt *C = getSingleElement()) {
-      if (C->isOne())
-        return Other;
-      if (C->isAllOnes())
-        return ConstantRange(APInt::getZero(getBitWidth())).sub(Other);
-    }
+  if (const APInt *C = getSingleElement()) {
+    if (C->isOne())
+      return Other;
+    if (C->isAllOnes())
+      return ConstantRange(APInt::getZero(getBitWidth())).sub(Other);
+  }
 
-    if (const APInt *C = Other.getSingleElement()) {
-      if (C->isOne())
-        return *this;
-      if (C->isAllOnes())
-        return ConstantRange(APInt::getZero(getBitWidth())).sub(*this);
-    }
+  if (const APInt *C = Other.getSingleElement()) {
+    if (C->isOne())
+      return *this;
+    if (C->isAllOnes())
+      return ConstantRange(APInt::getZero(getBitWidth())).sub(*this);
+  }
 
-    // Multiplication is signedness-independent. However different ranges can be
-    // obtained depending on how the input ranges are treated. These different
-    // ranges are all conservatively correct, but one might be better than the
-    // other. We calculate two ranges; one treating the inputs as unsigned
-    // and the other signed, then return the smallest of these ranges.
+  // Multiplication is signedness-independent. However different ranges can be
+  // obtained depending on how the input ranges are treated. These different
+  // ranges are all conservatively correct, but one might be better than the
+  // other. We calculate two ranges; one treating the inputs as unsigned
+  // and the other signed, then return the smallest of these ranges.
 
-    // Unsigned range first.
-    APInt this_min = getUnsignedMin().zext(getBitWidth() * 2);
-    APInt this_max = getUnsignedMax().zext(getBitWidth() * 2);
-    APInt Other_min = Other.getUnsignedMin().zext(getBitWidth() * 2);
-    APInt Other_max = Other.getUnsignedMax().zext(getBitWidth() * 2);
+  // Unsigned range first.
+  APInt this_min = getUnsignedMin().zext(getBitWidth() * 2);
+  APInt this_max = getUnsignedMax().zext(getBitWidth() * 2);
+  APInt Other_min = Other.getUnsignedMin().zext(getBitWidth() * 2);
+  APInt Other_max = Other.getUnsignedMax().zext(getBitWidth() * 2);
 
-    ConstantRange Result_zext = ConstantRange(this_min * Other_min,
-                                              this_max * Other_max + 1);
-    ConstantRange UR = Result_zext.truncate(getBitWidth());
+  ConstantRange Result_zext = ConstantRange(this_min * Other_min,
+                                            this_max * Other_max + 1);
+  ConstantRange UR = Result_zext.truncate(getBitWidth());
 
-    // If the unsigned range doesn't wrap, and isn't negative then it's a range
-    // from one positive number to another which is as good as we can generate.
-    // In this case, skip the extra work of generating signed ranges which aren't
-    // going to be better than this range.
-    if (!UR.isUpperWrapped() &&
-        (UR.getUpper().isNonNegative() || UR.getUpper().isMinSignedValue()))
-      return UR;
+  // If the unsigned range doesn't wrap, and isn't negative then it's a range
+  // from one positive number to another which is as good as we can generate.
+  // In this case, skip the extra work of generating signed ranges which aren't
+  // going to be better than this range.
+  if (!UR.isUpperWrapped() &&
+      (UR.getUpper().isNonNegative() || UR.getUpper().isMinSignedValue()))
+    return UR;
 
-    // Now the signed range. Because we could be dealing with negative numbers
-    // here, the lower bound is the smallest of the cartesian product of the
-    // lower and upper ranges; for example:
-    //   [-1,4) * [-2,3) = min(-1*-2, -1*2, 3*-2, 3*2) = -6.
-    // Similarly for the upper bound, swapping min for max.
+  // Now the signed range. Because we could be dealing with negative numbers
+  // here, the lower bound is the smallest of the cartesian product of the
+  // lower and upper ranges; for example:
+  //   [-1,4) * [-2,3) = min(-1*-2, -1*2, 3*-2, 3*2) = -6.
+  // Similarly for the upper bound, swapping min for max.
 
-    this_min = getSignedMin().sext(getBitWidth() * 2);
-    this_max = getSignedMax().sext(getBitWidth() * 2);
-    Other_min = Other.getSignedMin().sext(getBitWidth() * 2);
-    Other_max = Other.getSignedMax().sext(getBitWidth() * 2);
+  this_min = getSignedMin().sext(getBitWidth() * 2);
+  this_max = getSignedMax().sext(getBitWidth() * 2);
+  Other_min = Other.getSignedMin().sext(getBitWidth() * 2);
+  Other_max = Other.getSignedMax().sext(getBitWidth() * 2);
 
-    auto L = {this_min * Other_min, this_min * Other_max,
-              this_max * Other_min, this_max * Other_max};
-    auto Compare = [](const APInt &A, const APInt &B) { return A.slt(B); };
-    ConstantRange Result_sext(std::min(L, Compare), std::max(L, Compare) + 1);
-    ConstantRange SR = Result_sext.truncate(getBitWidth());
+  auto L = {this_min * Other_min, this_min * Other_max,
+            this_max * Other_min, this_max * Other_max};
+  auto Compare = [](const APInt &A, const APInt &B) { return A.slt(B); };
+  ConstantRange Result_sext(std::min(L, Compare), std::max(L, Compare) + 1);
+  ConstantRange SR = Result_sext.truncate(getBitWidth());
 
-    return UR.isSizeStrictlySmallerThan(SR) ? UR : SR;
-  }();
-  logBinaryTF("mul", *this, Other, Result);
-  return Result;
+  return UR.isSizeStrictlySmallerThan(SR) ? UR : SR;
 }
 
 ConstantRange
 ConstantRange::multiplyWithNoWrap(const ConstantRange &Other,
                                   unsigned NoWrapKind,
                                   PreferredRangeType RangeType) const {
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet() || Other.isEmptySet())
-      return getEmpty();
-    if (isFullSet() && Other.isFullSet())
-      return getFull();
-
-    ConstantRange R = multiply(Other);
-
-    if (NoWrapKind & OverflowingBinaryOperator::NoSignedWrap)
-      R = R.intersectWith(smul_sat(Other), RangeType);
-
-    if (NoWrapKind & OverflowingBinaryOperator::NoUnsignedWrap)
-      R = R.intersectWith(umul_sat(Other), RangeType);
-
-    // mul nsw nuw X, Y s>= 0 if X s> 1 or Y s> 1
-    if ((NoWrapKind == (OverflowingBinaryOperator::NoSignedWrap |
-                        OverflowingBinaryOperator::NoUnsignedWrap)) &&
-        !R.isAllNonNegative()) {
-      if (getSignedMin().sgt(1) || Other.getSignedMin().sgt(1))
-        R = R.intersectWith(
-            getNonEmpty(APInt::getZero(getBitWidth()),
-                        APInt::getSignedMinValue(getBitWidth())),
-            RangeType);
-    }
-
-    return R;
-  }();
   using OBO = OverflowingBinaryOperator;
   bool HasNSW = NoWrapKind & OBO::NoSignedWrap;
   bool HasNUW = NoWrapKind & OBO::NoUnsignedWrap;
-  const char *OpName = (HasNSW && HasNUW) ? "mul nsw nuw"
-                       : HasNSW           ? "mul nsw"
-                       : HasNUW           ? "mul nuw"
-                                          : "mul";
-  logBinaryTF(OpName, *this, Other, Result);
+  logBinaryTF((HasNSW && HasNUW) ? "mul nsw nuw"
+              : HasNSW           ? "mul nsw"
+              : HasNUW           ? "mul nuw"
+                                 : "mul",
+              *this, Other);
+  if (isEmptySet() || Other.isEmptySet())
+    return getEmpty();
+  if (isFullSet() && Other.isFullSet())
+    return getFull();
+
+  ConstantRange Result = multiply(Other);
+
+  if (NoWrapKind & OBO::NoSignedWrap)
+    Result = Result.intersectWith(smul_sat(Other), RangeType);
+
+  if (NoWrapKind & OBO::NoUnsignedWrap)
+    Result = Result.intersectWith(umul_sat(Other), RangeType);
+
+  // mul nsw nuw X, Y s>= 0 if X s> 1 or Y s> 1
+  if ((NoWrapKind == (OBO::NoSignedWrap | OBO::NoUnsignedWrap)) &&
+      !Result.isAllNonNegative()) {
+    if (getSignedMin().sgt(1) || Other.getSignedMin().sgt(1))
+      Result = Result.intersectWith(
+          getNonEmpty(APInt::getZero(getBitWidth()),
+                      APInt::getSignedMinValue(getBitWidth())),
+          RangeType);
+  }
+
   return Result;
 }
 
 ConstantRange ConstantRange::smul_fast(const ConstantRange &Other) const {
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet() || Other.isEmptySet())
-      return getEmpty();
+  logBinaryTF("smul_fast", *this, Other);
+  if (isEmptySet() || Other.isEmptySet())
+    return getEmpty();
 
-    APInt Min = getSignedMin();
-    APInt Max = getSignedMax();
-    APInt OtherMin = Other.getSignedMin();
-    APInt OtherMax = Other.getSignedMax();
+  APInt Min = getSignedMin();
+  APInt Max = getSignedMax();
+  APInt OtherMin = Other.getSignedMin();
+  APInt OtherMax = Other.getSignedMax();
 
-    bool O1, O2, O3, O4;
-    auto Muls = {Min.smul_ov(OtherMin, O1), Min.smul_ov(OtherMax, O2),
-                 Max.smul_ov(OtherMin, O3), Max.smul_ov(OtherMax, O4)};
-    if (O1 || O2 || O3 || O4)
-      return getFull();
+  bool O1, O2, O3, O4;
+  auto Muls = {Min.smul_ov(OtherMin, O1), Min.smul_ov(OtherMax, O2),
+               Max.smul_ov(OtherMin, O3), Max.smul_ov(OtherMax, O4)};
+  if (O1 || O2 || O3 || O4)
+    return getFull();
 
-    auto Compare = [](const APInt &A, const APInt &B) { return A.slt(B); };
-    return getNonEmpty(std::min(Muls, Compare), std::max(Muls, Compare) + 1);
-  }();
-  logBinaryTF("smul_fast", *this, Other, Result);
-  return Result;
+  auto Compare = [](const APInt &A, const APInt &B) { return A.slt(B); };
+  return getNonEmpty(std::min(Muls, Compare), std::max(Muls, Compare) + 1);
 }
 
 ConstantRange
 ConstantRange::smax(const ConstantRange &Other) const {
   // X smax Y is: range(smax(X_smin, Y_smin),
   //                    smax(X_smax, Y_smax))
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet() || Other.isEmptySet())
-      return getEmpty();
-    APInt NewL = APIntOps::smax(getSignedMin(), Other.getSignedMin());
-    APInt NewU = APIntOps::smax(getSignedMax(), Other.getSignedMax()) + 1;
-    ConstantRange Res = getNonEmpty(std::move(NewL), std::move(NewU));
-    if (isSignWrappedSet() || Other.isSignWrappedSet())
-      return Res.intersectWith(unionWith(Other, Signed), Signed);
-    return Res;
-  }();
-  logBinaryTF("smax", *this, Other, Result);
-  return Result;
+  logBinaryTF("smax", *this, Other);
+  if (isEmptySet() || Other.isEmptySet())
+    return getEmpty();
+  APInt NewL = APIntOps::smax(getSignedMin(), Other.getSignedMin());
+  APInt NewU = APIntOps::smax(getSignedMax(), Other.getSignedMax()) + 1;
+  ConstantRange Res = getNonEmpty(std::move(NewL), std::move(NewU));
+  if (isSignWrappedSet() || Other.isSignWrappedSet())
+    return Res.intersectWith(unionWith(Other, Signed), Signed);
+  return Res;
 }
 
 ConstantRange
 ConstantRange::umax(const ConstantRange &Other) const {
   // X umax Y is: range(umax(X_umin, Y_umin),
   //                    umax(X_umax, Y_umax))
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet() || Other.isEmptySet())
-      return getEmpty();
-    APInt NewL = APIntOps::umax(getUnsignedMin(), Other.getUnsignedMin());
-    APInt NewU = APIntOps::umax(getUnsignedMax(), Other.getUnsignedMax()) + 1;
-    ConstantRange Res = getNonEmpty(std::move(NewL), std::move(NewU));
-    if (isWrappedSet() || Other.isWrappedSet())
-      return Res.intersectWith(unionWith(Other, Unsigned), Unsigned);
-    return Res;
-  }();
-  logBinaryTF("umax", *this, Other, Result);
-  return Result;
+  logBinaryTF("umax", *this, Other);
+  if (isEmptySet() || Other.isEmptySet())
+    return getEmpty();
+  APInt NewL = APIntOps::umax(getUnsignedMin(), Other.getUnsignedMin());
+  APInt NewU = APIntOps::umax(getUnsignedMax(), Other.getUnsignedMax()) + 1;
+  ConstantRange Res = getNonEmpty(std::move(NewL), std::move(NewU));
+  if (isWrappedSet() || Other.isWrappedSet())
+    return Res.intersectWith(unionWith(Other, Unsigned), Unsigned);
+  return Res;
 }
 
 ConstantRange
 ConstantRange::smin(const ConstantRange &Other) const {
   // X smin Y is: range(smin(X_smin, Y_smin),
   //                    smin(X_smax, Y_smax))
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet() || Other.isEmptySet())
-      return getEmpty();
-    APInt NewL = APIntOps::smin(getSignedMin(), Other.getSignedMin());
-    APInt NewU = APIntOps::smin(getSignedMax(), Other.getSignedMax()) + 1;
-    ConstantRange Res = getNonEmpty(std::move(NewL), std::move(NewU));
-    if (isSignWrappedSet() || Other.isSignWrappedSet())
-      return Res.intersectWith(unionWith(Other, Signed), Signed);
-    return Res;
-  }();
-  logBinaryTF("smin", *this, Other, Result);
-  return Result;
+  logBinaryTF("smin", *this, Other);
+  if (isEmptySet() || Other.isEmptySet())
+    return getEmpty();
+  APInt NewL = APIntOps::smin(getSignedMin(), Other.getSignedMin());
+  APInt NewU = APIntOps::smin(getSignedMax(), Other.getSignedMax()) + 1;
+  ConstantRange Res = getNonEmpty(std::move(NewL), std::move(NewU));
+  if (isSignWrappedSet() || Other.isSignWrappedSet())
+    return Res.intersectWith(unionWith(Other, Signed), Signed);
+  return Res;
 }
 
 ConstantRange
 ConstantRange::umin(const ConstantRange &Other) const {
   // X umin Y is: range(umin(X_umin, Y_umin),
   //                    umin(X_umax, Y_umax))
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet() || Other.isEmptySet())
-      return getEmpty();
-    APInt NewL = APIntOps::umin(getUnsignedMin(), Other.getUnsignedMin());
-    APInt NewU = APIntOps::umin(getUnsignedMax(), Other.getUnsignedMax()) + 1;
-    ConstantRange Res = getNonEmpty(std::move(NewL), std::move(NewU));
-    if (isWrappedSet() || Other.isWrappedSet())
-      return Res.intersectWith(unionWith(Other, Unsigned), Unsigned);
-    return Res;
-  }();
-  logBinaryTF("umin", *this, Other, Result);
-  return Result;
+  logBinaryTF("umin", *this, Other);
+  if (isEmptySet() || Other.isEmptySet())
+    return getEmpty();
+  APInt NewL = APIntOps::umin(getUnsignedMin(), Other.getUnsignedMin());
+  APInt NewU = APIntOps::umin(getUnsignedMax(), Other.getUnsignedMax()) + 1;
+  ConstantRange Res = getNonEmpty(std::move(NewL), std::move(NewU));
+  if (isWrappedSet() || Other.isWrappedSet())
+    return Res.intersectWith(unionWith(Other, Unsigned), Unsigned);
+  return Res;
 }
 
 ConstantRange
 ConstantRange::udiv(const ConstantRange &RHS) const {
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet() || RHS.isEmptySet() || RHS.getUnsignedMax().isZero())
-      return getEmpty();
+  logBinaryTF("udiv", *this, RHS);
+  if (isEmptySet() || RHS.isEmptySet() || RHS.getUnsignedMax().isZero())
+    return getEmpty();
 
-    APInt Lower = getUnsignedMin().udiv(RHS.getUnsignedMax());
+  APInt Lower = getUnsignedMin().udiv(RHS.getUnsignedMax());
 
-    APInt RHS_umin = RHS.getUnsignedMin();
-    if (RHS_umin.isZero()) {
-      // We want the lowest value in RHS excluding zero. Usually that would be 1
-      // except for a range in the form of [X, 1) in which case it would be X.
-      if (RHS.getUpper() == 1)
-        RHS_umin = RHS.getLower();
-      else
-        RHS_umin = 1;
-    }
+  APInt RHS_umin = RHS.getUnsignedMin();
+  if (RHS_umin.isZero()) {
+    // We want the lowest value in RHS excluding zero. Usually that would be 1
+    // except for a range in the form of [X, 1) in which case it would be X.
+    if (RHS.getUpper() == 1)
+      RHS_umin = RHS.getLower();
+    else
+      RHS_umin = 1;
+  }
 
-    APInt Upper = getUnsignedMax().udiv(RHS_umin) + 1;
-    return getNonEmpty(std::move(Lower), std::move(Upper));
-  }();
-  logBinaryTF("udiv", *this, RHS, Result);
-  return Result;
+  APInt Upper = getUnsignedMax().udiv(RHS_umin) + 1;
+  return getNonEmpty(std::move(Lower), std::move(Upper));
 }
 
 ConstantRange ConstantRange::sdiv(const ConstantRange &RHS) const {
-  ConstantRange Result = [&]() -> ConstantRange {
+  logBinaryTF("sdiv", *this, RHS);
   APInt Zero = APInt::getZero(getBitWidth());
   APInt SignedMin = APInt::getSignedMinValue(getBitWidth());
 
@@ -1611,98 +1556,86 @@ ConstantRange ConstantRange::sdiv(const ConstantRange &RHS) const {
   if (contains(Zero) && (!PosR.isEmptySet() || !NegR.isEmptySet()))
     Res = Res.unionWith(ConstantRange(Zero));
   return Res;
-  }();
-  logBinaryTF("sdiv", *this, RHS, Result);
-  return Result;
 }
 
 ConstantRange ConstantRange::urem(const ConstantRange &RHS) const {
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet() || RHS.isEmptySet() || RHS.getUnsignedMax().isZero())
+  logBinaryTF("urem", *this, RHS);
+  if (isEmptySet() || RHS.isEmptySet() || RHS.getUnsignedMax().isZero())
+    return getEmpty();
+
+  if (const APInt *RHSInt = RHS.getSingleElement()) {
+    // UREM by null is UB.
+    if (RHSInt->isZero())
       return getEmpty();
+    // Use APInt's implementation of UREM for single element ranges.
+    if (const APInt *LHSInt = getSingleElement())
+      return {LHSInt->urem(*RHSInt)};
+  }
 
-    if (const APInt *RHSInt = RHS.getSingleElement()) {
-      // UREM by null is UB.
-      if (RHSInt->isZero())
-        return getEmpty();
-      // Use APInt's implementation of UREM for single element ranges.
-      if (const APInt *LHSInt = getSingleElement())
-        return {LHSInt->urem(*RHSInt)};
-    }
+  // L % R for L < R is L.
+  if (getUnsignedMax().ult(RHS.getUnsignedMin()))
+    return *this;
 
-    // L % R for L < R is L.
-    if (getUnsignedMax().ult(RHS.getUnsignedMin()))
-      return *this;
-
-    // L % R is <= L and < R.
-    APInt Upper =
-        APIntOps::umin(getUnsignedMax(), RHS.getUnsignedMax() - 1) + 1;
-    return getNonEmpty(APInt::getZero(getBitWidth()), std::move(Upper));
-  }();
-  logBinaryTF("urem", *this, RHS, Result);
-  return Result;
+  // L % R is <= L and < R.
+  APInt Upper = APIntOps::umin(getUnsignedMax(), RHS.getUnsignedMax() - 1) + 1;
+  return getNonEmpty(APInt::getZero(getBitWidth()), std::move(Upper));
 }
 
 ConstantRange ConstantRange::srem(const ConstantRange &RHS) const {
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet() || RHS.isEmptySet())
+  logBinaryTF("srem", *this, RHS);
+  if (isEmptySet() || RHS.isEmptySet())
+    return getEmpty();
+
+  if (const APInt *RHSInt = RHS.getSingleElement()) {
+    // SREM by null is UB.
+    if (RHSInt->isZero())
       return getEmpty();
+    // Use APInt's implementation of SREM for single element ranges.
+    if (const APInt *LHSInt = getSingleElement())
+      return {LHSInt->srem(*RHSInt)};
+  }
 
-    if (const APInt *RHSInt = RHS.getSingleElement()) {
-      // SREM by null is UB.
-      if (RHSInt->isZero())
-        return getEmpty();
-      // Use APInt's implementation of SREM for single element ranges.
-      if (const APInt *LHSInt = getSingleElement())
-        return {LHSInt->srem(*RHSInt)};
-    }
+  ConstantRange AbsRHS = RHS.abs();
+  APInt MinAbsRHS = AbsRHS.getUnsignedMin();
+  APInt MaxAbsRHS = AbsRHS.getUnsignedMax();
 
-    ConstantRange AbsRHS = RHS.abs();
-    APInt MinAbsRHS = AbsRHS.getUnsignedMin();
-    APInt MaxAbsRHS = AbsRHS.getUnsignedMax();
+  // Modulus by zero is UB.
+  if (MaxAbsRHS.isZero())
+    return getEmpty();
 
-    // Modulus by zero is UB.
-    if (MaxAbsRHS.isZero())
-      return getEmpty();
+  if (MinAbsRHS.isZero())
+    ++MinAbsRHS;
 
-    if (MinAbsRHS.isZero())
-      ++MinAbsRHS;
+  APInt MinLHS = getSignedMin(), MaxLHS = getSignedMax();
 
-    APInt MinLHS = getSignedMin(), MaxLHS = getSignedMax();
+  if (MinLHS.isNonNegative()) {
+    // L % R for L < R is L.
+    if (MaxLHS.ult(MinAbsRHS))
+      return *this;
 
-    if (MinLHS.isNonNegative()) {
-      // L % R for L < R is L.
-      if (MaxLHS.ult(MinAbsRHS))
-        return *this;
-
-      // L % R is <= L and < R.
-      APInt Upper = APIntOps::umin(MaxLHS, MaxAbsRHS - 1) + 1;
-      return ConstantRange(APInt::getZero(getBitWidth()), std::move(Upper));
-    }
-
-    // Same basic logic as above, but the result is negative.
-    if (MaxLHS.isNegative()) {
-      if (MinLHS.ugt(-MinAbsRHS))
-        return *this;
-
-      APInt Lower = APIntOps::umax(MinLHS, -MaxAbsRHS + 1);
-      return ConstantRange(std::move(Lower), APInt(getBitWidth(), 1));
-    }
-
-    // LHS range crosses zero.
-    APInt Lower = APIntOps::umax(MinLHS, -MaxAbsRHS + 1);
+    // L % R is <= L and < R.
     APInt Upper = APIntOps::umin(MaxLHS, MaxAbsRHS - 1) + 1;
-    return ConstantRange(std::move(Lower), std::move(Upper));
-  }();
-  logBinaryTF("srem", *this, RHS, Result);
-  return Result;
+    return ConstantRange(APInt::getZero(getBitWidth()), std::move(Upper));
+  }
+
+  // Same basic logic as above, but the result is negative.
+  if (MaxLHS.isNegative()) {
+    if (MinLHS.ugt(-MinAbsRHS))
+      return *this;
+
+    APInt Lower = APIntOps::umax(MinLHS, -MaxAbsRHS + 1);
+    return ConstantRange(std::move(Lower), APInt(getBitWidth(), 1));
+  }
+
+  // LHS range crosses zero.
+  APInt Lower = APIntOps::umax(MinLHS, -MaxAbsRHS + 1);
+  APInt Upper = APIntOps::umin(MaxLHS, MaxAbsRHS - 1) + 1;
+  return ConstantRange(std::move(Lower), std::move(Upper));
 }
 
 ConstantRange ConstantRange::binaryNot() const {
-  ConstantRange Result =
-      ConstantRange(APInt::getAllOnes(getBitWidth())).sub(*this);
-  logUnaryTF("not", *this, Result);
-  return Result;
+  logUnaryTF("not", *this);
+  return ConstantRange(APInt::getAllOnes(getBitWidth())).sub(*this);
 }
 
 /// Estimate the 'bit-masked AND' operation's lower bound.
@@ -1763,125 +1696,112 @@ static APInt estimateBitMaskedAndLowerBound(const ConstantRange &LHS,
 }
 
 ConstantRange ConstantRange::binaryAnd(const ConstantRange &Other) const {
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet() || Other.isEmptySet())
-      return getEmpty();
+  logBinaryTF("and", *this, Other);
+  if (isEmptySet() || Other.isEmptySet())
+    return getEmpty();
 
-    ConstantRange KnownBitsRange =
-        fromKnownBits(toKnownBits() & Other.toKnownBits(), false);
-    auto LowerBound = estimateBitMaskedAndLowerBound(*this, Other);
-    ConstantRange UMinUMaxRange = getNonEmpty(
-        LowerBound,
-        APIntOps::umin(Other.getUnsignedMax(), getUnsignedMax()) + 1);
-    return KnownBitsRange.intersectWith(UMinUMaxRange);
-  }();
-  logBinaryTF("and", *this, Other, Result);
-  return Result;
+  ConstantRange KnownBitsRange =
+      fromKnownBits(toKnownBits() & Other.toKnownBits(), false);
+  auto LowerBound = estimateBitMaskedAndLowerBound(*this, Other);
+  ConstantRange UMinUMaxRange = getNonEmpty(
+      LowerBound, APIntOps::umin(Other.getUnsignedMax(), getUnsignedMax()) + 1);
+  return KnownBitsRange.intersectWith(UMinUMaxRange);
 }
 
 ConstantRange ConstantRange::binaryOr(const ConstantRange &Other) const {
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet() || Other.isEmptySet())
-      return getEmpty();
+  logBinaryTF("or", *this, Other);
+  if (isEmptySet() || Other.isEmptySet())
+    return getEmpty();
 
-    ConstantRange KnownBitsRange =
-        fromKnownBits(toKnownBits() | Other.toKnownBits(), false);
+  ConstantRange KnownBitsRange =
+      fromKnownBits(toKnownBits() | Other.toKnownBits(), false);
 
-    //      ~a & ~b    >= x
-    // <=>  ~(~a & ~b) <= ~x
-    // <=>  a | b      <= ~x
-    // <=>  a | b      <  ~x + 1 = -x
-    // thus, UpperBound(a | b) == -LowerBound(~a & ~b)
-    auto UpperBound =
-        -estimateBitMaskedAndLowerBound(binaryNot(), Other.binaryNot());
-    // Upper wrapped range.
-    ConstantRange UMaxUMinRange = getNonEmpty(
-        APIntOps::umax(getUnsignedMin(), Other.getUnsignedMin()), UpperBound);
-    return KnownBitsRange.intersectWith(UMaxUMinRange);
-  }();
-  logBinaryTF("or", *this, Other, Result);
-  return Result;
+  //      ~a & ~b    >= x
+  // <=>  ~(~a & ~b) <= ~x
+  // <=>  a | b      <= ~x
+  // <=>  a | b      <  ~x + 1 = -x
+  // thus, UpperBound(a | b) == -LowerBound(~a & ~b)
+  auto UpperBound =
+      -estimateBitMaskedAndLowerBound(binaryNot(), Other.binaryNot());
+  // Upper wrapped range.
+  ConstantRange UMaxUMinRange = getNonEmpty(
+      APIntOps::umax(getUnsignedMin(), Other.getUnsignedMin()), UpperBound);
+  return KnownBitsRange.intersectWith(UMaxUMinRange);
 }
 
 ConstantRange ConstantRange::binaryXor(const ConstantRange &Other) const {
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet() || Other.isEmptySet())
-      return getEmpty();
+  logBinaryTF("xor", *this, Other);
+  if (isEmptySet() || Other.isEmptySet())
+    return getEmpty();
 
-    // Use APInt's implementation of XOR for single element ranges.
-    if (isSingleElement() && Other.isSingleElement())
-      return {*getSingleElement() ^ *Other.getSingleElement()};
+  // Use APInt's implementation of XOR for single element ranges.
+  if (isSingleElement() && Other.isSingleElement())
+    return {*getSingleElement() ^ *Other.getSingleElement()};
 
-    // Special-case binary complement, since we can give a precise answer.
-    if (Other.isSingleElement() && Other.getSingleElement()->isAllOnes())
-      return binaryNot();
-    if (isSingleElement() && getSingleElement()->isAllOnes())
-      return Other.binaryNot();
+  // Special-case binary complement, since we can give a precise answer.
+  if (Other.isSingleElement() && Other.getSingleElement()->isAllOnes())
+    return binaryNot();
+  if (isSingleElement() && getSingleElement()->isAllOnes())
+    return Other.binaryNot();
 
-    KnownBits LHSKnown = toKnownBits();
-    KnownBits RHSKnown = Other.toKnownBits();
-    KnownBits Known = LHSKnown ^ RHSKnown;
-    ConstantRange CR = fromKnownBits(Known, /*IsSigned*/ false);
-    // Typically the following code doesn't improve the result if BW = 1.
-    if (getBitWidth() == 1)
-      return CR;
-
-    // If LHS is known to be the subset of RHS, treat LHS ^ RHS as RHS -nuw/nsw
-    // LHS. If RHS is known to be the subset of LHS, treat LHS ^ RHS as LHS
-    // -nuw/nsw RHS.
-    if ((~LHSKnown.Zero).isSubsetOf(RHSKnown.One))
-      CR = CR.intersectWith(Other.sub(*this), PreferredRangeType::Unsigned);
-    else if ((~RHSKnown.Zero).isSubsetOf(LHSKnown.One))
-      CR = CR.intersectWith(this->sub(Other), PreferredRangeType::Unsigned);
+  KnownBits LHSKnown = toKnownBits();
+  KnownBits RHSKnown = Other.toKnownBits();
+  KnownBits Known = LHSKnown ^ RHSKnown;
+  ConstantRange CR = fromKnownBits(Known, /*IsSigned*/ false);
+  // Typically the following code doesn't improve the result if BW = 1.
+  if (getBitWidth() == 1)
     return CR;
-  }();
-  logBinaryTF("xor", *this, Other, Result);
-  return Result;
+
+  // If LHS is known to be the subset of RHS, treat LHS ^ RHS as RHS -nuw/nsw
+  // LHS. If RHS is known to be the subset of LHS, treat LHS ^ RHS as LHS
+  // -nuw/nsw RHS.
+  if ((~LHSKnown.Zero).isSubsetOf(RHSKnown.One))
+    CR = CR.intersectWith(Other.sub(*this), PreferredRangeType::Unsigned);
+  else if ((~RHSKnown.Zero).isSubsetOf(LHSKnown.One))
+    CR = CR.intersectWith(this->sub(Other), PreferredRangeType::Unsigned);
+  return CR;
 }
 
 ConstantRange
 ConstantRange::shl(const ConstantRange &Other) const {
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet() || Other.isEmptySet())
+  logBinaryTF("shl", *this, Other);
+  if (isEmptySet() || Other.isEmptySet())
+    return getEmpty();
+
+  APInt Min = getUnsignedMin();
+  APInt Max = getUnsignedMax();
+  if (const APInt *RHS = Other.getSingleElement()) {
+    unsigned BW = getBitWidth();
+    if (RHS->uge(BW))
       return getEmpty();
 
-    APInt Min = getUnsignedMin();
-    APInt Max = getUnsignedMax();
-    if (const APInt *RHS = Other.getSingleElement()) {
-      unsigned BW = getBitWidth();
-      if (RHS->uge(BW))
-        return getEmpty();
+    unsigned EqualLeadingBits = (Min ^ Max).countl_zero();
+    if (RHS->ule(EqualLeadingBits))
+      return getNonEmpty(Min << *RHS, (Max << *RHS) + 1);
 
-      unsigned EqualLeadingBits = (Min ^ Max).countl_zero();
-      if (RHS->ule(EqualLeadingBits))
-        return getNonEmpty(Min << *RHS, (Max << *RHS) + 1);
+    return getNonEmpty(APInt::getZero(BW),
+                       APInt::getBitsSetFrom(BW, RHS->getZExtValue()) + 1);
+  }
 
-      return getNonEmpty(APInt::getZero(BW),
-                         APInt::getBitsSetFrom(BW, RHS->getZExtValue()) + 1);
-    }
-
-    APInt OtherMax = Other.getUnsignedMax();
-    if (isAllNegative() && OtherMax.ule(Min.countl_one())) {
-      // For negative numbers, if the shift does not overflow in a signed sense,
-      // a larger shift will make the number smaller.
-      Max <<= Other.getUnsignedMin();
-      Min <<= OtherMax;
-      return ConstantRange::getNonEmpty(std::move(Min), std::move(Max) + 1);
-    }
-
-    // There's overflow!
-    if (OtherMax.ugt(Max.countl_zero()))
-      return getFull();
-
-    // FIXME: implement the other tricky cases
-
-    Min <<= Other.getUnsignedMin();
-    Max <<= OtherMax;
-
+  APInt OtherMax = Other.getUnsignedMax();
+  if (isAllNegative() && OtherMax.ule(Min.countl_one())) {
+    // For negative numbers, if the shift does not overflow in a signed sense,
+    // a larger shift will make the number smaller.
+    Max <<= Other.getUnsignedMin();
+    Min <<= OtherMax;
     return ConstantRange::getNonEmpty(std::move(Min), std::move(Max) + 1);
-  }();
-  logBinaryTF("shl", *this, Other, Result);
-  return Result;
+  }
+
+  // There's overflow!
+  if (OtherMax.ugt(Max.countl_zero()))
+    return getFull();
+
+  // FIXME: implement the other tricky cases
+
+  Min <<= Other.getUnsignedMin();
+  Max <<= OtherMax;
+
+  return ConstantRange::getNonEmpty(std::move(Min), std::move(Max) + 1);
 }
 
 static ConstantRange computeShlNUW(const ConstantRange &LHS,
@@ -1974,204 +1894,171 @@ ConstantRange ConstantRange::shlWithNoWrap(const ConstantRange &Other,
   if (NoWrapKind == 0)
     return shl(Other);
   using OBO = OverflowingBinaryOperator;
-  ConstantRange Result = [&]() -> ConstantRange {
-    switch (NoWrapKind) {
-    case OBO::NoSignedWrap:
-      return computeShlNSW(*this, Other);
-    case OBO::NoUnsignedWrap:
-      return computeShlNUW(*this, Other);
-    case OBO::NoSignedWrap | OBO::NoUnsignedWrap:
-      return computeShlNSW(*this, Other)
-          .intersectWith(computeShlNUW(*this, Other), RangeType);
-    default:
-      llvm_unreachable("Invalid NoWrapKind");
-    }
-  }();
-  const char *OpName = (NoWrapKind == OBO::NoSignedWrap)    ? "shl nsw"
-                       : (NoWrapKind == OBO::NoUnsignedWrap) ? "shl nuw"
-                                                             : "shl nsw nuw";
-  logBinaryTF(OpName, *this, Other, Result);
-  return Result;
+  logBinaryTF((NoWrapKind == OBO::NoSignedWrap)    ? "shl nsw"
+              : (NoWrapKind == OBO::NoUnsignedWrap) ? "shl nuw"
+                                                    : "shl nsw nuw",
+              *this, Other);
+  switch (NoWrapKind) {
+  case OBO::NoSignedWrap:
+    return computeShlNSW(*this, Other);
+  case OBO::NoUnsignedWrap:
+    return computeShlNUW(*this, Other);
+  case OBO::NoSignedWrap | OBO::NoUnsignedWrap:
+    return computeShlNSW(*this, Other)
+        .intersectWith(computeShlNUW(*this, Other), RangeType);
+  default:
+    llvm_unreachable("Invalid NoWrapKind");
+  }
 }
 
 ConstantRange
 ConstantRange::lshr(const ConstantRange &Other) const {
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet() || Other.isEmptySet())
-      return getEmpty();
+  logBinaryTF("lshr", *this, Other);
+  if (isEmptySet() || Other.isEmptySet())
+    return getEmpty();
 
-    APInt max = getUnsignedMax().lshr(Other.getUnsignedMin()) + 1;
-    APInt min = getUnsignedMin().lshr(Other.getUnsignedMax());
-    return getNonEmpty(std::move(min), std::move(max));
-  }();
-  logBinaryTF("lshr", *this, Other, Result);
-  return Result;
+  APInt max = getUnsignedMax().lshr(Other.getUnsignedMin()) + 1;
+  APInt min = getUnsignedMin().lshr(Other.getUnsignedMax());
+  return getNonEmpty(std::move(min), std::move(max));
 }
 
 ConstantRange
 ConstantRange::ashr(const ConstantRange &Other) const {
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet() || Other.isEmptySet())
-      return getEmpty();
+  logBinaryTF("ashr", *this, Other);
+  if (isEmptySet() || Other.isEmptySet())
+    return getEmpty();
 
-    // May straddle zero, so handle both positive and negative cases.
-    // 'PosMax' is the upper bound of the result of the ashr
-    // operation, when Upper of the LHS of ashr is a non-negative.
-    // number. Since ashr of a non-negative number will result in a
-    // smaller number, the Upper value of LHS is shifted right with
-    // the minimum value of 'Other' instead of the maximum value.
-    APInt PosMax = getSignedMax().ashr(Other.getUnsignedMin()) + 1;
+  // May straddle zero, so handle both positive and negative cases.
+  // 'PosMax' is the upper bound of the result of the ashr
+  // operation, when Upper of the LHS of ashr is a non-negative.
+  // number. Since ashr of a non-negative number will result in a
+  // smaller number, the Upper value of LHS is shifted right with
+  // the minimum value of 'Other' instead of the maximum value.
+  APInt PosMax = getSignedMax().ashr(Other.getUnsignedMin()) + 1;
 
-    // 'PosMin' is the lower bound of the result of the ashr
-    // operation, when Lower of the LHS is a non-negative number.
-    // Since ashr of a non-negative number will result in a smaller
-    // number, the Lower value of LHS is shifted right with the
-    // maximum value of 'Other'.
-    APInt PosMin = getSignedMin().ashr(Other.getUnsignedMax());
+  // 'PosMin' is the lower bound of the result of the ashr
+  // operation, when Lower of the LHS is a non-negative number.
+  // Since ashr of a non-negative number will result in a smaller
+  // number, the Lower value of LHS is shifted right with the
+  // maximum value of 'Other'.
+  APInt PosMin = getSignedMin().ashr(Other.getUnsignedMax());
 
-    // 'NegMax' is the upper bound of the result of the ashr
-    // operation, when Upper of the LHS of ashr is a negative number.
-    // Since 'ashr' of a negative number will result in a bigger
-    // number, the Upper value of LHS is shifted right with the
-    // maximum value of 'Other'.
-    APInt NegMax = getSignedMax().ashr(Other.getUnsignedMax()) + 1;
+  // 'NegMax' is the upper bound of the result of the ashr
+  // operation, when Upper of the LHS of ashr is a negative number.
+  // Since 'ashr' of a negative number will result in a bigger
+  // number, the Upper value of LHS is shifted right with the
+  // maximum value of 'Other'.
+  APInt NegMax = getSignedMax().ashr(Other.getUnsignedMax()) + 1;
 
-    // 'NegMin' is the lower bound of the result of the ashr
-    // operation, when Lower of the LHS of ashr is a negative number.
-    // Since 'ashr' of a negative number will result in a bigger
-    // number, the Lower value of LHS is shifted right with the
-    // minimum value of 'Other'.
-    APInt NegMin = getSignedMin().ashr(Other.getUnsignedMin());
+  // 'NegMin' is the lower bound of the result of the ashr
+  // operation, when Lower of the LHS of ashr is a negative number.
+  // Since 'ashr' of a negative number will result in a bigger
+  // number, the Lower value of LHS is shifted right with the
+  // minimum value of 'Other'.
+  APInt NegMin = getSignedMin().ashr(Other.getUnsignedMin());
 
-    APInt max, min;
-    if (getSignedMin().isNonNegative()) {
-      // Upper and Lower of LHS are non-negative.
-      min = PosMin;
-      max = PosMax;
-    } else if (getSignedMax().isNegative()) {
-      // Upper and Lower of LHS are negative.
-      min = NegMin;
-      max = NegMax;
-    } else {
-      // Upper is non-negative and Lower is negative.
-      min = NegMin;
-      max = PosMax;
-    }
-    return getNonEmpty(std::move(min), std::move(max));
-  }();
-  logBinaryTF("ashr", *this, Other, Result);
-  return Result;
+  APInt max, min;
+  if (getSignedMin().isNonNegative()) {
+    // Upper and Lower of LHS are non-negative.
+    min = PosMin;
+    max = PosMax;
+  } else if (getSignedMax().isNegative()) {
+    // Upper and Lower of LHS are negative.
+    min = NegMin;
+    max = NegMax;
+  } else {
+    // Upper is non-negative and Lower is negative.
+    min = NegMin;
+    max = PosMax;
+  }
+  return getNonEmpty(std::move(min), std::move(max));
 }
 
 ConstantRange ConstantRange::uadd_sat(const ConstantRange &Other) const {
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet() || Other.isEmptySet())
-      return getEmpty();
-    APInt NewL = getUnsignedMin().uadd_sat(Other.getUnsignedMin());
-    APInt NewU = getUnsignedMax().uadd_sat(Other.getUnsignedMax()) + 1;
-    return getNonEmpty(std::move(NewL), std::move(NewU));
-  }();
-  logBinaryTF("uadd_sat", *this, Other, Result);
-  return Result;
+  logBinaryTF("uadd_sat", *this, Other);
+  if (isEmptySet() || Other.isEmptySet())
+    return getEmpty();
+  APInt NewL = getUnsignedMin().uadd_sat(Other.getUnsignedMin());
+  APInt NewU = getUnsignedMax().uadd_sat(Other.getUnsignedMax()) + 1;
+  return getNonEmpty(std::move(NewL), std::move(NewU));
 }
 
 ConstantRange ConstantRange::sadd_sat(const ConstantRange &Other) const {
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet() || Other.isEmptySet())
-      return getEmpty();
-    APInt NewL = getSignedMin().sadd_sat(Other.getSignedMin());
-    APInt NewU = getSignedMax().sadd_sat(Other.getSignedMax()) + 1;
-    return getNonEmpty(std::move(NewL), std::move(NewU));
-  }();
-  logBinaryTF("sadd_sat", *this, Other, Result);
-  return Result;
+  logBinaryTF("sadd_sat", *this, Other);
+  if (isEmptySet() || Other.isEmptySet())
+    return getEmpty();
+  APInt NewL = getSignedMin().sadd_sat(Other.getSignedMin());
+  APInt NewU = getSignedMax().sadd_sat(Other.getSignedMax()) + 1;
+  return getNonEmpty(std::move(NewL), std::move(NewU));
 }
 
 ConstantRange ConstantRange::usub_sat(const ConstantRange &Other) const {
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet() || Other.isEmptySet())
-      return getEmpty();
-    APInt NewL = getUnsignedMin().usub_sat(Other.getUnsignedMax());
-    APInt NewU = getUnsignedMax().usub_sat(Other.getUnsignedMin()) + 1;
-    return getNonEmpty(std::move(NewL), std::move(NewU));
-  }();
-  logBinaryTF("usub_sat", *this, Other, Result);
-  return Result;
+  logBinaryTF("usub_sat", *this, Other);
+  if (isEmptySet() || Other.isEmptySet())
+    return getEmpty();
+  APInt NewL = getUnsignedMin().usub_sat(Other.getUnsignedMax());
+  APInt NewU = getUnsignedMax().usub_sat(Other.getUnsignedMin()) + 1;
+  return getNonEmpty(std::move(NewL), std::move(NewU));
 }
 
 ConstantRange ConstantRange::ssub_sat(const ConstantRange &Other) const {
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet() || Other.isEmptySet())
-      return getEmpty();
-    APInt NewL = getSignedMin().ssub_sat(Other.getSignedMax());
-    APInt NewU = getSignedMax().ssub_sat(Other.getSignedMin()) + 1;
-    return getNonEmpty(std::move(NewL), std::move(NewU));
-  }();
-  logBinaryTF("ssub_sat", *this, Other, Result);
-  return Result;
+  logBinaryTF("ssub_sat", *this, Other);
+  if (isEmptySet() || Other.isEmptySet())
+    return getEmpty();
+  APInt NewL = getSignedMin().ssub_sat(Other.getSignedMax());
+  APInt NewU = getSignedMax().ssub_sat(Other.getSignedMin()) + 1;
+  return getNonEmpty(std::move(NewL), std::move(NewU));
 }
 
 ConstantRange ConstantRange::umul_sat(const ConstantRange &Other) const {
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet() || Other.isEmptySet())
-      return getEmpty();
-    APInt NewL = getUnsignedMin().umul_sat(Other.getUnsignedMin());
-    APInt NewU = getUnsignedMax().umul_sat(Other.getUnsignedMax()) + 1;
-    return getNonEmpty(std::move(NewL), std::move(NewU));
-  }();
-  logBinaryTF("umul_sat", *this, Other, Result);
-  return Result;
+  logBinaryTF("umul_sat", *this, Other);
+  if (isEmptySet() || Other.isEmptySet())
+    return getEmpty();
+  APInt NewL = getUnsignedMin().umul_sat(Other.getUnsignedMin());
+  APInt NewU = getUnsignedMax().umul_sat(Other.getUnsignedMax()) + 1;
+  return getNonEmpty(std::move(NewL), std::move(NewU));
 }
 
 ConstantRange ConstantRange::smul_sat(const ConstantRange &Other) const {
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet() || Other.isEmptySet())
-      return getEmpty();
+  logBinaryTF("smul_sat", *this, Other);
+  if (isEmptySet() || Other.isEmptySet())
+    return getEmpty();
 
-    // Because we could be dealing with negative numbers here, the lower bound
-    // is the smallest of the cartesian product of the lower and upper ranges;
-    // for example:
-    //   [-1,4) * [-2,3) = min(-1*-2, -1*2, 3*-2, 3*2) = -6.
-    // Similarly for the upper bound, swapping min for max.
+  // Because we could be dealing with negative numbers here, the lower bound is
+  // the smallest of the cartesian product of the lower and upper ranges;
+  // for example:
+  //   [-1,4) * [-2,3) = min(-1*-2, -1*2, 3*-2, 3*2) = -6.
+  // Similarly for the upper bound, swapping min for max.
 
-    APInt Min = getSignedMin();
-    APInt Max = getSignedMax();
-    APInt OtherMin = Other.getSignedMin();
-    APInt OtherMax = Other.getSignedMax();
+  APInt Min = getSignedMin();
+  APInt Max = getSignedMax();
+  APInt OtherMin = Other.getSignedMin();
+  APInt OtherMax = Other.getSignedMax();
 
-    auto L = {Min.smul_sat(OtherMin), Min.smul_sat(OtherMax),
-              Max.smul_sat(OtherMin), Max.smul_sat(OtherMax)};
-    auto Compare = [](const APInt &A, const APInt &B) { return A.slt(B); };
-    return getNonEmpty(std::min(L, Compare), std::max(L, Compare) + 1);
-  }();
-  logBinaryTF("smul_sat", *this, Other, Result);
-  return Result;
+  auto L = {Min.smul_sat(OtherMin), Min.smul_sat(OtherMax),
+            Max.smul_sat(OtherMin), Max.smul_sat(OtherMax)};
+  auto Compare = [](const APInt &A, const APInt &B) { return A.slt(B); };
+  return getNonEmpty(std::min(L, Compare), std::max(L, Compare) + 1);
 }
 
 ConstantRange ConstantRange::ushl_sat(const ConstantRange &Other) const {
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet() || Other.isEmptySet())
-      return getEmpty();
-    APInt NewL = getUnsignedMin().ushl_sat(Other.getUnsignedMin());
-    APInt NewU = getUnsignedMax().ushl_sat(Other.getUnsignedMax()) + 1;
-    return getNonEmpty(std::move(NewL), std::move(NewU));
-  }();
-  logBinaryTF("ushl_sat", *this, Other, Result);
-  return Result;
+  logBinaryTF("ushl_sat", *this, Other);
+  if (isEmptySet() || Other.isEmptySet())
+    return getEmpty();
+  APInt NewL = getUnsignedMin().ushl_sat(Other.getUnsignedMin());
+  APInt NewU = getUnsignedMax().ushl_sat(Other.getUnsignedMax()) + 1;
+  return getNonEmpty(std::move(NewL), std::move(NewU));
 }
 
 ConstantRange ConstantRange::sshl_sat(const ConstantRange &Other) const {
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet() || Other.isEmptySet())
-      return getEmpty();
-    APInt Min = getSignedMin(), Max = getSignedMax();
-    APInt ShAmtMin = Other.getUnsignedMin(), ShAmtMax = Other.getUnsignedMax();
-    APInt NewL = Min.sshl_sat(Min.isNonNegative() ? ShAmtMin : ShAmtMax);
-    APInt NewU = Max.sshl_sat(Max.isNegative() ? ShAmtMin : ShAmtMax) + 1;
-    return getNonEmpty(std::move(NewL), std::move(NewU));
-  }();
-  logBinaryTF("sshl_sat", *this, Other, Result);
-  return Result;
+  logBinaryTF("sshl_sat", *this, Other);
+  if (isEmptySet() || Other.isEmptySet())
+    return getEmpty();
+  APInt Min = getSignedMin(), Max = getSignedMax();
+  APInt ShAmtMin = Other.getUnsignedMin(), ShAmtMax = Other.getUnsignedMax();
+  APInt NewL = Min.sshl_sat(Min.isNonNegative() ? ShAmtMin : ShAmtMax);
+  APInt NewU = Max.sshl_sat(Max.isNegative() ? ShAmtMin : ShAmtMax) + 1;
+  return getNonEmpty(std::move(NewL), std::move(NewU));
 }
 
 ConstantRange ConstantRange::inverse() const {
@@ -2183,53 +2070,50 @@ ConstantRange ConstantRange::inverse() const {
 }
 
 ConstantRange ConstantRange::abs(bool IntMinIsPoison) const {
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet())
+  logUnaryTF(IntMinIsPoison ? "abs poison" : "abs", *this);
+  if (isEmptySet())
+    return getEmpty();
+
+  if (isSignWrappedSet()) {
+    APInt Lo;
+    // Check whether the range crosses zero.
+    if (Upper.isStrictlyPositive() || !Lower.isStrictlyPositive())
+      Lo = APInt::getZero(getBitWidth());
+    else
+      Lo = APIntOps::umin(Lower, -Upper + 1);
+
+    // If SignedMin is not poison, then it is included in the result range.
+    if (IntMinIsPoison)
+      return ConstantRange(Lo, APInt::getSignedMinValue(getBitWidth()));
+    else
+      return ConstantRange(Lo, APInt::getSignedMinValue(getBitWidth()) + 1);
+  }
+
+  APInt SMin = getSignedMin(), SMax = getSignedMax();
+
+  // Skip SignedMin if it is poison.
+  if (IntMinIsPoison && SMin.isMinSignedValue()) {
+    // The range may become empty if it *only* contains SignedMin.
+    if (SMax.isMinSignedValue())
       return getEmpty();
+    ++SMin;
+  }
 
-    if (isSignWrappedSet()) {
-      APInt Lo;
-      // Check whether the range crosses zero.
-      if (Upper.isStrictlyPositive() || !Lower.isStrictlyPositive())
-        Lo = APInt::getZero(getBitWidth());
-      else
-        Lo = APIntOps::umin(Lower, -Upper + 1);
+  // All non-negative.
+  if (SMin.isNonNegative())
+    return ConstantRange(SMin, SMax + 1);
 
-      // If SignedMin is not poison, then it is included in the result range.
-      if (IntMinIsPoison)
-        return ConstantRange(Lo, APInt::getSignedMinValue(getBitWidth()));
-      else
-        return ConstantRange(Lo, APInt::getSignedMinValue(getBitWidth()) + 1);
-    }
+  // All negative.
+  if (SMax.isNegative())
+    return ConstantRange(-SMax, -SMin + 1);
 
-    APInt SMin = getSignedMin(), SMax = getSignedMax();
-
-    // Skip SignedMin if it is poison.
-    if (IntMinIsPoison && SMin.isMinSignedValue()) {
-      // The range may become empty if it *only* contains SignedMin.
-      if (SMax.isMinSignedValue())
-        return getEmpty();
-      ++SMin;
-    }
-
-    // All non-negative.
-    if (SMin.isNonNegative())
-      return ConstantRange(SMin, SMax + 1);
-
-    // All negative.
-    if (SMax.isNegative())
-      return ConstantRange(-SMax, -SMin + 1);
-
-    // Range crosses zero.
-    return ConstantRange::getNonEmpty(APInt::getZero(getBitWidth()),
-                                      APIntOps::umax(-SMin, SMax) + 1);
-  }();
-  logUnaryTF(IntMinIsPoison ? "abs poison" : "abs", *this, Result);
-  return Result;
+  // Range crosses zero.
+  return ConstantRange::getNonEmpty(APInt::getZero(getBitWidth()),
+                                    APIntOps::umax(-SMin, SMax) + 1);
 }
 
 ConstantRange ConstantRange::ctlz(bool ZeroIsPoison) const {
-  ConstantRange Result = [&]() -> ConstantRange {
+  logUnaryTF(ZeroIsPoison ? "ctlz poison" : "ctlz", *this);
   if (isEmptySet())
     return getEmpty();
 
@@ -2265,9 +2149,6 @@ ConstantRange ConstantRange::ctlz(bool ZeroIsPoison) const {
   // the result of countLeadingZero of the two extremes.
   return getNonEmpty(APInt(getBitWidth(), getUnsignedMax().countl_zero()),
                      APInt(getBitWidth(), getUnsignedMin().countl_zero()) + 1);
-  }();
-  logUnaryTF(ZeroIsPoison ? "ctlz poison" : "ctlz", *this, Result);
-  return Result;
 }
 
 static ConstantRange getUnsignedCountTrailingZerosRange(const APInt &Lower,
@@ -2293,7 +2174,7 @@ static ConstantRange getUnsignedCountTrailingZerosRange(const APInt &Lower,
 }
 
 ConstantRange ConstantRange::cttz(bool ZeroIsPoison) const {
-  ConstantRange Result = [&]() -> ConstantRange {
+  logUnaryTF(ZeroIsPoison ? "cttz poison" : "cttz", *this);
   if (isEmptySet())
     return getEmpty();
 
@@ -2337,9 +2218,6 @@ ConstantRange ConstantRange::cttz(bool ZeroIsPoison) const {
   // Handle [0, Upper)
   ConstantRange CR2 = getUnsignedCountTrailingZerosRange(Zero, Upper);
   return CR1.unionWith(CR2);
-  }();
-  logUnaryTF(ZeroIsPoison ? "cttz poison" : "cttz", *this, Result);
-  return Result;
 }
 
 static ConstantRange getUnsignedPopCountRange(const APInt &Lower,
@@ -2369,27 +2247,24 @@ static ConstantRange getUnsignedPopCountRange(const APInt &Lower,
 }
 
 ConstantRange ConstantRange::ctpop() const {
-  ConstantRange Result = [&]() -> ConstantRange {
-    if (isEmptySet())
-      return getEmpty();
+  logUnaryTF("ctpop", *this);
+  if (isEmptySet())
+    return getEmpty();
 
-    unsigned BitWidth = getBitWidth();
-    APInt Zero = APInt::getZero(BitWidth);
-    if (isFullSet())
-      return getNonEmpty(Zero, APInt(BitWidth, BitWidth) + 1);
-    if (!isWrappedSet())
-      return getUnsignedPopCountRange(Lower, Upper);
-    // The range is wrapped. We decompose it into two ranges, [0, Upper) and
-    // [Lower, 0).
-    // Handle [Lower, 0) == [Lower, Max]
-    ConstantRange CR1 = ConstantRange(APInt(BitWidth, Lower.countl_one()),
-                                      APInt(BitWidth, BitWidth + 1));
-    // Handle [0, Upper)
-    ConstantRange CR2 = getUnsignedPopCountRange(Zero, Upper);
-    return CR1.unionWith(CR2);
-  }();
-  logUnaryTF("ctpop", *this, Result);
-  return Result;
+  unsigned BitWidth = getBitWidth();
+  APInt Zero = APInt::getZero(BitWidth);
+  if (isFullSet())
+    return getNonEmpty(Zero, APInt(BitWidth, BitWidth) + 1);
+  if (!isWrappedSet())
+    return getUnsignedPopCountRange(Lower, Upper);
+  // The range is wrapped. We decompose it into two ranges, [0, Upper) and
+  // [Lower, 0).
+  // Handle [Lower, 0) == [Lower, Max]
+  ConstantRange CR1 = ConstantRange(APInt(BitWidth, Lower.countl_one()),
+                                    APInt(BitWidth, BitWidth + 1));
+  // Handle [0, Upper)
+  ConstantRange CR2 = getUnsignedPopCountRange(Zero, Upper);
+  return CR1.unionWith(CR2);
 }
 
 ConstantRange::OverflowResult ConstantRange::unsignedAddMayOverflow(
