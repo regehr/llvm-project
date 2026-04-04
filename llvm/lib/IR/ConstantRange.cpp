@@ -84,6 +84,16 @@ static void logUnaryTF(const char *Op, const ConstantRange &Input) {
   fprintf(F, "%s i%u %s\n", Op, Input.getBitWidth(), crStr(Input).c_str());
 }
 
+static std::string noWrapOpName(const char *Base, unsigned NoWrapKind) {
+  using OBO = OverflowingBinaryOperator;
+  std::string Name = Base;
+  if (NoWrapKind & OBO::NoSignedWrap)
+    Name += " nsw";
+  if (NoWrapKind & OBO::NoUnsignedWrap)
+    Name += " nuw";
+  return Name;
+}
+
 static void logCastTF(const char *Op, const ConstantRange &Input,
                       uint32_t DstBW) {
   FILE *F = getCRLogFile();
@@ -1181,13 +1191,7 @@ ConstantRange ConstantRange::addWithNoWrap(const ConstantRange &Other,
   // Calculate the range for "X + Y" which is guaranteed not to wrap(overflow).
   // (X is from this, and Y is from Other)
   using OBO = OverflowingBinaryOperator;
-  bool HasNSW = NoWrapKind & OBO::NoSignedWrap;
-  bool HasNUW = NoWrapKind & OBO::NoUnsignedWrap;
-  logBinaryTF((HasNSW && HasNUW) ? "add nsw nuw"
-              : HasNSW           ? "add nsw"
-              : HasNUW           ? "add nuw"
-                                 : "add",
-              *this, Other);
+  logBinaryTF(noWrapOpName("add", NoWrapKind).c_str(), *this, Other);
   if (isEmptySet() || Other.isEmptySet())
     return getEmpty();
   if (isFullSet() && Other.isFullSet())
@@ -1236,13 +1240,7 @@ ConstantRange ConstantRange::subWithNoWrap(const ConstantRange &Other,
   // Calculate the range for "X - Y" which is guaranteed not to wrap(overflow).
   // (X is from this, and Y is from Other)
   using OBO = OverflowingBinaryOperator;
-  bool HasNSW = NoWrapKind & OBO::NoSignedWrap;
-  bool HasNUW = NoWrapKind & OBO::NoUnsignedWrap;
-  logBinaryTF((HasNSW && HasNUW) ? "sub nsw nuw"
-              : HasNSW           ? "sub nsw"
-              : HasNUW           ? "sub nuw"
-                                 : "sub",
-              *this, Other);
+  logBinaryTF(noWrapOpName("sub", NoWrapKind).c_str(), *this, Other);
   if (isEmptySet() || Other.isEmptySet())
     return getEmpty();
   if (isFullSet() && Other.isFullSet())
@@ -1340,13 +1338,7 @@ ConstantRange::multiplyWithNoWrap(const ConstantRange &Other,
                                   unsigned NoWrapKind,
                                   PreferredRangeType RangeType) const {
   using OBO = OverflowingBinaryOperator;
-  bool HasNSW = NoWrapKind & OBO::NoSignedWrap;
-  bool HasNUW = NoWrapKind & OBO::NoUnsignedWrap;
-  logBinaryTF((HasNSW && HasNUW) ? "mul nsw nuw"
-              : HasNSW           ? "mul nsw"
-              : HasNUW           ? "mul nuw"
-                                 : "mul",
-              *this, Other);
+  logBinaryTF(noWrapOpName("mul", NoWrapKind).c_str(), *this, Other);
   if (isEmptySet() || Other.isEmptySet())
     return getEmpty();
   if (isFullSet() && Other.isFullSet())
@@ -1894,10 +1886,7 @@ ConstantRange ConstantRange::shlWithNoWrap(const ConstantRange &Other,
   if (NoWrapKind == 0)
     return shl(Other);
   using OBO = OverflowingBinaryOperator;
-  logBinaryTF((NoWrapKind == OBO::NoSignedWrap)    ? "shl nsw"
-              : (NoWrapKind == OBO::NoUnsignedWrap) ? "shl nuw"
-                                                    : "shl nsw nuw",
-              *this, Other);
+  logBinaryTF(noWrapOpName("shl", NoWrapKind).c_str(), *this, Other);
   switch (NoWrapKind) {
   case OBO::NoSignedWrap:
     return computeShlNSW(*this, Other);
