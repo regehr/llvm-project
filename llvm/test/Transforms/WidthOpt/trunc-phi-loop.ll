@@ -2,6 +2,7 @@
 ; A trunc-rooted self-recurrence can be rebuilt at the narrower width inside
 ; the loop.
 ; RUN: opt -passes='width-opt' -S %s | FileCheck %s
+; ALIVE2-EXTRA-ARGS: --src-unroll=16 --tgt-unroll=16
 
 define i16 @f(i8 %x) {
 entry:

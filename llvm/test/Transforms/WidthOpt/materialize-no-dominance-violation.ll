@@ -12,6 +12,8 @@ target triple = "x86_64-unknown-linux-gnu"
 @g_6   = external global i8
 @g_94  = external global i32
 @g_108 = external global i64
+@g_ptr_0 = external global ptr
+@g_ptr_1 = external global ptr
 
 ; After inlining and optimization the IR looks like this.  The critical pattern:
 ;   entry block contains:
@@ -37,7 +39,7 @@ preheader:
   %or.i.tr = trunc nuw nsw i64 %or.i to i32
   %v0 = shl nuw nsw i32 %or.i.tr, 1
   store i32 %v0, ptr @g_94, align 4
-  %p0 = load volatile ptr, ptr null, align 8
+  %p0 = load ptr, ptr @g_ptr_0, align 8
   %l0 = load i32, ptr %p0, align 4
   %x0 = xor i32 %l0, %conv47.i
   store i32 %x0, ptr %p0, align 4
@@ -48,7 +50,7 @@ loop:
   %or.i.tr4 = trunc nuw nsw i64 %or.i to i32
   %v1 = shl nuw nsw i32 %or.i.tr4, 1
   store i32 %v1, ptr @g_94, align 4
-  %p1 = load volatile ptr, ptr null, align 8
+  %p1 = load ptr, ptr @g_ptr_1, align 8
   %l1 = load i32, ptr %p1, align 4
   %x1 = xor i32 %l1, %conv47.i
   store i32 %x1, ptr %p1, align 4
