@@ -157,7 +157,10 @@ std::optional<ExtOperandInfo> getExtOperandInfo(Value *V) {
 }
 
 bool canRepresentConstant(Constant &C, ExtKind Kind, unsigned NarrowWidth) {
-  if (auto *CI = dyn_cast<ConstantInt>(&C)) {
+  if (isa<UndefValue>(C) || isa<PoisonValue>(C))
+    return Kind != ExtKind::None;
+
+  if (auto *CI = getScalarOrSplatConstantInt(&C)) {
     APInt Narrow = CI->getValue().trunc(NarrowWidth);
     switch (Kind) {
     case ExtKind::ZExt:
@@ -170,17 +173,7 @@ bool canRepresentConstant(Constant &C, ExtKind Kind, unsigned NarrowWidth) {
     llvm_unreachable("Unexpected extension kind");
   }
 
-  Type *WideTy = C.getType();
-  Type *NarrowTy = getSameShapeIntegerType(WideTy, NarrowWidth);
-  Constant *Narrow = ConstantExpr::getTrunc(&C, NarrowTy);
-  switch (Kind) {
-  case ExtKind::ZExt:
-  case ExtKind::SExt:
-    return ConstantExpr::getCast(Instruction::Trunc, &C, NarrowTy) == Narrow;
-  case ExtKind::None:
-    return false;
-  }
-  llvm_unreachable("Unexpected extension kind");
+  return false;
 }
 
 Constant *convertConstantToNarrow(Constant &C, unsigned NarrowWidth) {
@@ -1504,6 +1497,17 @@ bool tryConvertWholeSExtToZExt(SExtInst &Ext) {
 }
 
 unsigned getUnsignedRangeWidth(const Use &OperandUse, LazyValueInfo &LVI) {
+  Value *V = OperandUse.get();
+  if (auto Ext = getExtOperandInfo(V))
+    if (Ext->Kind == ExtKind::ZExt)
+      return Ext->NarrowWidth;
+
+  if (auto *CI = getScalarOrSplatConstantInt(V))
+    return std::max(1u, CI->getValue().getActiveBits());
+
+  if (!isa<IntegerType>(V->getType()))
+    return 0;
+
   ConstantRange CR = LVI.getConstantRangeAtUse(OperandUse, /*UndefAllowed=*/false);
   if (CR.isFullSet())
     return 0;
@@ -1537,8 +1541,6 @@ bool tryNarrowUDivWithRange(BinaryOperator &BO, LazyValueInfo &LVI) {
   assert((BO.getOpcode() == Instruction::UDiv ||
           BO.getOpcode() == Instruction::URem) &&
          "UDiv/URem narrowing expects a udiv or urem instruction");
-  if (!isa<IntegerType>(BO.getType()))
-    return false;
   if (!isIntegerValue(&BO) || !isIntegerValue(BO.getOperand(0)) ||
       !isIntegerValue(BO.getOperand(1)))
     return false;
@@ -1556,8 +1558,9 @@ bool tryNarrowUDivWithRange(BinaryOperator &BO, LazyValueInfo &LVI) {
   auto planOperand = [&](unsigned OperandIdx) -> std::optional<NarrowUDivOperandPlan> {
     Value *V = BO.getOperand(OperandIdx);
 
-    if (auto *C = dyn_cast<ConstantInt>(V)) {
-      if (!canRepresentConstant(*C, ExtKind::ZExt, TargetWidth))
+    if (auto *C = dyn_cast<Constant>(V)) {
+      if (!isIntegerValue(C) || !haveSameIntegerShape(C->getType(), BO.getType()) ||
+          !canRepresentConstant(*C, ExtKind::ZExt, TargetWidth))
         return std::nullopt;
       return NarrowUDivOperandPlan{
           NarrowUDivOperandKind::Existing,
@@ -1630,7 +1633,7 @@ bool tryNarrowUDivWithRange(BinaryOperator &BO, LazyValueInfo &LVI) {
     return false;
 
   IRBuilder<> B(&BO);
-  auto *TargetTy = IntegerType::get(BO.getContext(), TargetWidth);
+  auto *TargetTy = getSameShapeIntegerType(BO.getType(), TargetWidth);
 
   auto materializeOperand = [&](const NarrowUDivOperandPlan &Plan,
                                 const Twine &Name) -> Value * {
