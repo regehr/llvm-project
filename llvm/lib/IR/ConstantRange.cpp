@@ -1366,7 +1366,6 @@ ConstantRange::multiplyWithNoWrap(const ConstantRange &Other,
 }
 
 ConstantRange ConstantRange::smul_fast(const ConstantRange &Other) const {
-  logBinaryTF("smul_fast", *this, Other);
   if (isEmptySet() || Other.isEmptySet())
     return getEmpty();
 
