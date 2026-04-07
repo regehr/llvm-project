@@ -51,10 +51,6 @@ struct ExtOperandInfo {
   unsigned WideWidth = 0;
 };
 
-IntegerType *getIntegerTy(Value *V) {
-  return dyn_cast<IntegerType>(V->getType());
-}
-
 IntegerType *getScalarIntegerTy(Type *Ty) {
   if (auto *IT = dyn_cast<IntegerType>(Ty))
     return IT;
@@ -68,7 +64,7 @@ IntegerType *getScalarIntegerTy(Value *V) {
 }
 
 bool isIntegerValue(Value *V) {
-  return getIntegerTy(V) != nullptr;
+  return getScalarIntegerTy(V) != nullptr;
 }
 
 bool isScalarOrFixedVectorIntegerValue(Value *V) {
@@ -95,21 +91,51 @@ unsigned getScalarIntegerWidth(Type *Ty) {
   return IT->getBitWidth();
 }
 
+Type *getSameShapeIntegerType(Type *Ty, unsigned ScalarWidth) {
+  auto *ScalarTy = IntegerType::get(Ty->getContext(), ScalarWidth);
+  if (isa<IntegerType>(Ty))
+    return ScalarTy;
+
+  auto *VT = cast<FixedVectorType>(Ty);
+  return FixedVectorType::get(ScalarTy, VT->getNumElements());
+}
+
+Constant *getSameShapeIntegerConstant(Type *Ty, const APInt &Value) {
+  auto *ScalarTy = getScalarIntegerTy(Ty);
+  assert(ScalarTy && "Expected scalar integer or fixed integer vector type");
+  Constant *ScalarC = ConstantInt::get(ScalarTy, Value);
+  if (isa<IntegerType>(Ty))
+    return ScalarC;
+
+  auto *VT = cast<FixedVectorType>(Ty);
+  return ConstantVector::getSplat(VT->getElementCount(), ScalarC);
+}
+
+Constant *getSameShapeBoolConstant(Type *OperandTy, bool Value) {
+  Type *CmpTy = CmpInst::makeCmpResultType(OperandTy);
+  return getSameShapeIntegerConstant(CmpTy, APInt(1, Value));
+}
+
+ConstantInt *getScalarOrSplatConstantInt(Value *V) {
+  auto *C = dyn_cast<Constant>(V);
+  if (!C)
+    return nullptr;
+  if (auto *CI = dyn_cast<ConstantInt>(C))
+    return CI;
+  if (!C->getType()->isVectorTy())
+    return nullptr;
+  return dyn_cast_or_null<ConstantInt>(C->getSplatValue());
+}
+
 Constant *getLowBitsMaskConstant(Type *Ty, unsigned NarrowWidth) {
   auto *EltTy = getScalarIntegerTy(Ty);
   assert(EltTy && "Expected scalar integer or fixed integer vector type");
   APInt Mask = APInt::getLowBitsSet(EltTy->getBitWidth(), NarrowWidth);
-  if (auto *IT = dyn_cast<IntegerType>(Ty))
-    return ConstantInt::get(IT, Mask);
-
-  auto *VT = cast<FixedVectorType>(Ty);
-  return ConstantVector::getSplat(VT->getElementCount(),
-                                  ConstantInt::get(EltTy, Mask));
+  return getSameShapeIntegerConstant(Ty, Mask);
 }
 
 unsigned getValueWidth(const Value *V) {
-  assert(isa<IntegerType>(V->getType()) && "Expected integer-typed value");
-  return cast<IntegerType>(V->getType())->getBitWidth();
+  return getScalarIntegerWidth(V->getType());
 }
 
 std::optional<ExtOperandInfo> getExtOperandInfo(Value *V) {
@@ -130,22 +156,36 @@ std::optional<ExtOperandInfo> getExtOperandInfo(Value *V) {
   return std::nullopt;
 }
 
-bool canRepresentConstant(ConstantInt &C, ExtKind Kind, unsigned NarrowWidth) {
-  APInt Narrow = C.getValue().trunc(NarrowWidth);
+bool canRepresentConstant(Constant &C, ExtKind Kind, unsigned NarrowWidth) {
+  if (auto *CI = dyn_cast<ConstantInt>(&C)) {
+    APInt Narrow = CI->getValue().trunc(NarrowWidth);
+    switch (Kind) {
+    case ExtKind::ZExt:
+      return CI->getValue() == Narrow.zext(CI->getBitWidth());
+    case ExtKind::SExt:
+      return CI->getValue() == Narrow.sext(CI->getBitWidth());
+    case ExtKind::None:
+      return false;
+    }
+    llvm_unreachable("Unexpected extension kind");
+  }
+
+  Type *WideTy = C.getType();
+  Type *NarrowTy = getSameShapeIntegerType(WideTy, NarrowWidth);
+  Constant *Narrow = ConstantExpr::getTrunc(&C, NarrowTy);
   switch (Kind) {
   case ExtKind::ZExt:
-    return C.getValue() == Narrow.zext(C.getBitWidth());
   case ExtKind::SExt:
-    return C.getValue() == Narrow.sext(C.getBitWidth());
+    return ConstantExpr::getCast(Instruction::Trunc, &C, NarrowTy) == Narrow;
   case ExtKind::None:
     return false;
   }
   llvm_unreachable("Unexpected extension kind");
 }
 
-Constant *convertConstantToNarrow(ConstantInt &C, unsigned NarrowWidth) {
-  return ConstantInt::get(IntegerType::get(C.getContext(), NarrowWidth),
-                          C.getValue().trunc(NarrowWidth));
+Constant *convertConstantToNarrow(Constant &C, unsigned NarrowWidth) {
+  return ConstantExpr::getTrunc(&C, getSameShapeIntegerType(C.getType(),
+                                                            NarrowWidth));
 }
 
 
@@ -218,7 +258,8 @@ Value *materializeAtWidth(IRBuilder<> &B, const ExtOperandInfo &Info,
   if (TargetWidth == Info.NarrowWidth)
     return Info.NarrowValue;
 
-  Type *TargetTy = IntegerType::get(B.getContext(), TargetWidth);
+  Type *TargetTy = getSameShapeIntegerType(Info.NarrowValue->getType(),
+                                           TargetWidth);
   Instruction::CastOps CastOp =
       (Info.Kind == ExtKind::ZExt) ? Instruction::ZExt : Instruction::SExt;
   BasicBlock *InsertBB = B.GetInsertBlock();
@@ -312,8 +353,10 @@ getRetargetedZeroComparePredicate(ICmpInst &Cmp, Value &WideV, ExtKind Kind,
   else if (Cmp.getOperand(0) != &WideV)
     return std::nullopt;
 
-  auto *C = dyn_cast<ConstantInt>(Cmp.getOperand(1 - WideIdx));
-  if (!C || C->getBitWidth() != WideWidth || !C->isZero())
+  auto *C = dyn_cast<Constant>(Cmp.getOperand(1 - WideIdx));
+  if (!C || !isIntegerValue(Cmp.getOperand(1 - WideIdx)) ||
+      !haveSameIntegerShape(C->getType(), WideV.getType()) ||
+      getValueWidth(C) != WideWidth || !C->isNullValue())
     return std::nullopt;
 
   ICmpInst::Predicate Pred = Cmp.getPredicate();
@@ -436,18 +479,15 @@ getKnownCompareResultWithExtAndConstant(ICmpInst::Predicate Pred, ExtKind Kind,
 
 Value *buildConstantAwareICmp(IRBuilder<> &B, ICmpInst::Predicate Pred,
                               Value *LHS, Value *RHS, const Twine &Name = "") {
-  if (auto *CLHS = dyn_cast<ConstantInt>(LHS)) {
+  if (auto *CLHS = getScalarOrSplatConstantInt(LHS)) {
     if (auto Known = getKnownCompareResultWithConstantLHS(Pred, CLHS->getValue()))
-      return ConstantInt::getFalse(B.getContext())->getType() ==
-                     Type::getInt1Ty(B.getContext())
-                 ? ConstantInt::get(Type::getInt1Ty(B.getContext()), *Known)
-                 : nullptr;
+      return getSameShapeBoolConstant(LHS->getType(), *Known);
   }
-  if (auto *CRHS = dyn_cast<ConstantInt>(RHS)) {
+  if (auto *CRHS = getScalarOrSplatConstantInt(RHS)) {
     ICmpInst::Predicate Swapped = ICmpInst::getSwappedPredicate(Pred);
     if (auto Known =
             getKnownCompareResultWithConstantLHS(Swapped, CRHS->getValue()))
-      return ConstantInt::get(Type::getInt1Ty(B.getContext()), *Known);
+      return getSameShapeBoolConstant(LHS->getType(), *Known);
   }
   return B.CreateICmp(Pred, LHS, RHS, Name);
 }
@@ -527,14 +567,14 @@ unsigned getStructuralNarrowWidth(Value *V,
         if (W0 == 0 || W1 == 0) return 0;
         unsigned Result = std::max(W0, W1) + 1;
         // Sanity: don't claim a width ≥ the value's actual type width.
-        unsigned ActualWidth = BO->getType()->getIntegerBitWidth();
+        unsigned ActualWidth = getScalarIntegerWidth(BO->getType());
         if (Result >= ActualWidth) return 0;
         return Result;
       }
       // sub nuw: result <= LHS (no borrow), so bounded by LHS's width.
       if (BO->getOpcode() == Instruction::Sub && BO->hasNoUnsignedWrap()) {
         unsigned W = getStructuralNarrowWidth(BO->getOperand(0), Cache);
-        unsigned ActualWidth = BO->getType()->getIntegerBitWidth();
+        unsigned ActualWidth = getScalarIntegerWidth(BO->getType());
         if (W != 0 && W < ActualWidth) return W;
         return 0;
       }
@@ -544,7 +584,7 @@ unsigned getStructuralNarrowWidth(Value *V,
         unsigned W1 = getStructuralNarrowWidth(BO->getOperand(1), Cache);
         if (W0 == 0 || W1 == 0) return 0;
         unsigned Result = W0 + W1;
-        unsigned ActualWidth = BO->getType()->getIntegerBitWidth();
+        unsigned ActualWidth = getScalarIntegerWidth(BO->getType());
         if (Result >= ActualWidth) return 0;
         return Result;
       }
@@ -724,7 +764,8 @@ bool tryShrinkICmpExtConst(ICmpInst &Cmp) {
         // slt/sle are always false.
         bool AlwaysTrue = (NormalizedPred == ICmpInst::ICMP_SGT ||
                            NormalizedPred == ICmpInst::ICMP_SGE);
-        Value *NewCmp = ConstantInt::get(Cmp.getType(), AlwaysTrue);
+        Value *NewCmp = getSameShapeIntegerConstant(Cmp.getType(),
+                                                     APInt(1, AlwaysTrue));
         Cmp.replaceAllUsesWith(NewCmp);
         Cmp.eraseFromParent();
         if (ExtInfo->Producer->use_empty())
@@ -747,7 +788,7 @@ bool tryShrinkICmpExtConst(ICmpInst &Cmp) {
           NormalizedPred, ExtInfo->Kind, ExtInfo->NarrowWidth, C->getValue());
       if (!Known)
         continue;
-      NewCmp = ConstantInt::get(Cmp.getType(), *Known);
+      NewCmp = getSameShapeIntegerConstant(Cmp.getType(), APInt(1, *Known));
     }
 
     if (auto *NewCmpI = dyn_cast<Instruction>(NewCmp)) {
@@ -842,6 +883,9 @@ bool areHighBitsKnownZero(Value *V, unsigned NarrowWidth, const DataLayout &DL,
 
 bool tryWidenTruncEqualityICmp(ICmpInst &Cmp, const DataLayout &DL,
                                AssumptionCache *AC, DominatorTree *DT) {
+  if (!isa<IntegerType>(Cmp.getOperand(0)->getType()) ||
+      !isa<IntegerType>(Cmp.getOperand(1)->getType()))
+    return false;
   if (!isEqOrNe(Cmp.getPredicate()))
     return false;
   if (!isIntegerValue(Cmp.getOperand(0)) || !isIntegerValue(Cmp.getOperand(1)))
@@ -887,6 +931,9 @@ bool tryWidenTruncEqualityICmp(ICmpInst &Cmp, const DataLayout &DL,
 
 bool tryWidenTruncZeroExtendedICmp(ICmpInst &Cmp, const DataLayout &DL,
                                    AssumptionCache *AC, DominatorTree *DT) {
+  if (!isa<IntegerType>(Cmp.getOperand(0)->getType()) ||
+      !isa<IntegerType>(Cmp.getOperand(1)->getType()))
+    return false;
   if (!isEqOrNe(Cmp.getPredicate()) && !isUnsignedICmp(Cmp.getPredicate()))
     return false;
   if (!isIntegerValue(Cmp.getOperand(0)) || !isIntegerValue(Cmp.getOperand(1)))
@@ -975,8 +1022,8 @@ bool tryWidenTruncZeroExtendedICmp(ICmpInst &Cmp, const DataLayout &DL,
 }
 
 bool tryShrinkPhiOfExts(PHINode &Phi) {
-  auto *WideTy = dyn_cast<IntegerType>(Phi.getType());
-  if (!WideTy)
+  Type *WideTy = Phi.getType();
+  if (!getScalarIntegerTy(WideTy))
     return false;
 
   PhiShrinkInfo Info;
@@ -990,7 +1037,7 @@ bool tryShrinkPhiOfExts(PHINode &Phi) {
   for (unsigned I = 0, E = Phi.getNumIncomingValues(); I != E; ++I) {
     Value *Incoming = Phi.getIncomingValue(I);
     if (auto Ext = getExtOperandInfo(Incoming)) {
-      if (Ext->WideWidth != WideTy->getBitWidth())
+      if (Ext->WideWidth != getScalarIntegerWidth(WideTy))
         return false;
 
       if (!SawExt) {
@@ -1005,14 +1052,15 @@ bool tryShrinkPhiOfExts(PHINode &Phi) {
       continue;
     }
 
-    if (!isa<ConstantInt>(Incoming))
+    auto *C = dyn_cast<Constant>(Incoming);
+    if (!C || !isIntegerValue(C) || !haveSameIntegerShape(C->getType(), WideTy))
       return false;
   }
 
   if (!SawExt)
     return false;
 
-  auto *NarrowTy = IntegerType::get(Phi.getContext(), Info.NarrowWidth);
+  auto *NarrowTy = getSameShapeIntegerType(WideTy, Info.NarrowWidth);
   Instruction::CastOps NarrowCastOp =
       (Info.Kind == ExtKind::ZExt) ? Instruction::ZExt : Instruction::SExt;
 
@@ -1068,8 +1116,8 @@ bool tryShrinkPhiOfExts(PHINode &Phi) {
       continue;
     }
 
-    auto *CI = cast<ConstantInt>(Incoming);
-    if (!canRepresentConstant(*CI, Info.Kind, Info.NarrowWidth))
+    auto *C = cast<Constant>(Incoming);
+    if (!canRepresentConstant(*C, Info.Kind, Info.NarrowWidth))
       return false;
   }
 
@@ -1105,8 +1153,8 @@ bool tryShrinkPhiOfExts(PHINode &Phi) {
       NarrowIncomingValues.push_back(NarrowIncoming);
       continue;
     }
-    auto *CI = cast<ConstantInt>(Incoming);
-    NarrowIncomingValues.push_back(convertConstantToNarrow(*CI, Info.NarrowWidth));
+    auto *C = cast<Constant>(Incoming);
+    NarrowIncomingValues.push_back(convertConstantToNarrow(*C, Info.NarrowWidth));
   }
 
   auto *NarrowPhi = PHINode::Create(NarrowTy, Phi.getNumIncomingValues(),
@@ -1142,8 +1190,8 @@ bool tryShrinkPhiOfExts(PHINode &Phi) {
 }
 
 bool tryShrinkSelectOfExts(SelectInst &Sel) {
-  auto *WideTy = dyn_cast<IntegerType>(Sel.getType());
-  if (!WideTy)
+  Type *WideTy = Sel.getType();
+  if (!getScalarIntegerTy(WideTy))
     return false;
 
   Value *TV = Sel.getTrueValue();
@@ -1151,12 +1199,17 @@ bool tryShrinkSelectOfExts(SelectInst &Sel) {
 
   auto TrueExt = getExtOperandInfo(TV);
   auto FalseExt = getExtOperandInfo(FV);
-  auto *TrueC = dyn_cast<ConstantInt>(TV);
-  auto *FalseC = dyn_cast<ConstantInt>(FV);
+  auto *TrueC = dyn_cast<Constant>(TV);
+  auto *FalseC = dyn_cast<Constant>(FV);
 
   if (!TrueExt && !FalseExt)
     return false;
-  if ((TrueExt == std::nullopt && !TrueC) || (FalseExt == std::nullopt && !FalseC))
+  if ((TrueExt == std::nullopt &&
+       (!TrueC || !isIntegerValue(TrueC) ||
+        !haveSameIntegerShape(TrueC->getType(), WideTy))) ||
+      (FalseExt == std::nullopt &&
+       (!FalseC || !isIntegerValue(FalseC) ||
+        !haveSameIntegerShape(FalseC->getType(), WideTy))))
     return false;
 
   PhiShrinkInfo Info;
@@ -1165,7 +1218,7 @@ bool tryShrinkSelectOfExts(SelectInst &Sel) {
   Info.NarrowWidth = Seed.NarrowWidth;
   Info.WideWidth = Seed.WideWidth;
 
-  if (Info.WideWidth != WideTy->getBitWidth())
+  if (Info.WideWidth != getScalarIntegerWidth(WideTy))
     return false;
 
   auto validateExt = [&](const std::optional<ExtOperandInfo> &Ext) {
@@ -1252,8 +1305,8 @@ bool tryShrinkSelectOfExts(SelectInst &Sel) {
                                                           Info.WideWidth);
       if (NarrowPred) {
         IRBuilder<> CmpB(Cmp);
-        auto *Zero = ConstantInt::get(IntegerType::get(Cmp->getContext(),
-                                                       Info.NarrowWidth), 0);
+        auto *Zero = getSameShapeIntegerConstant(NarrowSel->getType(),
+                                                 APInt(Info.NarrowWidth, 0));
         Value *NewCmpVal = CmpB.CreateICmp(*NarrowPred, NarrowSel, Zero,
                                            Cmp->getName());
         if (auto *NewCmp = dyn_cast<ICmpInst>(NewCmpVal))
@@ -1305,6 +1358,8 @@ bool mayMergeActualUndef(Value *V) {
 }
 
 bool tryConvertSExtToNonNegZExt(SExtInst &Ext, LazyValueInfo &LVI) {
+  if (!isa<IntegerType>(Ext.getSrcTy()) || !isa<IntegerType>(Ext.getType()))
+    return false;
   const Use &Base = Ext.getOperandUse(0);
   if (!LVI.getConstantRangeAtUse(Base, /*UndefAllowed=*/false).isAllNonNegative())
     return false;
@@ -1482,6 +1537,8 @@ bool tryNarrowUDivWithRange(BinaryOperator &BO, LazyValueInfo &LVI) {
   assert((BO.getOpcode() == Instruction::UDiv ||
           BO.getOpcode() == Instruction::URem) &&
          "UDiv/URem narrowing expects a udiv or urem instruction");
+  if (!isa<IntegerType>(BO.getType()))
+    return false;
   if (!isIntegerValue(&BO) || !isIntegerValue(BO.getOperand(0)) ||
       !isIntegerValue(BO.getOperand(1)))
     return false;
@@ -1883,6 +1940,8 @@ bool tryWidenSubOverTruncThroughZExtNneg(ZExtInst &ZExt) {
 // by using X directly as the GEP index. GEP sign-extends its indices to
 // pointer width, which is exactly what sext does, so they are always equivalent.
 bool tryShrinkSExtGEPIndex(SExtInst &SExt) {
+  if (!isa<IntegerType>(SExt.getSrcTy()) || !isa<IntegerType>(SExt.getType()))
+    return false;
   if (SExt.use_empty())
     return false;
   // All uses must be GEP index operands (not the base pointer, operand 0).
@@ -1902,6 +1961,8 @@ bool tryShrinkSExtGEPIndex(SExtInst &SExt) {
 }
 
 bool tryShrinkZExtGEPIndex(ZExtInst &ZExt) {
+  if (!isa<IntegerType>(ZExt.getSrcTy()) || !isa<IntegerType>(ZExt.getType()))
+    return false;
   if (!isIntegerValue(&ZExt))
     return false;
   // GEP sign-extends indices to pointer width, so replacing zext(X) with X
@@ -1949,6 +2010,8 @@ bool tryShrinkZExtGEPIndex(ZExtInst &ZExt) {
 //   %p1 = gep ..., i8 %lo
 //   %p2 = gep ..., i8 %hi
 bool tryShrinkZExtThroughBinopToGEP(ZExtInst &ZExt) {
+  if (!isa<IntegerType>(ZExt.getSrcTy()) || !isa<IntegerType>(ZExt.getType()))
+    return false;
   if (!isIntegerValue(&ZExt))
     return false;
   if (ZExt.use_empty())
@@ -2041,6 +2104,8 @@ bool tryShrinkZExtThroughBinopToGEP(ZExtInst &ZExt) {
 // zext only produces values in [0, 2^N), so we drop them (setting their
 // targets to the switch's default block — they become dead).
 bool tryShrinkZExtSwitch(ZExtInst &ZExt) {
+  if (!isa<IntegerType>(ZExt.getSrcTy()) || !isa<IntegerType>(ZExt.getType()))
+    return false;
   if (!isIntegerValue(&ZExt))
     return false;
   if (ZExt.use_empty())
@@ -2096,6 +2161,8 @@ bool tryShrinkZExtSwitch(ZExtInst &ZExt) {
 // signed range [-2^(N-1), 2^(N-1) - 1], so cases outside that range are
 // unreachable and are removed; in-range constants are truncated to iN.
 bool tryShrinkSExtSwitch(SExtInst &SExt) {
+  if (!isa<IntegerType>(SExt.getSrcTy()) || !isa<IntegerType>(SExt.getType()))
+    return false;
   if (!isIntegerValue(&SExt))
     return false;
   if (SExt.use_empty())
@@ -2158,6 +2225,8 @@ bool tryShrinkSExtSwitch(SExtInst &SExt) {
 // The expect hint is preserved (expected value mapped to same bool).
 // Verified with alive-tv.
 bool tryShrinkZExtOfLLVMExpect(ZExtInst &ZExt) {
+  if (!isa<IntegerType>(ZExt.getSrcTy()) || !isa<IntegerType>(ZExt.getType()))
+    return false;
   if (ZExt.use_empty())
     return false;
 
@@ -2391,6 +2460,8 @@ bool tryFoldZExtOfTruncToMask(ZExtInst &Ext) {
 // which holds iff X < 2^(N-1) (non-negative, fits in signed iN).
 // We check this via isZeroBoundedAtWidth(X, N-1).
 bool tryShrinkTruncGEPIndex(TruncInst &Tr) {
+  if (!isa<IntegerType>(Tr.getSrcTy()) || !isa<IntegerType>(Tr.getType()))
+    return false;
   if (!isIntegerValue(&Tr))
     return false;
   if (Tr.use_empty())
@@ -2436,7 +2507,7 @@ bool tryFoldTruncOfExt(TruncInst &Tr) {
     Replacement = Ext->NarrowValue;
   } else if (TargetWidth < Ext->NarrowWidth) {
     // trunc(ext(a:N→W), M) where M < N = trunc(a, M)
-    if (auto *C = dyn_cast<ConstantInt>(Ext->NarrowValue)) {
+    if (auto *C = dyn_cast<Constant>(Ext->NarrowValue)) {
       Replacement = convertConstantToNarrow(*C, TargetWidth);
     } else {
       Value *NewTr =
@@ -2447,12 +2518,10 @@ bool tryFoldTruncOfExt(TruncInst &Tr) {
     }
   } else if (TargetWidth < Ext->WideWidth) {
     // trunc(ext(a:N→W), M) where N < M < W = re-ext(a:N→M) with the same kind
-    if (auto *C = dyn_cast<ConstantInt>(Ext->NarrowValue)) {
-      // C has width NarrowWidth < TargetWidth; re-extend the APInt value.
-      APInt Extended = Ext->Kind == ExtKind::ZExt
-                           ? C->getValue().zext(TargetWidth)
-                           : C->getValue().sext(TargetWidth);
-      Replacement = ConstantInt::get(Tr.getType(), Extended);
+    if (auto *C = dyn_cast<Constant>(Ext->NarrowValue)) {
+      Replacement = Ext->Kind == ExtKind::ZExt
+                        ? ConstantExpr::getCast(Instruction::ZExt, C, Tr.getType())
+                        : ConstantExpr::getCast(Instruction::SExt, C, Tr.getType());
     } else {
       Value *NewExt;
       if (Ext->Kind == ExtKind::ZExt)
@@ -2495,7 +2564,7 @@ bool tryFoldTruncOfAndMask(TruncInst &Tr) {
   // TargetWidth low bits (i.e., mask & FullMask == FullMask).
   Value *Other = nullptr;
   for (unsigned I = 0; I < 2; ++I) {
-    if (auto *C = dyn_cast<ConstantInt>(BO->getOperand(I))) {
+    if (auto *C = getScalarOrSplatConstantInt(BO->getOperand(I))) {
       if ((C->getValue() & FullMask) == FullMask) {
         Other = BO->getOperand(1 - I);
         break;
@@ -2615,7 +2684,10 @@ bool tryFoldTruncToI1WhenSrcIsZeroBounded(TruncInst &Tr) {
 
   IRBuilder<> B(&Tr);
   // CreateICmpNE may fold to a ConstantInt when Src is a ConstantInt.
-  Value *CmpV = B.CreateICmpNE(Src, ConstantInt::get(Src->getType(), 0), Tr.getName());
+  Value *CmpV = B.CreateICmpNE(Src,
+                               getSameShapeIntegerConstant(Src->getType(),
+                                                           APInt(getValueWidth(Src), 0)),
+                               Tr.getName());
   if (auto *Cmp = dyn_cast<Instruction>(CmpV))
     Cmp->setDebugLoc(Tr.getDebugLoc());
   Tr.replaceAllUsesWith(CmpV);
@@ -2640,7 +2712,10 @@ bool tryFoldTruncNuwToI1(TruncInst &Tr) {
   Value *Src = Tr.getOperand(0);
   IRBuilder<> B(&Tr);
   // CreateICmpNE may fold to a ConstantInt when Src is a ConstantInt.
-  Value *CmpV = B.CreateICmpNE(Src, ConstantInt::get(Src->getType(), 0), Tr.getName());
+  Value *CmpV = B.CreateICmpNE(Src,
+                               getSameShapeIntegerConstant(Src->getType(),
+                                                           APInt(getValueWidth(Src), 0)),
+                               Tr.getName());
   if (auto *Cmp = dyn_cast<Instruction>(CmpV))
     Cmp->setDebugLoc(Tr.getDebugLoc());
 
@@ -2671,7 +2746,7 @@ bool tryFoldTruncOfCtpop(TruncInst &Tr) {
 
   // ctpop(zext(a:N→W)) fits in N bits (result <= N), so we can compute
   // ctpop at the narrow width and return that directly.
-  auto *NarrowTy = IntegerType::get(Tr.getContext(), TargetWidth);
+  auto *NarrowTy = getSameShapeIntegerType(Tr.getType(), TargetWidth);
   IRBuilder<> B(&Tr);
   Function *NarrowCtpop = Intrinsic::getOrInsertDeclaration(
       II->getModule(), Intrinsic::ctpop, {NarrowTy});
@@ -2697,7 +2772,7 @@ bool tryFoldTruncOfCtpop(TruncInst &Tr) {
 bool isZeroBoundedAtWidth(Value *V, unsigned Width) {
   if (auto Ext = getExtOperandInfo(V))
     return Ext->Kind == ExtKind::ZExt && Ext->NarrowWidth <= Width;
-  if (auto *C = dyn_cast<ConstantInt>(V))
+  if (auto *C = getScalarOrSplatConstantInt(V))
     return C->getValue().isIntN(Width);
   // Check LLVM !range metadata on loads/calls.  A !range MDNode carries pairs
   // of {lo, hi} ConstantInt values; each pair represents the half-open
@@ -2708,8 +2783,8 @@ bool isZeroBoundedAtWidth(Value *V, unsigned Width) {
     if (MDNode *RangeMD = I->getMetadata(LLVMContext::MD_range)) {
       unsigned N = RangeMD->getNumOperands();
       assert(N >= 2 && N % 2 == 0 && "malformed !range metadata");
-      APInt Limit = APInt::getOneBitSet(
-          cast<IntegerType>(V->getType())->getBitWidth(), Width);
+      APInt Limit = APInt::getOneBitSet(getScalarIntegerWidth(V->getType()),
+                                        Width);
       bool AllFit = true;
       for (unsigned i = 0; i < N; i += 2) {
         auto *HiC = mdconst::extract<ConstantInt>(RangeMD->getOperand(i + 1));
@@ -2732,7 +2807,7 @@ bool isZeroBoundedAtWidth(Value *V, unsigned Width) {
     if (BO->getOpcode() == Instruction::LShr) {
       if (auto *ShiftC = dyn_cast<ConstantInt>(BO->getOperand(1))) {
         unsigned Shift = (unsigned)ShiftC->getZExtValue();
-        unsigned SrcBits = BO->getType()->getIntegerBitWidth();
+        unsigned SrcBits = getScalarIntegerWidth(BO->getType());
         if (Shift < SrcBits && SrcBits - Shift <= Width)
           return true;
       }
@@ -2784,7 +2859,7 @@ bool isZeroBoundedAtWidth(Value *V, unsigned Width) {
     // Check whether that maximum fits in Width bits unsigned.
     if (II->getIntrinsicID() == Intrinsic::ctlz ||
         II->getIntrinsicID() == Intrinsic::cttz) {
-      unsigned ArgBits = II->getArgOperand(0)->getType()->getIntegerBitWidth();
+      unsigned ArgBits = getScalarIntegerWidth(II->getArgOperand(0)->getType());
       auto *PoisonFlag = dyn_cast<ConstantInt>(II->getArgOperand(1));
       // With is_zero_poison=true, result ≤ ArgBits-1; otherwise result ≤ ArgBits.
       unsigned MaxVal = (PoisonFlag && PoisonFlag->isOne()) ? ArgBits - 1 : ArgBits;
@@ -2800,7 +2875,7 @@ bool isZeroBoundedAtWidth(Value *V, unsigned Width) {
 bool isSextBoundedAtWidth(Value *V, unsigned Width) {
   if (auto Ext = getExtOperandInfo(V))
     return Ext->Kind == ExtKind::SExt && Ext->NarrowWidth <= Width;
-  if (auto *C = dyn_cast<ConstantInt>(V))
+  if (auto *C = getScalarOrSplatConstantInt(V))
     return C->getValue().isSignedIntN(Width);
   return false;
 }
@@ -2826,6 +2901,8 @@ bool isSextBoundedAtWidth(Value *V, unsigned Width) {
 /// because lo is zero in bits N+, and HIGH_MASK kills bits 0..N-1.
 /// Then lshr(shl(zext(hi), N), N) = zext(hi), and trunc(zext(hi), N) = hi.
 bool tryShrinkHighHalfSROA(TruncInst &Tr) {
+  if (!isa<IntegerType>(Tr.getSrcTy()) || !isa<IntegerType>(Tr.getType()))
+    return false;
   if (!isIntegerValue(&Tr))
     return false;
   unsigned TargetWidth = getValueWidth(&Tr);
@@ -2908,6 +2985,8 @@ bool tryShrinkHighHalfSROA(TruncInst &Tr) {
 /// Also: trunc(lshr(or(%mask, %lo_ext), N), N) == trunc(lshr(%mask, N), N)
 /// because %lo_ext occupies only bits 0..N-1 which shift out entirely.
 bool tryShrinkSROAI128Destruct(TruncInst &Tr) {
+  if (!isa<IntegerType>(Tr.getSrcTy()) || !isa<IntegerType>(Tr.getType()))
+    return false;
   if (!isIntegerValue(&Tr))
     return false;
   unsigned TargetWidth = getValueWidth(&Tr);
@@ -3301,7 +3380,7 @@ Value *materializeTruncRootedValueAtWidth(Value *V, unsigned TargetWidth,
       return Cached;
 
   unsigned Width = getValueWidth(V);
-  auto *TargetTy = IntegerType::get(V->getContext(), TargetWidth);
+  auto *TargetTy = getSameShapeIntegerType(V->getType(), TargetWidth);
   if (Width == TargetWidth) {
     if (Cache)
       (*Cache)[V] = V;
@@ -3328,8 +3407,8 @@ Value *materializeTruncRootedValueAtWidth(Value *V, unsigned TargetWidth,
     return Result;
   }
 
-  if (auto *C = dyn_cast<ConstantInt>(V)) {
-    Value *Result = ConstantInt::get(TargetTy, C->getValue().trunc(TargetWidth));
+  if (auto *C = dyn_cast<Constant>(V)) {
+    Value *Result = convertConstantToNarrow(*C, TargetWidth);
     if (Cache)
       (*Cache)[V] = Result;
     return Result;
@@ -3340,10 +3419,11 @@ Value *materializeTruncRootedValueAtWidth(Value *V, unsigned TargetWidth,
     // positions: trunc(and X, C, TargetWidth) = 0, a free constant.
     if (BO->getOpcode() == Instruction::And) {
       for (unsigned Idx = 0; Idx < 2; ++Idx) {
-        if (auto *C = dyn_cast<ConstantInt>(BO->getOperand(Idx))) {
+        if (auto *C = getScalarOrSplatConstantInt(BO->getOperand(Idx))) {
           APInt LowBits = C->getValue().trunc(TargetWidth);
           if (LowBits.isZero()) {
-            Value *Zero = ConstantInt::get(TargetTy, 0);
+            Value *Zero = getSameShapeIntegerConstant(TargetTy,
+                                                     APInt(TargetWidth, 0));
             if (Cache)
               (*Cache)[V] = Zero;
             return Zero;
@@ -3365,7 +3445,8 @@ Value *materializeTruncRootedValueAtWidth(Value *V, unsigned TargetWidth,
           // lshr of a zero-bounded value by >= TargetWidth bits is 0.
           if (!isZeroBoundedAtWidth(BO->getOperand(0), TargetWidth))
             return nullptr;
-          Value *Zero = ConstantInt::get(TargetTy, 0);
+          Value *Zero = getSameShapeIntegerConstant(TargetTy,
+                                                   APInt(TargetWidth, 0));
           if (Cache)
             (*Cache)[V] = Zero;
           return Zero;
@@ -3399,16 +3480,16 @@ Value *materializeTruncRootedValueAtWidth(Value *V, unsigned TargetWidth,
       return nullptr;
     // Fold identity cases before emitting the narrow instruction.
     auto AllOnes = [&](Value *V) -> bool {
-      auto *C = dyn_cast<ConstantInt>(V);
-      return C && C->getValue().isAllOnes();
+      auto *C = dyn_cast<Constant>(V);
+      return C && C->isAllOnesValue();
     };
     auto IsZero = [&](Value *V) -> bool {
-      auto *C = dyn_cast<ConstantInt>(V);
-      return C && C->isZero();
+      auto *C = dyn_cast<Constant>(V);
+      return C && C->isNullValue();
     };
     auto IsOne = [&](Value *V) -> bool {
-      auto *C = dyn_cast<ConstantInt>(V);
-      return C && C->isOne();
+      auto *C = dyn_cast<Constant>(V);
+      return C && C->isOneValue();
     };
     Value *FoldedResult = nullptr;
     unsigned Opc = BO->getOpcode();
@@ -3416,12 +3497,14 @@ Value *materializeTruncRootedValueAtWidth(Value *V, unsigned TargetWidth,
       if (AllOnes(NarrowRHS)) FoldedResult = NarrowLHS;
       else if (AllOnes(NarrowLHS)) FoldedResult = NarrowRHS;
       else if (IsZero(NarrowLHS) || IsZero(NarrowRHS))
-        FoldedResult = ConstantInt::get(NarrowLHS->getType(), 0);
+        FoldedResult = getSameShapeIntegerConstant(NarrowLHS->getType(),
+                                                  APInt(TargetWidth, 0));
     } else if (Opc == Instruction::Or) {
       if (IsZero(NarrowRHS)) FoldedResult = NarrowLHS;
       else if (IsZero(NarrowLHS)) FoldedResult = NarrowRHS;
       else if (AllOnes(NarrowLHS) || AllOnes(NarrowRHS))
-        FoldedResult = ConstantInt::get(NarrowLHS->getType(), APInt::getAllOnes(TargetWidth));
+        FoldedResult = getSameShapeIntegerConstant(NarrowLHS->getType(),
+                                                  APInt::getAllOnes(TargetWidth));
     } else if (Opc == Instruction::Xor) {
       if (IsZero(NarrowRHS)) FoldedResult = NarrowLHS;
       else if (IsZero(NarrowLHS)) FoldedResult = NarrowRHS;
@@ -3548,7 +3631,7 @@ bool collectTruncRootedValueCost(
     return true;
   }
 
-  if (isa<ConstantInt>(V))
+  if (isa<Constant>(V))
     return true;
 
   if (auto *BO = dyn_cast<BinaryOperator>(V)) {
@@ -3560,7 +3643,7 @@ bool collectTruncRootedValueCost(
       // because trunc(and(X, HIGH_MASK), TargetWidth) == 0.
       if (BO->getOpcode() == Instruction::And) {
         for (unsigned Idx = 0; Idx < 2; ++Idx) {
-          if (auto *C = dyn_cast<ConstantInt>(BO->getOperand(Idx))) {
+          if (auto *C = getScalarOrSplatConstantInt(BO->getOperand(Idx))) {
             APInt LowBits = C->getValue().trunc(TargetWidth);
             if (LowBits.isZero()) {
               // The and contributes 0 to the low TargetWidth bits.

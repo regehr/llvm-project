@@ -1,5 +1,4 @@
-; Freeze of a cast on a vector type should not crash. The tryPushFreezeThroughExt
-; path only applies to scalar integers; vector casts should be left alone.
+; Freeze-through-ext is lane-local for fixed-vector integer casts too.
 ; RUN: opt -passes='width-opt' -S %s | FileCheck %s
 
 define <4 x i16> @freeze_trunc_vec(<4 x i32> %x) {
@@ -9,9 +8,9 @@ define <4 x i16> @freeze_trunc_vec(<4 x i32> %x) {
 }
 
 ; CHECK-LABEL: define <4 x i16> @freeze_trunc_vec(
-; CHECK: %t = trunc <4 x i32> %x to <4 x i16>
-; CHECK: %f = freeze <4 x i16> %t
-; CHECK: ret <4 x i16> %f
+; CHECK: %x.fr = freeze <4 x i32> %x
+; CHECK-NEXT: %f = trunc <4 x i32> %x.fr to <4 x i16>
+; CHECK-NEXT: ret <4 x i16> %f
 
 define <4 x i32> @freeze_zext_vec(<4 x i16> %x) {
   %e = zext <4 x i16> %x to <4 x i32>
@@ -20,9 +19,9 @@ define <4 x i32> @freeze_zext_vec(<4 x i16> %x) {
 }
 
 ; CHECK-LABEL: define <4 x i32> @freeze_zext_vec(
-; CHECK: %e = zext <4 x i16> %x to <4 x i32>
-; CHECK: %f = freeze <4 x i32> %e
-; CHECK: ret <4 x i32> %f
+; CHECK: %x.fr = freeze <4 x i16> %x
+; CHECK-NEXT: %f = zext <4 x i16> %x.fr to <4 x i32>
+; CHECK-NEXT: ret <4 x i32> %f
 
 define <4 x i32> @freeze_sext_vec(<4 x i16> %x) {
   %e = sext <4 x i16> %x to <4 x i32>
@@ -31,6 +30,6 @@ define <4 x i32> @freeze_sext_vec(<4 x i16> %x) {
 }
 
 ; CHECK-LABEL: define <4 x i32> @freeze_sext_vec(
-; CHECK: %e = sext <4 x i16> %x to <4 x i32>
-; CHECK: %f = freeze <4 x i32> %e
-; CHECK: ret <4 x i32> %f
+; CHECK: %x.fr = freeze <4 x i16> %x
+; CHECK-NEXT: %f = sext <4 x i16> %x.fr to <4 x i32>
+; CHECK-NEXT: ret <4 x i32> %f
