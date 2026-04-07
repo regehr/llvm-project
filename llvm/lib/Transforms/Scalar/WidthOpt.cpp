@@ -467,13 +467,15 @@ bool isCompatiblePredForExtKind(ICmpInst::Predicate Pred, ExtKind Kind) {
 
 // Forward declarations for helpers used by tryShrinkICmpZeroBounded.
 bool isZeroBoundedAtWidth(Value *V, unsigned Width);
+bool isTruncRootedLowBitsPreservingOpcode(unsigned Opcode);
 bool collectTruncRootedValueCost(Value *V, unsigned TargetWidth,
                                  SmallPtrSetImpl<Value *> &AddedValues,
                                  SmallPtrSetImpl<Instruction *> &RemovedInstructions,
                                  SmallPtrSetImpl<Value *> &Visited);
 Value *materializeTruncRootedValueAtWidth(Value *V, unsigned TargetWidth,
                                           Instruction *InsertBefore,
-                                          DenseMap<Value *, Value *> *Cache);
+                                          DenseMap<Value *, Value *> *Cache =
+                                              nullptr);
 
 // Return the structural narrow width of V if its high bits are provably zero
 // by structure alone (direct zext, bitwise trees of such), or 0 if unknown.
@@ -2802,18 +2804,6 @@ bool isSextBoundedAtWidth(Value *V, unsigned Width) {
     return C->getValue().isSignedIntN(Width);
   return false;
 }
-
-bool isTruncRootedLowBitsPreservingOpcode(unsigned Opcode);
-
-Value *materializeTruncRootedValueAtWidth(Value *V, unsigned TargetWidth,
-                                          Instruction *InsertBefore,
-                                          DenseMap<Value *, Value *> *Cache =
-                                              nullptr);
-
-bool collectTruncRootedValueCost(
-    Value *V, unsigned TargetWidth, SmallPtrSetImpl<Value *> &AddedValues,
-    SmallPtrSetImpl<Instruction *> &RemovedInstructions,
-    SmallPtrSetImpl<Value *> &Visited);
 
 /// Handle the SROA i128 construct/destruct pattern:
 ///   %mask   = and i128 %hi_src, HIGH_MASK   (HIGH_MASK has bits only in positions >= TargetWidth)
