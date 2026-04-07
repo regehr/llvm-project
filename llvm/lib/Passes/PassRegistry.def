@@ -384,8 +384,6 @@ FUNCTION_ANALYSIS("target-ir",
 FUNCTION_ANALYSIS("target-lib-info", TargetLibraryAnalysis())
 FUNCTION_ANALYSIS("uniformity", UniformityInfoAnalysis())
 FUNCTION_ANALYSIS("verify", VerifierAnalysis())
-FUNCTION_ANALYSIS("width-components", widthopt::WidthComponentAnalysis())
-FUNCTION_ANALYSIS("width-plan", widthopt::WidthPlanAnalysis())
 
 #ifndef FUNCTION_ALIAS_ANALYSIS
 #define FUNCTION_ALIAS_ANALYSIS(NAME, CREATE_PASS)                             \
@@ -556,9 +554,7 @@ FUNCTION_PASS("unify-loop-exits", UnifyLoopExitsPass())
 FUNCTION_PASS("unreachableblockelim", UnreachableBlockElimPass())
 FUNCTION_PASS("vector-combine", VectorCombinePass())
 FUNCTION_PASS("width-opt", widthopt::WidthOptPass())
-FUNCTION_PASS("print<width-components>", widthopt::WidthComponentPrinter(errs()))
-FUNCTION_PASS("print<width-candidates>", widthopt::WidthCandidatePrinter(errs()))
-FUNCTION_PASS("print<width-plan>", widthopt::WidthPlanPrinter(errs()))
+
 FUNCTION_PASS("verify", VerifierPass())
 FUNCTION_PASS("verify<cycles>", CycleInfoVerifierPass())
 FUNCTION_PASS("verify<domtree>", DominatorTreeVerifierPass())
