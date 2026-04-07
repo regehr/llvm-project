@@ -28,7 +28,6 @@ using namespace llvm;
 
 namespace widthopt {
 
-
 namespace {
 
 enum class ExtKind {
@@ -36,7 +35,6 @@ enum class ExtKind {
   ZExt,
   SExt,
 };
-
 
 struct PhiShrinkInfo {
   ExtKind Kind = ExtKind::None;
@@ -973,7 +971,6 @@ bool tryWidenTruncZeroExtendedICmp(ICmpInst &Cmp, const DataLayout &DL,
 
   return tryOneDirection(0) || tryOneDirection(1);
 }
-
 
 bool tryShrinkPhiOfExts(PHINode &Phi) {
   auto *WideTy = dyn_cast<IntegerType>(Phi.getType());
@@ -4503,20 +4500,17 @@ PreservedAnalyses WidthOptPass::run(Function &F, FunctionAnalysisManager &AM) {
     runStructuralLocalRewritesToFixpoint(F, &DT);
   }
 
-
-  {
-    std::string Err;
-    raw_string_ostream OS(Err);
-    if (verifyFunction(F, &OS)) {
-      errs() << "VERIFY FAILED:\n"
-             << Err << "\n";
-      for (auto &BB : F) {
-        errs() << BB.getName() << ":\n";
-        for (auto &I : BB)
-          errs() << "  " << I << "\n";
-      }
-      llvm_unreachable("IR broken");
+  std::string Err;
+  raw_string_ostream OS(Err);
+  if (verifyFunction(F, &OS)) {
+    errs() << "VERIFY FAILED:\n"
+           << Err << "\n";
+    for (auto &BB : F) {
+      errs() << BB.getName() << ":\n";
+      for (auto &I : BB)
+        errs() << "  " << I << "\n";
     }
+    llvm_unreachable("IR broken");
   }
 
   return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
