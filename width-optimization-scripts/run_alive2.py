@@ -21,7 +21,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-REPO_ROOT  = Path(__file__).parent
+REPO_ROOT  = Path(__file__).parent.parent
 TEST_DIR   = REPO_ROOT / "llvm/test/Transforms/WidthOpt"
 OPT        = REPO_ROOT / "build/bin/opt"
 ALIVE_TV   = Path("/home/regehr/alive2-regehr/build/alive-tv")
