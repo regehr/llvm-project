@@ -10,3 +10,14 @@ define i8 @f(i16 %x) {
 ; CHECK: %[[FR:.*]] = freeze i16 %x
 ; CHECK: %[[TR:.*]] = trunc i16 %[[FR]] to i8
 ; CHECK: ret i8 %[[TR]]
+
+define <4 x i8> @f_vec(<4 x i16> %x) {
+  %x8 = trunc <4 x i16> %x to <4 x i8>
+  %fr = freeze <4 x i8> %x8
+  ret <4 x i8> %fr
+}
+
+; CHECK-LABEL: define <4 x i8> @f_vec(
+; CHECK: %[[FR:.*]] = freeze <4 x i16> %x
+; CHECK: %[[TR:.*]] = trunc <4 x i16> %[[FR]] to <4 x i8>
+; CHECK: ret <4 x i8> %[[TR]]

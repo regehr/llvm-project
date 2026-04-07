@@ -702,7 +702,10 @@ bool tryShrinkICmpExtConst(ICmpInst &Cmp) {
     if (!ExtInfo)
       continue;
 
-    auto *C = dyn_cast<ConstantInt>(Cmp.getOperand(1 - ExtIdx));
+    auto *OrigC = dyn_cast<Constant>(Cmp.getOperand(1 - ExtIdx));
+    if (!OrigC)
+      continue;
+    auto *C = getScalarOrSplatConstantInt(OrigC);
     if (!C)
       continue;
 
@@ -724,7 +727,7 @@ bool tryShrinkICmpExtConst(ICmpInst &Cmp) {
         // (canRepresentConstant for ZExt checks this without sign; we reuse
         // the unsigned narrowing path after adjusting the predicate scope.)
         IRBuilder<> B(&Cmp);
-        Constant *NarrowC = convertConstantToNarrow(*C, ExtInfo->NarrowWidth);
+        Constant *NarrowC = convertConstantToNarrow(*OrigC, ExtInfo->NarrowWidth);
         Value *NewCmp = buildConstantAwareICmp(B, NormalizedPred,
                                                ExtInfo->NarrowValue, NarrowC,
                                                Cmp.getName());
@@ -772,8 +775,8 @@ bool tryShrinkICmpExtConst(ICmpInst &Cmp) {
 
     IRBuilder<> B(&Cmp);
     Value *NewCmp = nullptr;
-    if (canRepresentConstant(*C, ExtInfo->Kind, ExtInfo->NarrowWidth)) {
-      Constant *NarrowC = convertConstantToNarrow(*C, ExtInfo->NarrowWidth);
+    if (canRepresentConstant(*OrigC, ExtInfo->Kind, ExtInfo->NarrowWidth)) {
+      Constant *NarrowC = convertConstantToNarrow(*OrigC, ExtInfo->NarrowWidth);
       NewCmp = buildConstantAwareICmp(B, NormalizedPred, ExtInfo->NarrowValue,
                                       NarrowC, Cmp.getName());
     } else {
@@ -1373,10 +1376,10 @@ bool tryConvertSExtToNonNegZExt(SExtInst &Ext, LazyValueInfo &LVI) {
 }
 
 bool tryFoldAndOfSExtToZExt(BinaryOperator &And) {
-  ConstantInt *Mask = dyn_cast<ConstantInt>(And.getOperand(0));
+  ConstantInt *Mask = getScalarOrSplatConstantInt(And.getOperand(0));
   SExtInst *Ext = dyn_cast<SExtInst>(And.getOperand(1));
   if (!Mask || !Ext) {
-    Mask = dyn_cast<ConstantInt>(And.getOperand(1));
+    Mask = getScalarOrSplatConstantInt(And.getOperand(1));
     Ext = dyn_cast<SExtInst>(And.getOperand(0));
   }
   if (!Mask || !Ext)
@@ -3115,11 +3118,11 @@ bool tryShrinkTruncOfLowBitsBinOp(TruncInst &Tr) {
   // bring nonzero high bits into the truncated region.
   if (!isTruncRootedLowBitsPreservingOpcode(BO->getOpcode())) {
     if (BO->getOpcode() == Instruction::Shl) {
-      auto *AmtC = dyn_cast<ConstantInt>(BO->getOperand(1));
+      auto *AmtC = getScalarOrSplatConstantInt(BO->getOperand(1));
       if (!AmtC || AmtC->getValue().uge(TargetWidth))
         return false;
     } else if (BO->getOpcode() == Instruction::LShr) {
-      auto *AmtC = dyn_cast<ConstantInt>(BO->getOperand(1));
+      auto *AmtC = getScalarOrSplatConstantInt(BO->getOperand(1));
       if (!AmtC)
         return false;
       // lshr of a zero-bounded value by >= TargetWidth bits shifts out all
@@ -3147,7 +3150,7 @@ bool tryShrinkTruncOfLowBitsBinOp(TruncInst &Tr) {
         while (auto *Inner = dyn_cast<BinaryOperator>(LshrChainBase)) {
           if (Inner->getOpcode() != Instruction::LShr || !Inner->hasOneUse())
             break;
-          auto *InnerAmt = dyn_cast<ConstantInt>(Inner->getOperand(1));
+          auto *InnerAmt = getScalarOrSplatConstantInt(Inner->getOperand(1));
           if (!InnerAmt)
             break;
           TotalShift += InnerAmt->getValue().getZExtValue();
@@ -3161,8 +3164,9 @@ bool tryShrinkTruncOfLowBitsBinOp(TruncInst &Tr) {
             LHSInfo->NarrowWidth == TargetWidth &&
             TotalShift < TargetWidth) {
           IRBuilder<> B(&Tr);
-          auto *NarrowAmt = ConstantInt::get(
-              IntegerType::get(Tr.getContext(), TargetWidth), TotalShift);
+          auto *NarrowTy = getSameShapeIntegerType(Tr.getType(), TargetWidth);
+          Constant *NarrowAmt =
+              getSameShapeIntegerConstant(NarrowTy, APInt(TargetWidth, TotalShift));
           // CreateAShr may fold to a non-Instruction when NarrowValue is a constant.
           Value *NewAShrV =
               B.CreateAShr(LHSInfo->NarrowValue, NarrowAmt, Tr.getName());
@@ -3183,7 +3187,7 @@ bool tryShrinkTruncOfLowBitsBinOp(TruncInst &Tr) {
       // sign-extension from at most TargetWidth bits. The upper bits are all
       // copies of the sign bit, so the arithmetic shift cannot pull an
       // incorrect sign bit into the truncated region.
-      auto *AmtC = dyn_cast<ConstantInt>(BO->getOperand(1));
+      auto *AmtC = getScalarOrSplatConstantInt(BO->getOperand(1));
       if (!AmtC || AmtC->getValue().uge(TargetWidth))
         return false;
       // Walk a chain of single-use constant ashrs to find the sext root.
@@ -3195,7 +3199,7 @@ bool tryShrinkTruncOfLowBitsBinOp(TruncInst &Tr) {
         while (auto *Inner = dyn_cast<BinaryOperator>(AshrChainBase)) {
           if (Inner->getOpcode() != Instruction::AShr || !Inner->hasOneUse())
             break;
-          auto *InnerAmt = dyn_cast<ConstantInt>(Inner->getOperand(1));
+          auto *InnerAmt = getScalarOrSplatConstantInt(Inner->getOperand(1));
           if (!InnerAmt)
             break;
           TotalShift += InnerAmt->getValue().getZExtValue();
@@ -3208,8 +3212,9 @@ bool tryShrinkTruncOfLowBitsBinOp(TruncInst &Tr) {
         if (LHSInfo && LHSInfo->NarrowWidth == TargetWidth &&
             TotalShift < TargetWidth) {
           IRBuilder<> B(&Tr);
-          auto *NarrowAmt = ConstantInt::get(
-              IntegerType::get(Tr.getContext(), TargetWidth), TotalShift);
+          auto *NarrowTy2 = getSameShapeIntegerType(Tr.getType(), TargetWidth);
+          Constant *NarrowAmt =
+              getSameShapeIntegerConstant(NarrowTy2, APInt(TargetWidth, TotalShift));
           // CreateAShr/CreateLShr may fold to a non-Instruction when NarrowValue
           // is a constant; use Value* and dyn_cast only for setDebugLoc.
           Value *NewShiftV;
@@ -3241,8 +3246,9 @@ bool tryShrinkTruncOfLowBitsBinOp(TruncInst &Tr) {
           LHSInfo->NarrowWidth == TargetWidth) {
         // trunc(ashr(zext(a:N→W), k), N) = lshr(a, k)
         IRBuilder<> B(&Tr);
-        auto *NarrowAmt = ConstantInt::get(
-            IntegerType::get(Tr.getContext(), TargetWidth), ShiftAmt);
+        auto *NarrowTy3 = getSameShapeIntegerType(Tr.getType(), TargetWidth);
+        Constant *NarrowAmt =
+            getSameShapeIntegerConstant(NarrowTy3, APInt(TargetWidth, ShiftAmt));
         // CreateLShr may fold to a non-Instruction when NarrowValue is a constant.
         Value *NewLShrV =
             B.CreateLShr(LHSInfo->NarrowValue, NarrowAmt, Tr.getName());
@@ -3437,11 +3443,11 @@ Value *materializeTruncRootedValueAtWidth(Value *V, unsigned TargetWidth,
     if (!isTruncRootedLowBitsPreservingOpcode(BO->getOpcode())) {
       if (BO->getOpcode() == Instruction::Shl) {
         // shl with a constant amount < TargetWidth is also low-bit preserving.
-        auto *AmtC = dyn_cast<ConstantInt>(BO->getOperand(1));
+        auto *AmtC = getScalarOrSplatConstantInt(BO->getOperand(1));
         if (!AmtC || AmtC->getValue().uge(TargetWidth))
           return nullptr;
       } else if (BO->getOpcode() == Instruction::LShr) {
-        auto *AmtC = dyn_cast<ConstantInt>(BO->getOperand(1));
+        auto *AmtC = getScalarOrSplatConstantInt(BO->getOperand(1));
         if (!AmtC)
           return nullptr;
         if (AmtC->getValue().uge(TargetWidth)) {
@@ -3457,7 +3463,7 @@ Value *materializeTruncRootedValueAtWidth(Value *V, unsigned TargetWidth,
         if (!isZeroBoundedAtWidth(BO->getOperand(0), TargetWidth))
           return nullptr;
       } else if (BO->getOpcode() == Instruction::AShr) {
-        auto *AmtC = dyn_cast<ConstantInt>(BO->getOperand(1));
+        auto *AmtC = getScalarOrSplatConstantInt(BO->getOperand(1));
         if (!AmtC || AmtC->getValue().uge(TargetWidth))
           return nullptr;
         auto LHSInfo = getExtOperandInfo(BO->getOperand(0));
@@ -3691,7 +3697,7 @@ bool collectTruncRootedValueCost(
     // lshr by constant k >= TargetWidth with a zero-bounded LHS gives 0,
     // which is a free constant fold (no added instruction).
     if (BO->getOpcode() == Instruction::LShr) {
-      auto *AmtC = dyn_cast<ConstantInt>(BO->getOperand(1));
+      auto *AmtC = getScalarOrSplatConstantInt(BO->getOperand(1));
       if (!AmtC)
         return false;
       if (AmtC->getValue().uge(TargetWidth)) {
@@ -3716,7 +3722,7 @@ bool collectTruncRootedValueCost(
     // ashr by constant k < TargetWidth is safe when the LHS is a
     // sign-extension from at most TargetWidth bits.
     if (BO->getOpcode() == Instruction::AShr) {
-      auto *AmtC = dyn_cast<ConstantInt>(BO->getOperand(1));
+      auto *AmtC = getScalarOrSplatConstantInt(BO->getOperand(1));
       if (!AmtC || AmtC->getValue().uge(TargetWidth))
         return false;
       auto LHSInfo = getExtOperandInfo(BO->getOperand(0));
@@ -4073,7 +4079,7 @@ bool tryShrinkTruncOfZeroBoundedPhi(TruncInst &Tr) {
 
   // Materialize each incoming value at TargetWidth, inserting before the
   // terminator of the incoming block.
-  auto *TargetTy = IntegerType::get(Phi->getContext(), TargetWidth);
+  auto *TargetTy = getSameShapeIntegerType(Phi->getType(), TargetWidth);
   auto *NarrowPhi = PHINode::Create(TargetTy, N, Phi->getName() + ".narrow",
                                     Phi->getIterator());
   NarrowPhi->setDebugLoc(Phi->getDebugLoc());

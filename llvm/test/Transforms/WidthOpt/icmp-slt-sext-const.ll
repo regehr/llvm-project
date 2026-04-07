@@ -14,6 +14,17 @@ define i1 @slt_positive_const(i8 %x) {
 ; CHECK: %[[C:.*]] = icmp slt i8 %x, 100
 ; CHECK: ret i1 %[[C]]
 
+define <4 x i1> @slt_positive_const_vec(<4 x i8> %x) {
+  %ext = sext <4 x i8> %x to <4 x i32>
+  %cmp = icmp slt <4 x i32> %ext, splat (i32 100)
+  ret <4 x i1> %cmp
+}
+
+; CHECK-LABEL: define <4 x i1> @slt_positive_const_vec(
+; CHECK-NOT: sext
+; CHECK: %[[C:.*]] = icmp slt <4 x i8> %x, splat (i8 100)
+; CHECK: ret <4 x i1> %[[C]]
+
 ; Negative constant that fits in i8 signed range.
 define i1 @sgt_negative_const(i8 %x) {
   %ext = sext i8 %x to i32
@@ -26,6 +37,17 @@ define i1 @sgt_negative_const(i8 %x) {
 ; CHECK: %[[C:.*]] = icmp sgt i8 %x, -5
 ; CHECK: ret i1 %[[C]]
 
+define <4 x i1> @sgt_negative_const_vec(<4 x i8> %x) {
+  %ext = sext <4 x i8> %x to <4 x i32>
+  %cmp = icmp sgt <4 x i32> %ext, splat (i32 -5)
+  ret <4 x i1> %cmp
+}
+
+; CHECK-LABEL: define <4 x i1> @sgt_negative_const_vec(
+; CHECK-NOT: sext
+; CHECK: %[[C:.*]] = icmp sgt <4 x i8> %x, splat (i8 -5)
+; CHECK: ret <4 x i1> %[[C]]
+
 ; eq/ne also work with sext.
 define i1 @eq_sext_const(i8 %x) {
   %ext = sext i8 %x to i32
@@ -37,3 +59,14 @@ define i1 @eq_sext_const(i8 %x) {
 ; CHECK-NOT: sext
 ; CHECK: %[[C:.*]] = icmp eq i8 %x, -1
 ; CHECK: ret i1 %[[C]]
+
+define <4 x i1> @eq_sext_const_vec(<4 x i8> %x) {
+  %ext = sext <4 x i8> %x to <4 x i32>
+  %cmp = icmp eq <4 x i32> %ext, splat (i32 -1)
+  ret <4 x i1> %cmp
+}
+
+; CHECK-LABEL: define <4 x i1> @eq_sext_const_vec(
+; CHECK-NOT: sext
+; CHECK: %[[C:.*]] = icmp eq <4 x i8> %x, splat (i8 -1)
+; CHECK: ret <4 x i1> %[[C]]

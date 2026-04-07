@@ -16,3 +16,17 @@ define i8 @f(i8 %x, i32 %y) {
 ; CHECK-NOT: zext i8 %x to i32
 ; CHECK-NOT: trunc i32 %a to i8
 ; CHECK: ret i8 %[[ADD]]
+
+define <4 x i8> @f_vec(<4 x i8> %x, <4 x i32> %y) {
+  %ex = zext <4 x i8> %x to <4 x i32>
+  %a = add <4 x i32> %ex, %y
+  %t = trunc <4 x i32> %a to <4 x i8>
+  ret <4 x i8> %t
+}
+
+; CHECK-LABEL: define <4 x i8> @f_vec(
+; CHECK: %[[Y8:.*]] = trunc <4 x i32> %y to <4 x i8>
+; CHECK: %[[ADD:.*]] = add <4 x i8> %x, %[[Y8]]
+; CHECK-NOT: zext <4 x i8> %x to <4 x i32>
+; CHECK-NOT: trunc <4 x i32> %a to <4 x i8>
+; CHECK: ret <4 x i8> %[[ADD]]

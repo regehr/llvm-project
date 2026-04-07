@@ -19,3 +19,20 @@ entry:
 ; CHECK-NOT: sext i8 %a to i32
 ; CHECK-NOT: trunc i32
 ; CHECK: ret i16 %[[SEL]]
+
+define <4 x i16> @f_vec(<4 x i8> %a, <4 x i1> %cond) {
+entry:
+  %conv = sext <4 x i8> %a to <4 x i32>
+  %sub = sub nsw <4 x i32> zeroinitializer, %conv
+  %sel = select <4 x i1> %cond, <4 x i32> %sub, <4 x i32> %conv
+  %t = trunc <4 x i32> %sel to <4 x i16>
+  ret <4 x i16> %t
+}
+
+; CHECK-LABEL: define <4 x i16> @f_vec(
+; CHECK: %[[CONV:.*]] = sext <4 x i8> %a to <4 x i16>
+; CHECK: %[[SUB:.*]] = sub <4 x i16> zeroinitializer, %[[CONV]]
+; CHECK: %[[SEL:.*]] = select <4 x i1> %cond, <4 x i16> %[[SUB]], <4 x i16> %[[CONV]]
+; CHECK-NOT: sext <4 x i8> %a to <4 x i32>
+; CHECK-NOT: trunc <4 x i32>
+; CHECK: ret <4 x i16> %[[SEL]]

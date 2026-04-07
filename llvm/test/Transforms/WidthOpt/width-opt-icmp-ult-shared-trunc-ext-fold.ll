@@ -20,3 +20,22 @@ entry:
 ; CHECK: %cmp = icmp ult i8 %n, %rem
 ; CHECK-NOT: icmp ult i64
 ; CHECK-NOT: zext i8 %rem to i64
+
+define <4 x i1> @shared_trunc_ext_folded_vec(<4 x i8> %n) {
+entry:
+  %wide = zext <4 x i8> %n to <4 x i64>
+  %tr = trunc <4 x i64> %wide to <4 x i8>
+  %div = sdiv <4 x i8> splat (i8 -1), %tr
+  %rem = srem <4 x i8> splat (i8 -1), %div
+  %cmp = icmp ult <4 x i8> %tr, %rem
+  ret <4 x i1> %cmp
+}
+
+; CHECK-LABEL: define <4 x i1> @shared_trunc_ext_folded_vec(
+; CHECK-NOT: zext <4 x i8> %n to <4 x i64>
+; CHECK-NOT: trunc <4 x i64>
+; CHECK: %div = sdiv <4 x i8> splat (i8 -1), %n
+; CHECK: %rem = srem <4 x i8> splat (i8 -1), %div
+; CHECK: %cmp = icmp ult <4 x i8> %n, %rem
+; CHECK-NOT: icmp ult <4 x i64>
+; CHECK-NOT: zext <4 x i8> %rem to <4 x i64>

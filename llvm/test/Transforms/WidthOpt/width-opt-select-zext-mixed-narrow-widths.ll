@@ -20,3 +20,21 @@ entry:
 ; CHECK: %[[SN:.*]] = select i1 %c, i16 %[[A16]], i16 %b
 ; CHECK: %[[SW:.*]] = zext i16 %[[SN]] to i32
 ; CHECK-NOT: select i1 %c, i32
+
+define <4 x i32> @f_vec(<4 x i1> %c, <4 x i8> %a, <4 x i16> %b) {
+entry:
+  %a32 = zext <4 x i8> %a to <4 x i32>
+  %b32 = zext <4 x i16> %b to <4 x i32>
+  %s = select <4 x i1> %c, <4 x i32> %a32, <4 x i32> %b32
+  %x = add <4 x i32> %s, <i32 1, i32 1, i32 1, i32 1>
+  %y = xor <4 x i32> %s, <i32 42, i32 42, i32 42, i32 42>
+  %r = add <4 x i32> %x, %y
+  ret <4 x i32> %r
+}
+
+; CHECK-LABEL: define <4 x i32> @f_vec(
+; CHECK: %[[A16:.*]] = zext <4 x i8> %a to <4 x i16>
+; CHECK-NOT: %b32 = zext <4 x i16> %b to <4 x i32>
+; CHECK: %[[SN:.*]] = select <4 x i1> %c, <4 x i16> %[[A16]], <4 x i16> %b
+; CHECK: %[[SW:.*]] = zext <4 x i16> %[[SN]] to <4 x i32>
+; CHECK-NOT: select <4 x i1> %c, <4 x i32>
