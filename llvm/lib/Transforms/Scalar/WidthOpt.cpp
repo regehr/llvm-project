@@ -7,6 +7,7 @@
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/ValueHandle.h"
+#include "llvm/IR/ConstantFold.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -2748,9 +2749,11 @@ bool tryFoldTruncOfExt(TruncInst &Tr) {
   } else if (TargetWidth < Ext->WideWidth) {
     // trunc(ext(a:N→W), M) where N < M < W = re-ext(a:N→M) with the same kind
     if (auto *C = dyn_cast<Constant>(Ext->NarrowValue)) {
-      Replacement = Ext->Kind == ExtKind::ZExt
-                        ? ConstantExpr::getCast(Instruction::ZExt, C, Tr.getType())
-                        : ConstantExpr::getCast(Instruction::SExt, C, Tr.getType());
+      Instruction::CastOps CastOp =
+          Ext->Kind == ExtKind::ZExt ? Instruction::ZExt : Instruction::SExt;
+      Replacement = ConstantFoldCastInstruction(CastOp, C, Tr.getType());
+      if (!Replacement)
+        return false;
     } else {
       Value *NewExt;
       if (Ext->Kind == ExtKind::ZExt)
