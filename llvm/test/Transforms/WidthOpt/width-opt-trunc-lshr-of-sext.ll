@@ -47,3 +47,30 @@ define i16 @trunc_lshr_sext_i16(i16 %a) {
 ; CHECK-NOT: lshr i32
 ; CHECK: ashr i16 %a, 5
 ; CHECK: ret i16
+
+define <4 x i8> @trunc_lshr_sext_vec(<4 x i8> %a) {
+  %a32 = sext <4 x i8> %a to <4 x i32>
+  %s = lshr <4 x i32> %a32, splat (i32 3)
+  %t = trunc <4 x i32> %s to <4 x i8>
+  ret <4 x i8> %t
+}
+
+; CHECK-LABEL: define <4 x i8> @trunc_lshr_sext_vec(
+; CHECK-NOT: sext
+; CHECK-NOT: lshr <4 x i32>
+; CHECK-NOT: trunc
+; CHECK: %[[R:.*]] = ashr <4 x i8> %a, splat (i8 3)
+; CHECK: ret <4 x i8> %[[R]]
+
+define <4 x i16> @trunc_lshr_sext_i16_vec(<4 x i16> %a) {
+  %a32 = sext <4 x i16> %a to <4 x i32>
+  %s = lshr <4 x i32> %a32, splat (i32 5)
+  %t = trunc <4 x i32> %s to <4 x i16>
+  ret <4 x i16> %t
+}
+
+; CHECK-LABEL: define <4 x i16> @trunc_lshr_sext_i16_vec(
+; CHECK-NOT: sext
+; CHECK-NOT: lshr <4 x i32>
+; CHECK: ashr <4 x i16> %a, splat (i16 5)
+; CHECK: ret <4 x i16>

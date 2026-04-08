@@ -53,3 +53,33 @@ define i8 @abs_sext_bounded(i8 %a) {
 ; CHECK: ret i8
 
 declare i32 @llvm.abs.i32(i32, i1 immarg)
+
+define <4 x i8> @abs_add_not_sext_bounded_vec(<4 x i8> %a) {
+  %wa = sext <4 x i8> %a to <4 x i32>
+  %add = add <4 x i32> %wa, splat (i32 100)
+  %abs = call <4 x i32> @llvm.abs.v4i32(<4 x i32> %add, i1 false)
+  %tr = trunc <4 x i32> %abs to <4 x i8>
+  ret <4 x i8> %tr
+}
+
+; CHECK-LABEL: define <4 x i8> @abs_add_not_sext_bounded_vec(
+; CHECK: sext <4 x i8> %a to <4 x i32>
+; CHECK: add <4 x i32>
+; CHECK: @llvm.abs.v4i32
+; CHECK: trunc <4 x i32>
+; CHECK: ret <4 x i8>
+
+define <4 x i8> @abs_sext_bounded_vec(<4 x i8> %a) {
+  %wa = sext <4 x i8> %a to <4 x i32>
+  %abs = call <4 x i32> @llvm.abs.v4i32(<4 x i32> %wa, i1 false)
+  %tr = trunc <4 x i32> %abs to <4 x i8>
+  ret <4 x i8> %tr
+}
+
+; CHECK-LABEL: define <4 x i8> @abs_sext_bounded_vec(
+; CHECK-NOT: sext
+; CHECK-NOT: trunc
+; CHECK: @llvm.abs.v4i8(<4 x i8> %a
+; CHECK: ret <4 x i8>
+
+declare <4 x i32> @llvm.abs.v4i32(<4 x i32>, i1)

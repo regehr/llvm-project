@@ -21,3 +21,22 @@ define void @multi_trunc_same_src(i8 %a, i8 %b, ptr %p, ptr %q) {
 ; CHECK-NOT: trunc i32
 ; CHECK: store i8 %[[R]], ptr %p
 ; CHECK: store i8 %[[R]], ptr %q
+
+define void @multi_trunc_same_src_vec(<4 x i8> %a, <4 x i8> %b, ptr %p, ptr %q) {
+  %a32 = zext <4 x i8> %a to <4 x i32>
+  %b32 = zext <4 x i8> %b to <4 x i32>
+  %r = add <4 x i32> %a32, %b32
+  %t1 = trunc <4 x i32> %r to <4 x i8>
+  %t2 = trunc <4 x i32> %r to <4 x i8>
+  store <4 x i8> %t1, ptr %p
+  store <4 x i8> %t2, ptr %q
+  ret void
+}
+
+; CHECK-LABEL: define void @multi_trunc_same_src_vec(
+; CHECK-NOT: zext <4 x i8>
+; CHECK-NOT: add <4 x i32>
+; CHECK: %[[R:.*]] = add <4 x i8> %a, %b
+; CHECK-NOT: trunc <4 x i32>
+; CHECK: store <4 x i8> %[[R]], ptr %p
+; CHECK: store <4 x i8> %[[R]], ptr %q

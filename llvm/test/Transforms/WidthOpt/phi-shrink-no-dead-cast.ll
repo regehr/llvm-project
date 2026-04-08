@@ -37,3 +37,26 @@ merge:
 ; CHECK-LABEL: define i64 @no_dead_cast(
 ; CHECK-NOT: zext i1 {{.*}} to i8
 ; CHECK: ret i64
+
+define <4 x i64> @no_dead_cast_vec(<4 x i1> %flag, <4 x i8> %val, <4 x i64> %extra, i1 %cond) {
+entry:
+  %w1 = zext <4 x i1> %flag to <4 x i64>
+  %w2 = zext <4 x i8> %val to <4 x i64>
+  %use = add <4 x i64> %w1, %extra
+  br i1 %cond, label %a, label %b
+
+a:
+  br label %merge
+
+b:
+  br label %merge
+
+merge:
+  %p = phi <4 x i64> [ %w1, %a ], [ %w2, %b ]
+  %r = add <4 x i64> %p, %use
+  ret <4 x i64> %r
+}
+
+; CHECK-LABEL: define <4 x i64> @no_dead_cast_vec(
+; CHECK-NOT: zext <4 x i1> {{.*}} to <4 x i8>
+; CHECK: ret <4 x i64>

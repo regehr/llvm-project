@@ -2,6 +2,7 @@
 ; Freeze does not block narrowing here; both operands are frozen at their
 ; narrow widths before the compare is shrunk.
 ; RUN: opt -passes='width-opt' -S %s | FileCheck %s
+; ALIVE2-EXTRA-ARGS: --smt-to=60000
 
 define i1 @f(i8 %x, i16 %y) {
   %x32 = zext i8 %x to i32

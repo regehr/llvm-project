@@ -31,3 +31,23 @@ entry:
 
 ; CHECK-LABEL: define i1 @sgt_sext_below_min(
 ; CHECK: ret i1 true
+
+define <4 x i1> @ult_zext_large_const_vec(<4 x i8> %x) {
+entry:
+  %ext = zext <4 x i8> %x to <4 x i32>
+  %cmp = icmp ult <4 x i32> %ext, <i32 300, i32 300, i32 300, i32 300>
+  ret <4 x i1> %cmp
+}
+
+; CHECK-LABEL: define <4 x i1> @ult_zext_large_const_vec(
+; CHECK: ret <4 x i1> splat (i1 true)
+
+define <4 x i1> @eq_zext_negative_const_vec(<4 x i8> %x) {
+entry:
+  %ext = zext <4 x i8> %x to <4 x i32>
+  %cmp = icmp eq <4 x i32> %ext, <i32 -1, i32 -1, i32 -1, i32 -1>
+  ret <4 x i1> %cmp
+}
+
+; CHECK-LABEL: define <4 x i1> @eq_zext_negative_const_vec(
+; CHECK: ret <4 x i1> zeroinitializer

@@ -38,3 +38,37 @@ define i8 @and_0xFFFF_before_trunc(i32 %x) {
 ; CHECK-NOT: and i32
 ; CHECK: trunc i32 %x to i8
 ; CHECK: ret i8
+
+define <4 x i8> @and_0xFF_before_trunc_vec(<4 x i32> %x) {
+  %m = and <4 x i32> %x, <i32 255, i32 255, i32 255, i32 255>
+  %t = trunc <4 x i32> %m to <4 x i8>
+  ret <4 x i8> %t
+}
+
+; CHECK-LABEL: define <4 x i8> @and_0xFF_before_trunc_vec(
+; CHECK-NOT: and <4 x i32>
+; CHECK: trunc <4 x i32> %x to <4 x i8>
+; CHECK: ret <4 x i8>
+
+define <4 x i8> @bitfield_extract_byte1_vec(<4 x i32> %a) {
+  %s = lshr <4 x i32> %a, splat (i32 8)
+  %m = and <4 x i32> %s, <i32 255, i32 255, i32 255, i32 255>
+  %t = trunc <4 x i32> %m to <4 x i8>
+  ret <4 x i8> %t
+}
+
+; CHECK-LABEL: define <4 x i8> @bitfield_extract_byte1_vec(
+; CHECK-NOT: and <4 x i32>
+; CHECK: lshr <4 x i32> %a, splat (i32 8)
+; CHECK: trunc <4 x i32>
+
+define <4 x i8> @and_0xFFFF_before_trunc_vec(<4 x i32> %x) {
+  %m = and <4 x i32> %x, <i32 65535, i32 65535, i32 65535, i32 65535>
+  %t = trunc <4 x i32> %m to <4 x i8>
+  ret <4 x i8> %t
+}
+
+; CHECK-LABEL: define <4 x i8> @and_0xFFFF_before_trunc_vec(
+; CHECK-NOT: and <4 x i32>
+; CHECK: trunc <4 x i32> %x to <4 x i8>
+; CHECK: ret <4 x i8>

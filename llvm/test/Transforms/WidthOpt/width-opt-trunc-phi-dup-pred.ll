@@ -25,3 +25,17 @@ bb:
 ; CHECK:         [[NARROW:%.*]] = trunc i32 %x to i8
 ; CHECK:         [[PHI:%.*]] = phi i8 [ [[NARROW]], %entry ], [ [[NARROW]], %entry ]
 ; CHECK:         ret i8 [[PHI]]
+
+define <4 x i8> @dup_pred_phi_trunc_vec(i1 %cond, <4 x i32> %x) {
+entry:
+  br i1 %cond, label %bb, label %bb
+bb:
+  %phi = phi <4 x i32> [ %x, %entry ], [ %x, %entry ]
+  %tr = trunc <4 x i32> %phi to <4 x i8>
+  ret <4 x i8> %tr
+}
+
+; CHECK-LABEL: define <4 x i8> @dup_pred_phi_trunc_vec(
+; CHECK:         [[NARROW:%.*]] = trunc <4 x i32> %x to <4 x i8>
+; CHECK:         [[PHI:%.*]] = phi <4 x i8> [ [[NARROW]], %entry ], [ [[NARROW]], %entry ]
+; CHECK:         ret <4 x i8> [[PHI]]

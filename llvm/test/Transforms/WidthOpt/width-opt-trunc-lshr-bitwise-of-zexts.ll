@@ -78,3 +78,34 @@ define i8 @lshr_of_nested_bitwise(i8 %a, i8 %b, i8 %c) {
 ; CHECK: xor i8
 ; CHECK: lshr i8
 ; CHECK: ret i8
+
+define <4 x i8> @lshr_of_or_vec(<4 x i8> %a, <4 x i8> %b) {
+  %a32 = zext <4 x i8> %a to <4 x i32>
+  %b32 = zext <4 x i8> %b to <4 x i32>
+  %or = or <4 x i32> %a32, %b32
+  %shr = lshr <4 x i32> %or, splat (i32 3)
+  %result = trunc <4 x i32> %shr to <4 x i8>
+  ret <4 x i8> %result
+}
+
+; CHECK-LABEL: define <4 x i8> @lshr_of_or_vec(
+; CHECK-NOT: zext
+; CHECK-NOT: lshr <4 x i32>
+; CHECK-NOT: trunc
+; CHECK: %[[OR:.*]] = or <4 x i8> %a, %b
+; CHECK: %[[SHR:.*]] = lshr <4 x i8> %[[OR]], splat (i8 3)
+; CHECK: ret <4 x i8> %[[SHR]]
+
+define <4 x i8> @lshr_of_and_mask_vec(<4 x i32> %x) {
+  %masked = and <4 x i32> %x, <i32 255, i32 255, i32 255, i32 255>
+  %shr = lshr <4 x i32> %masked, splat (i32 3)
+  %result = trunc <4 x i32> %shr to <4 x i8>
+  ret <4 x i8> %result
+}
+
+; CHECK-LABEL: define <4 x i8> @lshr_of_and_mask_vec(
+; CHECK-NOT: lshr <4 x i32>
+; CHECK-NOT: and <4 x i32>
+; CHECK: trunc <4 x i32> %x to <4 x i8>
+; CHECK: lshr <4 x i8>
+; CHECK: ret <4 x i8>

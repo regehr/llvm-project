@@ -15,3 +15,19 @@ entry:
 ; CHECK: %[[CMP:.*]] = icmp ult i16 %[[X16]], %sy
 ; CHECK-NOT: icmp ult i32
 ; CHECK: ret i1 %[[CMP]]
+
+define <4 x i1> @f_vec(<4 x i8> %x, <4 x i8> %y) {
+entry:
+  %wide = zext <4 x i8> %x to <4 x i32>
+  %tx = trunc <4 x i32> %wide to <4 x i16>
+  %sy = sext <4 x i8> %y to <4 x i16>
+  %cmp = icmp ult <4 x i16> %tx, %sy
+  ret <4 x i1> %cmp
+}
+
+; CHECK-LABEL: define <4 x i1> @f_vec(
+; CHECK: %[[X16:.*]] = zext <4 x i8> %x to <4 x i16>
+; CHECK: %sy = sext <4 x i8> %y to <4 x i16>
+; CHECK: %[[CMP:.*]] = icmp ult <4 x i16> %[[X16]], %sy
+; CHECK-NOT: icmp ult <4 x i32>
+; CHECK: ret <4 x i1> %[[CMP]]

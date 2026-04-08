@@ -31,3 +31,17 @@ define i1 @icmp_eq_sub_nuw_zexts(i8 %a, i8 %b) {
 ; CHECK:      %{{.*}} = sub i8 %a, %b
 ; CHECK:      %{{.*}} = icmp eq i8 {{.*}}, 50
 ; CHECK:      ret i1
+
+define <4 x i1> @icmp_ult_sub_nuw_zexts_vec(<4 x i8> %a, <4 x i8> %b) {
+  %a32 = zext <4 x i8> %a to <4 x i32>
+  %b32 = zext <4 x i8> %b to <4 x i32>
+  %diff = sub nuw <4 x i32> %a32, %b32
+  %cmp = icmp ult <4 x i32> %diff, <i32 200, i32 200, i32 200, i32 200>
+  ret <4 x i1> %cmp
+}
+
+; CHECK-LABEL: define <4 x i1> @icmp_ult_sub_nuw_zexts_vec(
+; CHECK-NOT: <4 x i32>
+; CHECK:      %{{.*}} = sub <4 x i8> %a, %b
+; CHECK:      %{{.*}} = icmp ult <4 x i8>
+; CHECK:      ret <4 x i1>

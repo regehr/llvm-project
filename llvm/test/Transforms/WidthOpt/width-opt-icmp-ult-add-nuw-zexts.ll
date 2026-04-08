@@ -36,3 +36,19 @@ define i1 @icmp_eq_add_nuw_zexts(i8 %a, i8 %b) {
 ; CHECK:      %{{.*}} = add i9
 ; CHECK:      %{{.*}} = icmp eq i9 {{.*}}, 100
 ; CHECK:      ret i1
+
+define <4 x i1> @icmp_ult_add_nuw_zexts_vec(<4 x i8> %a, <4 x i8> %b) {
+  %a32 = zext <4 x i8> %a to <4 x i32>
+  %b32 = zext <4 x i8> %b to <4 x i32>
+  %sum = add nuw <4 x i32> %a32, %b32
+  %cmp = icmp ult <4 x i32> %sum, <i32 300, i32 300, i32 300, i32 300>
+  ret <4 x i1> %cmp
+}
+
+; CHECK-LABEL: define <4 x i1> @icmp_ult_add_nuw_zexts_vec(
+; CHECK-NOT: <4 x i32>
+; CHECK:      %{{.*}} = zext <4 x i8> %a to <4 x i9>
+; CHECK:      %{{.*}} = zext <4 x i8> %b to <4 x i9>
+; CHECK:      %{{.*}} = add <4 x i9>
+; CHECK:      %{{.*}} = icmp ult <4 x i9>
+; CHECK:      ret <4 x i1>

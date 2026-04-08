@@ -36,3 +36,35 @@ define i8 @lshr_then_or(i8 %a, i8 %b) {
 ; CHECK: lshr i8 %a, 3
 ; CHECK: or i8
 ; CHECK: ret i8
+
+define <4 x i8> @lshr_of_lshr_vec(<4 x i8> %a) {
+  %a32 = zext <4 x i8> %a to <4 x i32>
+  %s1 = lshr <4 x i32> %a32, splat (i32 2)
+  %s2 = lshr <4 x i32> %s1, splat (i32 1)
+  %t = trunc <4 x i32> %s2 to <4 x i8>
+  ret <4 x i8> %t
+}
+
+; CHECK-LABEL: define <4 x i8> @lshr_of_lshr_vec(
+; CHECK-NOT: zext
+; CHECK-NOT: lshr <4 x i32>
+; CHECK-NOT: trunc
+; CHECK: lshr <4 x i8> %a, splat (i8 2)
+; CHECK: lshr <4 x i8>
+; CHECK: ret <4 x i8>
+
+define <4 x i8> @lshr_then_or_vec(<4 x i8> %a, <4 x i8> %b) {
+  %a32 = zext <4 x i8> %a to <4 x i32>
+  %b32 = zext <4 x i8> %b to <4 x i32>
+  %s = lshr <4 x i32> %a32, splat (i32 3)
+  %v = or <4 x i32> %s, %b32
+  %t = trunc <4 x i32> %v to <4 x i8>
+  ret <4 x i8> %t
+}
+
+; CHECK-LABEL: define <4 x i8> @lshr_then_or_vec(
+; CHECK-NOT: zext
+; CHECK-NOT: <4 x i32>
+; CHECK: lshr <4 x i8> %a, splat (i8 3)
+; CHECK: or <4 x i8>
+; CHECK: ret <4 x i8>

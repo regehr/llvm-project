@@ -138,3 +138,51 @@ define i8 @trunc_umin_zext_const(i8 %a) {
 ; CHECK-NOT: trunc
 ; CHECK: call i8 @llvm.umin.i8(i8 %a, i8
 ; CHECK: ret i8
+
+define <4 x i8> @trunc_umin_zext_vec(<4 x i8> %a, <4 x i8> %b) {
+  %a32 = zext <4 x i8> %a to <4 x i32>
+  %b32 = zext <4 x i8> %b to <4 x i32>
+  %m = call <4 x i32> @llvm.umin.v4i32(<4 x i32> %a32, <4 x i32> %b32)
+  %t = trunc <4 x i32> %m to <4 x i8>
+  ret <4 x i8> %t
+}
+
+; CHECK-LABEL: define <4 x i8> @trunc_umin_zext_vec(
+; CHECK-NOT: zext
+; CHECK-NOT: umin <4 x i32>
+; CHECK-NOT: trunc
+; CHECK: call <4 x i8> @llvm.umin.v4i8(<4 x i8> %a, <4 x i8> %b)
+; CHECK: ret <4 x i8>
+
+define <4 x i8> @trunc_smin_sext_vec(<4 x i8> %a, <4 x i8> %b) {
+  %a32 = sext <4 x i8> %a to <4 x i32>
+  %b32 = sext <4 x i8> %b to <4 x i32>
+  %m = call <4 x i32> @llvm.smin.v4i32(<4 x i32> %a32, <4 x i32> %b32)
+  %t = trunc <4 x i32> %m to <4 x i8>
+  ret <4 x i8> %t
+}
+
+; CHECK-LABEL: define <4 x i8> @trunc_smin_sext_vec(
+; CHECK-NOT: sext
+; CHECK-NOT: smin <4 x i32>
+; CHECK-NOT: trunc
+; CHECK: call <4 x i8> @llvm.smin.v4i8(<4 x i8> %a, <4 x i8> %b)
+; CHECK: ret <4 x i8>
+
+define <4 x i8> @trunc_abs_sext_vec(<4 x i8> %a) {
+  %a32 = sext <4 x i8> %a to <4 x i32>
+  %abs = call <4 x i32> @llvm.abs.v4i32(<4 x i32> %a32, i1 false)
+  %t = trunc <4 x i32> %abs to <4 x i8>
+  ret <4 x i8> %t
+}
+
+; CHECK-LABEL: define <4 x i8> @trunc_abs_sext_vec(
+; CHECK-NOT: sext
+; CHECK-NOT: abs <4 x i32>
+; CHECK-NOT: trunc
+; CHECK: call <4 x i8> @llvm.abs.v4i8(<4 x i8> %a, i1 false)
+; CHECK: ret <4 x i8>
+
+declare <4 x i32> @llvm.umin.v4i32(<4 x i32>, <4 x i32>)
+declare <4 x i32> @llvm.smin.v4i32(<4 x i32>, <4 x i32>)
+declare <4 x i32> @llvm.abs.v4i32(<4 x i32>, i1)

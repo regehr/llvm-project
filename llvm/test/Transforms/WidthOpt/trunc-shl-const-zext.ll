@@ -32,3 +32,16 @@ define i8 @add_shl_const(i8 %x, i8 %y) {
 ; CHECK: %[[S:.*]] = shl i8 %x, 1
 ; CHECK: %[[A:.*]] = add i8 %[[S]], %y
 ; CHECK: ret i8 %[[A]]
+
+define <4 x i8> @shl_const_small_vec(<4 x i8> %x) {
+  %ext = zext <4 x i8> %x to <4 x i32>
+  %shl = shl <4 x i32> %ext, splat (i32 2)
+  %trunc = trunc <4 x i32> %shl to <4 x i8>
+  ret <4 x i8> %trunc
+}
+
+; CHECK-LABEL: define <4 x i8> @shl_const_small_vec(
+; CHECK-NOT: zext
+; CHECK-NOT: trunc
+; CHECK: %[[S:.*]] = shl <4 x i8> %x, splat (i8 2)
+; CHECK: ret <4 x i8> %[[S]]

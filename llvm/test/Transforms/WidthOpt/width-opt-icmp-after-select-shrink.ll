@@ -17,3 +17,19 @@ entry:
 ; CHECK: %[[C:.*]] = icmp eq i8 %[[S]], %z
 ; CHECK-NOT: icmp eq i32
 ; CHECK: ret i1 %[[C]]
+
+define <4 x i1> @f_vec(i1 %cond, <4 x i8> %x, <4 x i8> %y, <4 x i8> %z) {
+entry:
+  %x32 = zext <4 x i8> %x to <4 x i32>
+  %y32 = zext <4 x i8> %y to <4 x i32>
+  %s = select i1 %cond, <4 x i32> %x32, <4 x i32> %y32
+  %z32 = zext <4 x i8> %z to <4 x i32>
+  %c = icmp eq <4 x i32> %s, %z32
+  ret <4 x i1> %c
+}
+
+; CHECK-LABEL: define <4 x i1> @f_vec(
+; CHECK: %[[S:.*]] = select i1 %cond, <4 x i8> %x, <4 x i8> %y
+; CHECK: %[[C:.*]] = icmp eq <4 x i8> %[[S]], %z
+; CHECK-NOT: icmp eq <4 x i32>
+; CHECK: ret <4 x i1> %[[C]]

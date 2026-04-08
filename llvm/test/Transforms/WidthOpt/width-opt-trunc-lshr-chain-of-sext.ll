@@ -34,3 +34,18 @@ define i8 @lshr_chain_depth3(i8 %a) {
 ; CHECK-NOT: trunc
 ; CHECK: %[[R:.*]] = ashr i8 %a, 4
 ; CHECK: ret i8 %[[R]]
+
+define <4 x i8> @lshr_chain_depth2_vec(<4 x i8> %a) {
+  %a32 = sext <4 x i8> %a to <4 x i32>
+  %s1 = lshr <4 x i32> %a32, splat (i32 2)
+  %s2 = lshr <4 x i32> %s1, splat (i32 1)
+  %t = trunc <4 x i32> %s2 to <4 x i8>
+  ret <4 x i8> %t
+}
+
+; CHECK-LABEL: define <4 x i8> @lshr_chain_depth2_vec(
+; CHECK-NOT: sext
+; CHECK-NOT: lshr <4 x i32>
+; CHECK-NOT: trunc
+; CHECK: %[[R:.*]] = ashr <4 x i8> %a, splat (i8 3)
+; CHECK: ret <4 x i8> %[[R]]

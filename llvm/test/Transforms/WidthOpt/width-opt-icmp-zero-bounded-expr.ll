@@ -50,3 +50,47 @@ define i1 @icmp_ult_and_mask(i8 %a) {
 ; CHECK: %[[AND:.*]] = and i8 %a, 15
 ; CHECK: %[[CMP:.*]] = icmp ult i8 %[[AND]], 10
 ; CHECK: ret i1 %[[CMP]]
+
+define <4 x i1> @icmp_eq_and_zexts_vec(<4 x i8> %a, <4 x i8> %b) {
+  %a32 = zext <4 x i8> %a to <4 x i32>
+  %b32 = zext <4 x i8> %b to <4 x i32>
+  %and = and <4 x i32> %a32, %b32
+  %cmp = icmp eq <4 x i32> %and, zeroinitializer
+  ret <4 x i1> %cmp
+}
+
+; CHECK-LABEL: define <4 x i1> @icmp_eq_and_zexts_vec(
+; CHECK-NOT: zext
+; CHECK-NOT: and <4 x i32>
+; CHECK: %[[AND:.*]] = and <4 x i8> %a, %b
+; CHECK: %[[CMP:.*]] = icmp eq <4 x i8> %[[AND]], zeroinitializer
+; CHECK: ret <4 x i1> %[[CMP]]
+
+define <4 x i1> @icmp_ne_or_zexts_vec(<4 x i8> %a, <4 x i8> %b) {
+  %a32 = zext <4 x i8> %a to <4 x i32>
+  %b32 = zext <4 x i8> %b to <4 x i32>
+  %or = or <4 x i32> %a32, %b32
+  %cmp = icmp ne <4 x i32> %or, zeroinitializer
+  ret <4 x i1> %cmp
+}
+
+; CHECK-LABEL: define <4 x i1> @icmp_ne_or_zexts_vec(
+; CHECK-NOT: zext
+; CHECK-NOT: or <4 x i32>
+; CHECK: %[[OR:.*]] = or <4 x i8> %a, %b
+; CHECK: %[[CMP:.*]] = icmp ne <4 x i8> %[[OR]], zeroinitializer
+; CHECK: ret <4 x i1> %[[CMP]]
+
+define <4 x i1> @icmp_ult_and_mask_vec(<4 x i8> %a) {
+  %a32 = zext <4 x i8> %a to <4 x i32>
+  %masked = and <4 x i32> %a32, <i32 15, i32 15, i32 15, i32 15>
+  %cmp = icmp ult <4 x i32> %masked, <i32 10, i32 10, i32 10, i32 10>
+  ret <4 x i1> %cmp
+}
+
+; CHECK-LABEL: define <4 x i1> @icmp_ult_and_mask_vec(
+; CHECK-NOT: zext
+; CHECK-NOT: and <4 x i32>
+; CHECK: %[[AND:.*]] = and <4 x i8> %a, splat (i8 15)
+; CHECK: %[[CMP:.*]] = icmp ult <4 x i8> %[[AND]], splat (i8 10)
+; CHECK: ret <4 x i1> %[[CMP]]

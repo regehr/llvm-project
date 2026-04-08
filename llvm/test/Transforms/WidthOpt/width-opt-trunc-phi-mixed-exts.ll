@@ -51,3 +51,25 @@ merge:
 ; CHECK: add i8 %a, %b
 ; CHECK: phi i8
 ; CHECK: ret i8
+
+define <4 x i8> @phi_mixed_sext_zext_vec(<4 x i8> %a, <4 x i8> %b, i1 %p) {
+entry:
+  %a32 = sext <4 x i8> %a to <4 x i32>
+  %b32 = zext <4 x i8> %b to <4 x i32>
+  br i1 %p, label %left, label %right
+left:
+  br label %merge
+right:
+  br label %merge
+merge:
+  %v = phi <4 x i32> [ %a32, %left ], [ %b32, %right ]
+  %t = trunc <4 x i32> %v to <4 x i8>
+  ret <4 x i8> %t
+}
+
+; CHECK-LABEL: define <4 x i8> @phi_mixed_sext_zext_vec(
+; CHECK-NOT: sext
+; CHECK-NOT: zext
+; CHECK-NOT: trunc
+; CHECK: phi <4 x i8> [ %a, %left ], [ %b, %right ]
+; CHECK: ret <4 x i8>
