@@ -498,8 +498,10 @@ bool isCompatiblePredForExtKind(ICmpInst::Predicate Pred, ExtKind Kind) {
   return false;
 }
 
-// Forward declarations for helpers used by tryShrinkICmpZeroBounded.
+// Forward declarations for helpers used by tryShrinkICmpZeroBounded and
+// tryShrinkICmpSignBounded.
 bool isZeroBoundedAtWidth(Value *V, unsigned Width);
+bool isSextBoundedAtWidth(Value *V, unsigned Width);
 bool isTruncRootedLowBitsPreservingOpcode(unsigned Opcode);
 bool collectTruncRootedValueCost(Value *V, unsigned TargetWidth,
                                  SmallPtrSetImpl<Value *> &AddedValues,
@@ -681,6 +683,139 @@ bool tryShrinkICmpZeroBounded(ICmpInst &Cmp) {
 
   // Use WeakTrackingVH so that if deleting LI recursively kills RI (because
   // RI is only used by LI), we don't access a dangling pointer for RI.
+  WeakTrackingVH LHSHandle(LHS), RHSHandle(RHS);
+  if (auto *LI = dyn_cast_or_null<Instruction>(LHSHandle))
+    if (LI->use_empty())
+      RecursivelyDeleteTriviallyDeadInstructions(LI);
+  if (auto *RI = dyn_cast_or_null<Instruction>(RHSHandle))
+    if (RI->use_empty())
+      RecursivelyDeleteTriviallyDeadInstructions(RI);
+
+  return true;
+}
+
+// Return the structural signed narrow width of V: the minimum number of bits N
+// such that trunc(V, N) sign-extends back to V's original value (i.e., V is
+// sext-bounded at N by structure alone).  Returns 0 if unknown or not bounded.
+// Constants return 0 (they are sign-flexible and not the source of the bound).
+//
+// This is the signed analogue of getStructuralNarrowWidth.
+unsigned getStructuralSignedNarrowWidth(Value *V,
+                                        DenseMap<Value *, unsigned> &Cache) {
+  auto [It, Inserted] = Cache.try_emplace(V, 0u);
+  if (!Inserted)
+    return It->second;
+
+  auto compute = [&]() -> unsigned {
+    if (auto Ext = getExtOperandInfo(V))
+      return Ext->Kind == ExtKind::SExt ? Ext->NarrowWidth : 0;
+    if (isa<Constant>(V))
+      return 0;
+    if (auto *BO = dyn_cast<BinaryOperator>(V)) {
+      // and/or/xor: sext-bounded if both operands are (each bit position only
+      // depends on the corresponding bit of its inputs, so the sign relationship
+      // is preserved).
+      if (BO->getOpcode() == Instruction::And ||
+          BO->getOpcode() == Instruction::Or ||
+          BO->getOpcode() == Instruction::Xor) {
+        unsigned W0 = getStructuralSignedNarrowWidth(BO->getOperand(0), Cache);
+        unsigned W1 = getStructuralSignedNarrowWidth(BO->getOperand(1), Cache);
+        if (W0 == 0 || W1 == 0) return 0;
+        // The result needs as many bits as the wider of the two operands.
+        return std::max(W0, W1);
+      }
+      // ashr by constant k < W: arithmetic right shift only replicates the sign
+      // bit, so if A is sext-bounded at W then ashr(A, k) is sext-bounded at W.
+      if (BO->getOpcode() == Instruction::AShr) {
+        if (auto *AmtC = getScalarOrSplatConstantInt(BO->getOperand(1))) {
+          unsigned W = getStructuralSignedNarrowWidth(BO->getOperand(0), Cache);
+          unsigned ActualWidth = getScalarIntegerWidth(BO->getType());
+          if (W != 0 && AmtC->getValue().ult(W) && W < ActualWidth)
+            return W;
+        }
+      }
+    }
+    return 0;
+  };
+
+  unsigned Result = compute();
+  Cache[V] = Result;
+  return Result;
+}
+
+unsigned getStructuralSignedNarrowWidth(Value *V) {
+  DenseMap<Value *, unsigned> Cache;
+  return getStructuralSignedNarrowWidth(V, Cache);
+}
+
+// Narrow  icmp pred LHS, RHS  when both sides are structurally sext-bounded
+// at a width smaller than the current comparison width.  Valid for eq/ne and
+// all signed predicates.  Handles cases where at least one operand is a
+// bitwise/shift tree of sign-extensions rather than a single direct sext.
+bool tryShrinkICmpSignBounded(ICmpInst &Cmp) {
+  ICmpInst::Predicate Pred = Cmp.getPredicate();
+  // Only eq/ne and signed predicates: signed comparison order is preserved by
+  // sign extension, so narrowing is safe.
+  if (!isEqOrNe(Pred) && !isSignedICmp(Pred))
+    return false;
+
+  Value *LHS = Cmp.getOperand(0);
+  Value *RHS = Cmp.getOperand(1);
+  if (!isIntegerValue(LHS) || !isIntegerValue(RHS))
+    return false;
+
+  unsigned WideWidth = getValueWidth(LHS);
+  if (WideWidth != getValueWidth(RHS))
+    return false;
+
+  // Derive the target width from the non-constant sext-bounded operand.
+  unsigned TargetWidth = 0;
+  for (Value *V : {LHS, RHS}) {
+    if (!isa<Constant>(V)) {
+      TargetWidth = getStructuralSignedNarrowWidth(V);
+      if (TargetWidth != 0)
+        break;
+    }
+  }
+  if (TargetWidth == 0 || TargetWidth >= WideWidth)
+    return false;
+
+  // Both sides must be sext-bounded at TargetWidth (constants adapt freely).
+  if (!isSextBoundedAtWidth(LHS, TargetWidth) ||
+      !isSextBoundedAtWidth(RHS, TargetWidth))
+    return false;
+
+  // Cost check: we're replacing the wide icmp with a narrow one. The narrow
+  // operands must be materializable without net-increasing instruction count.
+  // Re-use the trunc-rooted cost infrastructure without counting a trunc removal
+  // (there is none; the icmp is merely replaced).
+  SmallPtrSet<Value *, 8> AddedValues;
+  SmallPtrSet<Instruction *, 8> RemovedInstructions;
+  SmallPtrSet<Value *, 8> Visited;
+  if (!collectTruncRootedValueCost(LHS, TargetWidth, AddedValues,
+                                   RemovedInstructions, Visited) ||
+      !collectTruncRootedValueCost(RHS, TargetWidth, AddedValues,
+                                   RemovedInstructions, Visited))
+    return false;
+  if (AddedValues.size() > RemovedInstructions.size())
+    return false;
+
+  DenseMap<Value *, Value *> Cache;
+  Value *NarrowLHS =
+      materializeTruncRootedValueAtWidth(LHS, TargetWidth, &Cmp, &Cache);
+  Value *NarrowRHS =
+      materializeTruncRootedValueAtWidth(RHS, TargetWidth, &Cmp, &Cache);
+  if (!NarrowLHS || !NarrowRHS)
+    return false;
+
+  IRBuilder<> B(&Cmp);
+  Value *NarrowCmp = B.CreateICmp(Pred, NarrowLHS, NarrowRHS, Cmp.getName());
+  if (auto *NCI = dyn_cast<ICmpInst>(NarrowCmp))
+    NCI->setDebugLoc(Cmp.getDebugLoc());
+
+  Cmp.replaceAllUsesWith(NarrowCmp);
+  Cmp.eraseFromParent();
+
   WeakTrackingVH LHSHandle(LHS), RHSHandle(RHS);
   if (auto *LI = dyn_cast_or_null<Instruction>(LHSHandle))
     if (LI->use_empty())
@@ -2966,11 +3101,33 @@ bool isZeroBoundedAtWidth(Value *V, unsigned Width) {
 // Returns true when V's value is guaranteed to fit in a Width-bit signed
 // integer, i.e. trunc(V, Width) sign-extends back to V's original value.
 // This is the signed analogue of isZeroBoundedAtWidth.
+//
+// Recursive cases:
+//   and/or/xor(A, B) is sext-bounded at W if both A and B are, because each
+//   bit of the output comes from the corresponding bit of A or B, and both
+//   keep the same sign relationship when truncated to W bits.
+//
+//   ashr(A, k) for constant k < W is sext-bounded at W if A is, because
+//   arithmetic right shift fills upper bits from the sign bit, so the result
+//   still sign-extends back to the full width from W bits.
 bool isSextBoundedAtWidth(Value *V, unsigned Width) {
   if (auto Ext = getExtOperandInfo(V))
     return Ext->Kind == ExtKind::SExt && Ext->NarrowWidth <= Width;
   if (auto *C = getScalarOrSplatConstantInt(V))
     return C->getValue().isSignedIntN(Width);
+  if (auto *BO = dyn_cast<BinaryOperator>(V)) {
+    if (BO->getOpcode() == Instruction::And ||
+        BO->getOpcode() == Instruction::Or ||
+        BO->getOpcode() == Instruction::Xor)
+      return isSextBoundedAtWidth(BO->getOperand(0), Width) &&
+             isSextBoundedAtWidth(BO->getOperand(1), Width);
+    if (BO->getOpcode() == Instruction::AShr) {
+      if (auto *AmtC = getScalarOrSplatConstantInt(BO->getOperand(1))) {
+        if (AmtC->getValue().ult(Width))
+          return isSextBoundedAtWidth(BO->getOperand(0), Width);
+      }
+    }
+  }
   return false;
 }
 
@@ -4628,7 +4785,11 @@ bool runStructuralLocalRewritesToFixpoint(Function &F,
         ChangedThisRound = true;
         continue;
       }
-      ChangedThisRound |= tryShrinkICmpZeroBounded(*Cmp);
+      if (tryShrinkICmpZeroBounded(*Cmp)) {
+        ChangedThisRound = true;
+        continue;
+      }
+      ChangedThisRound |= tryShrinkICmpSignBounded(*Cmp);
     }
 
     for (WeakTrackingVH &VH : WL.Selects) {
