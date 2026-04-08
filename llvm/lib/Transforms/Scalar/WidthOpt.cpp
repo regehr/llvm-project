@@ -2214,6 +2214,94 @@ bool tryShrinkSExtSwitch(SExtInst &SExt) {
   return true;
 }
 
+// Collapse sext(sext(x: iN→iM): iM→iW) → sext(x: iN→iW).
+// Profitable only when the inner sext has a single use (this outer sext),
+// allowing the inner sext to be removed: net effect is -1 instruction.
+bool tryShrinkSExtOfSExt(SExtInst &Outer) {
+  if (!isIntegerValue(&Outer))
+    return false;
+
+  auto *Inner = dyn_cast<SExtInst>(Outer.getOperand(0));
+  if (!Inner || !Inner->hasOneUse())
+    return false;
+
+  Value *Src = Inner->getOperand(0);
+  unsigned SrcWidth = getValueWidth(Src);
+  unsigned OuterWidth = getValueWidth(&Outer);
+  if (SrcWidth >= OuterWidth)
+    return false;
+
+  IRBuilder<> B(&Outer);
+  Value *NewSExt = B.CreateSExt(Src, Outer.getType(), Outer.getName());
+  if (auto *I = dyn_cast<Instruction>(NewSExt))
+    I->setDebugLoc(Outer.getDebugLoc());
+
+  Outer.replaceAllUsesWith(NewSExt);
+  Outer.eraseFromParent();
+  Inner->eraseFromParent();
+  return true;
+}
+
+// Sink sext through a bitwise binop when both operands are sext from the same
+// source type and each has exactly one use (this binop):
+//
+//   %sa = sext iN %a to iW   (one use)
+//   %sb = sext iN %b to iW   (one use)
+//   %r  = and/or/xor iW %sa, %sb
+//   → %narrow = and/or/xor iN %a, %b
+//     %r      = sext iN %narrow to iW
+//
+// Net: removes 3 instructions (2 sext + wide binop), adds 2 (narrow binop +
+// sext) → net -1.  Correctness: sext distributes over bitwise ops because each
+// output bit depends only on the corresponding input bit, and sign extension
+// replicates a single bit position.
+bool tryShrinkSExtBitwiseBinop(SExtInst &SExt) {
+  if (!isIntegerValue(&SExt))
+    return false;
+  if (!SExt.hasOneUse())
+    return false;
+
+  auto *BO = dyn_cast<BinaryOperator>(SExt.user_back());
+  if (!BO)
+    return false;
+
+  auto Opc = BO->getOpcode();
+  if (Opc != Instruction::And && Opc != Instruction::Or &&
+      Opc != Instruction::Xor)
+    return false;
+
+  // The other operand must also be a sext with exactly one use (this binop).
+  Value *OtherOp =
+      (BO->getOperand(0) == &SExt) ? BO->getOperand(1) : BO->getOperand(0);
+  auto *OtherSExt = dyn_cast<SExtInst>(OtherOp);
+  if (!OtherSExt || !OtherSExt->hasOneUse())
+    return false;
+
+  Value *SrcA = SExt.getOperand(0);
+  Value *SrcB = OtherSExt->getOperand(0);
+
+  // Sources must have identical types so the narrow binop is well-typed.
+  if (SrcA->getType() != SrcB->getType())
+    return false;
+  if (!isIntegerValue(SrcA))
+    return false;
+
+  IRBuilder<> B(BO);
+  Value *NarrowBO = B.CreateBinOp(Opc, SrcA, SrcB, BO->getName());
+  if (auto *I = dyn_cast<Instruction>(NarrowBO))
+    I->setDebugLoc(BO->getDebugLoc());
+  Value *NewSExt = B.CreateSExt(NarrowBO, BO->getType());
+  if (auto *I = dyn_cast<Instruction>(NewSExt))
+    I->setDebugLoc(BO->getDebugLoc());
+
+  BO->replaceAllUsesWith(NewSExt);
+  // Erase in dependency order: BO first (removes its uses of SExt/OtherSExt).
+  BO->eraseFromParent();
+  OtherSExt->eraseFromParent();
+  SExt.eraseFromParent();
+  return true;
+}
+
 // Eliminate a zext when the only use is an llvm.expect.iM call whose only use
 // is an icmp ne/eq with zero:
 //
@@ -4359,6 +4447,14 @@ bool runStructuralLocalRewritesToFixpoint(Function &F,
         continue;
       }
       if (tryShrinkSExtSwitch(*SExt)) {
+        ChangedThisRound = true;
+        continue;
+      }
+      if (tryShrinkSExtOfSExt(*SExt)) {
+        ChangedThisRound = true;
+        continue;
+      }
+      if (tryShrinkSExtBitwiseBinop(*SExt)) {
         ChangedThisRound = true;
         continue;
       }
