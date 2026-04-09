@@ -16,3 +16,12 @@ cpupower frequency-info | grep 'boost state support' -A2 | grep Active
 
 taskset -c 8 ./go.sh
 ```
+```
+python3 /home/regehr/libyuv/util/run_libyuv_benchmarks.py \
+    --exe /home/regehr/libyuv/build/libyuv_unittest \
+    --output /tmp/libyuv_width_opt.csv \
+    --width 1280 \
+    --height 720 \
+    --repeat 1000 \
+    --trials 3
+```
