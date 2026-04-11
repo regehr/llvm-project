@@ -1,5 +1,6 @@
 ; Current LLVM (/Users/regehr/llvm-project/for-alive/bin/opt -passes='default<O2>' -S): YES
-; InstCombine adjusts ext(select(cmp)) into a narrower min/max shape and widens once.
+; WidthOpt now requires each local rewrite to strictly reduce instruction count,
+; so this equal-cost min/max reshaping stays wide.
 ; RUN: opt -passes='width-opt' -S %s | FileCheck %s
 
 define i64 @f(i32 %a) {
@@ -11,8 +12,7 @@ entry:
 }
 
 ; CHECK-LABEL: define i64 @f(
-; CHECK-NOT: sext i32 %a to i64
+; CHECK: %a_ext = sext i32 %a to i64
 ; CHECK: %[[CMP:.*]] = icmp sgt i32 %a, -1
-; CHECK: %[[MAX:.*]] = select i1 %[[CMP]], i32 %a, i32 0
-; CHECK: %[[EXT:.*]] = sext i32 %[[MAX]] to i64
-; CHECK: ret i64 %[[EXT]]
+; CHECK: %max = select i1 %[[CMP]], i64 %a_ext, i64 0
+; CHECK: ret i64 %max

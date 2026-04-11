@@ -1,6 +1,6 @@
 ; Mixed-width zext arms can still be shrunk through a common intermediate
-; width. Here the phi should move to i16 instead of requiring both arms to
-; have the same exact narrow width.
+; width in principle, but this phi rewrite is only break-even locally, so
+; WidthOpt now leaves it unchanged.
 ; RUN: opt -passes='width-opt' -S %s | FileCheck %s
 
 define i32 @f(i1 %c, i8 %a, i16 %b) {
@@ -25,13 +25,12 @@ merge:
 
 ; CHECK-LABEL: define i32 @f(
 ; CHECK: left:
-; CHECK: %[[A16:.*]] = zext i8 %a to i16
+; CHECK: %a32 = zext i8 %a to i32
 ; CHECK: right:
-; CHECK-NOT: %b32 = zext i16 %b to i32
+; CHECK: %b32 = zext i16 %b to i32
 ; CHECK: merge:
-; CHECK: %[[PN:.*]] = phi i16 [ %[[A16]], %left ], [ %b, %right ]
-; CHECK: %[[PW:.*]] = zext i16 %[[PN]] to i32
-; CHECK-NOT: phi i32
+; CHECK: %p = phi i32 [ %a32, %left ], [ %b32, %right ]
+; CHECK-NOT: phi i16
 
 define <4 x i32> @f_vec(i1 %c, <4 x i8> %a, <4 x i16> %b) {
 entry:
@@ -55,10 +54,9 @@ merge:
 
 ; CHECK-LABEL: define <4 x i32> @f_vec(
 ; CHECK: left:
-; CHECK: %[[A16:.*]] = zext <4 x i8> %a to <4 x i16>
+; CHECK: %a32 = zext <4 x i8> %a to <4 x i32>
 ; CHECK: right:
-; CHECK-NOT: %b32 = zext <4 x i16> %b to <4 x i32>
+; CHECK: %b32 = zext <4 x i16> %b to <4 x i32>
 ; CHECK: merge:
-; CHECK: %[[PN:.*]] = phi <4 x i16> [ %[[A16]], %left ], [ %b, %right ]
-; CHECK: %[[PW:.*]] = zext <4 x i16> %[[PN]] to <4 x i32>
-; CHECK-NOT: phi <4 x i32>
+; CHECK: %p = phi <4 x i32> [ %a32, %left ], [ %b32, %right ]
+; CHECK-NOT: phi <4 x i16>

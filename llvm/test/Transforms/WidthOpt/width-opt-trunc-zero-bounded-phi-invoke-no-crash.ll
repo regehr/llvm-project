@@ -1,8 +1,8 @@
 ; RUN: opt -non-global-value-max-name-size=-1 -passes=width-opt -S %s -o - | FileCheck %s
 ;
 ; Original test used invoke; replaced with call so Alive2 can verify.
-; The phi of (call-result, 0) is still narrowed: the pass sinks the trunc into
-; the call block and replaces the wide phi with a narrow one.
+; With strict local profitability the phi of (call-result, 0) is no longer
+; narrowed, but WidthOpt must still handle the pattern without crashing.
 
 declare i64 @callee(ptr, i64)
 
@@ -23,7 +23,8 @@ merge:
 ; CHECK-LABEL: define i32 @invoke_phi_trunc_no_crash()
 ; CHECK: call.block:
 ; CHECK: %call = call i64 @callee(ptr null, i64 0)
-; CHECK: [[T:%.*]] = trunc i64 %call to i32
 ; CHECK: merge:
-; CHECK: %wide.narrow = phi i32 [ [[T]], %call.block ], [ 0, %entry ]
-; CHECK: ret i32 %wide.narrow
+; CHECK: %wide = phi i64 [ %call, %call.block ], [ 0, %entry ]
+; CHECK: %narrow = trunc i64 %wide to i32
+; CHECK-NOT: phi i32
+; CHECK: ret i32 %narrow

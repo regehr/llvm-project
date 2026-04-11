@@ -504,6 +504,10 @@ bool isCompatiblePredForExtKind(ICmpInst::Predicate Pred, ExtKind Kind) {
 bool isZeroBoundedAtWidth(Value *V, unsigned Width);
 bool isSextBoundedAtWidth(Value *V, unsigned Width);
 bool isTruncRootedLowBitsPreservingOpcode(unsigned Opcode);
+void accountForRegionInternalRemovals(
+    SmallPtrSetImpl<Value *> &RegionValues,
+    SmallPtrSetImpl<Instruction *> &RemovedInstructions,
+    ArrayRef<Instruction *> BoundaryUsers);
 bool collectTruncRootedValueCost(Value *V, unsigned TargetWidth,
                                  SmallPtrSetImpl<Value *> &AddedValues,
                                  SmallPtrSetImpl<Instruction *> &RemovedInstructions,
@@ -652,9 +656,9 @@ bool tryShrinkICmpZeroBounded(ICmpInst &Cmp) {
       !isZeroBoundedAtWidth(RHS, TargetWidth))
     return false;
 
-  // Cost check: require that narrowing doesn't add more instructions than it
-  // removes.  We re-use the trunc-rooted cost infrastructure without counting
-  // a trunc removal (there is none here; the icmp is merely replaced).
+  // Cost check: require that narrowing strictly reduces instruction count.
+  // We re-use the trunc-rooted cost infrastructure without counting a trunc
+  // removal (there is none here; the icmp is merely replaced).
   SmallPtrSet<Value *, 8> AddedValues;
   SmallPtrSet<Instruction *, 8> RemovedInstructions;
   SmallPtrSet<Value *, 8> Visited;
@@ -663,7 +667,7 @@ bool tryShrinkICmpZeroBounded(ICmpInst &Cmp) {
       !collectTruncRootedValueCost(RHS, TargetWidth, AddedValues,
                                    RemovedInstructions, Visited))
     return false;
-  if (AddedValues.size() > RemovedInstructions.size())
+  if (AddedValues.size() >= RemovedInstructions.size())
     return false;
 
   DenseMap<Value *, Value *> Cache;
@@ -787,9 +791,9 @@ bool tryShrinkICmpSignBounded(ICmpInst &Cmp) {
     return false;
 
   // Cost check: we're replacing the wide icmp with a narrow one. The narrow
-  // operands must be materializable without net-increasing instruction count.
-  // Re-use the trunc-rooted cost infrastructure without counting a trunc removal
-  // (there is none; the icmp is merely replaced).
+  // operands must be materializable with a strict local instruction-count
+  // decrease. Re-use the trunc-rooted cost infrastructure without counting a
+  // trunc removal (there is none; the icmp is merely replaced).
   SmallPtrSet<Value *, 8> AddedValues;
   SmallPtrSet<Instruction *, 8> RemovedInstructions;
   SmallPtrSet<Value *, 8> Visited;
@@ -798,7 +802,7 @@ bool tryShrinkICmpSignBounded(ICmpInst &Cmp) {
       !collectTruncRootedValueCost(RHS, TargetWidth, AddedValues,
                                    RemovedInstructions, Visited))
     return false;
-  if (AddedValues.size() > RemovedInstructions.size())
+  if (AddedValues.size() >= RemovedInstructions.size())
     return false;
 
   DenseMap<Value *, Value *> Cache;
@@ -976,7 +980,7 @@ bool tryShrinkICmp(ICmpInst &Cmp, DominatorTree *DT = nullptr) {
     ++RemovedBoundaryCost;
   if (RHSInfo->Producer && RHSInfo->Producer->hasOneUse())
     ++RemovedBoundaryCost;
-  if (AddedBoundaryCost > RemovedBoundaryCost)
+  if (AddedBoundaryCost >= RemovedBoundaryCost)
     return false;
 
   IRBuilder<> B(&Cmp);
@@ -1106,9 +1110,9 @@ bool tryWidenTruncZeroExtendedICmp(ICmpInst &Cmp, const DataLayout &DL,
       AddedBoundaryCost = 1;
     }
 
-    // Widening this compare is only worthwhile when any new zero-extension
-    // is paid for by removable boundary instructions around the compare.
-    if (AddedBoundaryCost > RemovedBoundaryCost)
+    // Widening this compare is only worthwhile when removable boundary
+    // instructions around the compare more than pay for any new zero-extension.
+    if (AddedBoundaryCost >= RemovedBoundaryCost)
       return false;
 
     IRBuilder<> B(&Cmp);
@@ -1267,7 +1271,7 @@ bool tryShrinkPhiOfExts(PHINode &Phi) {
       ++RemovedInstructions;
   }
 
-  if (AddedInstructions > RemovedInstructions)
+  if (AddedInstructions >= RemovedInstructions)
     return false;
 
   // Profitability confirmed: now materialise any incomings that need widening.
@@ -1393,25 +1397,33 @@ bool tryShrinkSelectOfExts(SelectInst &Sel) {
   }
 
   unsigned RemovableExts = 0;
+  unsigned RemovedUsers = 1; // The original wide select is always removed.
   if (TrueExt && TrueExt->Producer->hasOneUse())
     ++RemovableExts;
   if (FalseExt && FalseExt->Producer->hasOneUse() &&
       FalseExt->Producer != (TrueExt ? TrueExt->Producer : nullptr))
     ++RemovableExts;
+  for (Instruction *UserI : OriginalUsers)
+    if (auto *Tr = dyn_cast<TruncInst>(UserI))
+      if (Tr->getOperand(0) == &Sel && getValueWidth(Tr) == Info.NarrowWidth)
+        ++RemovedUsers;
 
-  unsigned AddedExts = NeedWideResult ? 1 : 0;
+  unsigned AddedInstructions = 1; // Rebuilt narrow select.
+  unsigned RemovedInstructions = RemovedUsers + RemovableExts;
+  if (NeedWideResult)
+    ++AddedInstructions;
   if (TrueExt && TrueExt->NarrowWidth != Info.NarrowWidth &&
       !isa<Constant>(TrueExt->NarrowValue))
-    ++AddedExts;
+    ++AddedInstructions;
   if (FalseExt && FalseExt->NarrowWidth != Info.NarrowWidth &&
       !isa<Constant>(FalseExt->NarrowValue))
-    ++AddedExts;
+    ++AddedInstructions;
 
   // Rebuilding the select at an intermediate width may also need to recreate
   // some arm extensions below the original wide type. Only do that when the
-  // removable arm extensions pay for the new casts, so the rewrite does not
-  // increase instruction count.
-  if (AddedExts > RemovableExts)
+  // removable arm extensions more than pay for the new casts, so the rewrite
+  // strictly reduces local instruction count.
+  if (AddedInstructions >= RemovedInstructions)
     return false;
 
   IRBuilder<> B(&Sel);
@@ -2587,15 +2599,15 @@ bool tryShrinkZExtOfZeroBounded(ZExtInst &ZExt) {
   // Cost model: we add new narrow instructions (tracked in AddedValues) and
   // one new narrow zext (NarrowWidth→WideWidth); we remove the old wide zext
   // plus any dead intermediate instructions (tracked in RemovedInstructions).
-  // Condition: AddedValues.size() + 1 <= 1 + RemovedInstructions.size()
-  //   i.e. AddedValues.size() <= RemovedInstructions.size().
+  // Condition: AddedValues.size() + 1 < 1 + RemovedInstructions.size()
+  //   i.e. AddedValues.size() < RemovedInstructions.size().
   SmallPtrSet<Value *, 8> AddedValues;
   SmallPtrSet<Instruction *, 8> RemovedInstructions;
   SmallPtrSet<Value *, 8> Visited;
   if (!collectTruncRootedValueCost(Src, NarrowWidth, AddedValues,
                                    RemovedInstructions, Visited))
     return false;
-  if (AddedValues.size() > RemovedInstructions.size())
+  if (AddedValues.size() >= RemovedInstructions.size())
     return false;
 
   DenseMap<Value *, Value *> Cache;
@@ -3523,13 +3535,14 @@ bool tryShrinkTruncOfLowBitsBinOp(TruncInst &Tr) {
       !collectTruncRootedValueCost(BO->getOperand(1), TargetWidth, AddedValues,
                                    RemovedInstructions, VisitedValues))
     return false;
+  accountForRegionInternalRemovals(VisitedValues, RemovedInstructions, {BO});
 
   unsigned AddedInstructionCost = AddedValues.size();
   unsigned RemovedInstructionCost = 1 + RemovedInstructions.size();
 
   // Rebuild the add at the narrow width only when removable instructions
-  // around the region pay for any recursive narrowing we introduce.
-  if (AddedInstructionCost > RemovedInstructionCost)
+  // around the region more than pay for any recursive narrowing we introduce.
+  if (AddedInstructionCost >= RemovedInstructionCost)
     return false;
 
   // For multi-use case insert right after the BO (dominates all its users).
@@ -3621,6 +3634,46 @@ bool isTruncRootedLowBitsPreservingOpcode(unsigned Opcode) {
   default:
     return false;
   }
+}
+
+void accountForRegionInternalRemovals(
+    SmallPtrSetImpl<Value *> &RegionValues,
+    SmallPtrSetImpl<Instruction *> &RemovedInstructions,
+    ArrayRef<Instruction *> BoundaryUsers) {
+  SmallPtrSet<Instruction *, 8> BoundarySet;
+  for (Instruction *I : BoundaryUsers)
+    if (I)
+      BoundarySet.insert(I);
+
+  bool Changed;
+  do {
+    Changed = false;
+    for (Value *V : RegionValues) {
+      auto *I = dyn_cast<Instruction>(V);
+      if (!I || RemovedInstructions.contains(I))
+        continue;
+
+      bool AllUsesDisappear = true;
+      for (User *U : I->users()) {
+        auto *UserI = dyn_cast<Instruction>(U);
+        if (!UserI) {
+          AllUsesDisappear = false;
+          break;
+        }
+        if (RemovedInstructions.contains(UserI) || BoundarySet.contains(UserI) ||
+            RegionValues.contains(UserI))
+          continue;
+        AllUsesDisappear = false;
+        break;
+      }
+
+      if (!AllUsesDisappear)
+        continue;
+
+      RemovedInstructions.insert(I);
+      Changed = true;
+    }
+  } while (Changed);
 }
 
 Value *materializeTruncRootedValueAtWidth(Value *V, unsigned TargetWidth,
@@ -3892,6 +3945,25 @@ bool collectTruncRootedValueCost(
     return true;
 
   if (auto *BO = dyn_cast<BinaryOperator>(V)) {
+    auto getNarrowedConstant = [&](Value *Op) -> Constant * {
+      auto *C = dyn_cast<Constant>(Op);
+      if (!C)
+        return nullptr;
+      return cast<Constant>(convertConstantToNarrow(*C, TargetWidth));
+    };
+    auto isAllOnesNarrow = [&](Value *Op) -> bool {
+      auto *C = getNarrowedConstant(Op);
+      return C && C->isAllOnesValue();
+    };
+    auto isZeroNarrow = [&](Value *Op) -> bool {
+      auto *C = getNarrowedConstant(Op);
+      return C && C->isNullValue();
+    };
+    auto isOneNarrow = [&](Value *Op) -> bool {
+      auto *C = getNarrowedConstant(Op);
+      return C && C->isOneValue();
+    };
+
     if (isTruncRootedLowBitsPreservingOpcode(BO->getOpcode())) {
       // Special case for `and X, C` where C has no bits in the low TargetWidth
       // positions: trunc(and X, C, TargetWidth) = 0, a free constant.
@@ -3919,7 +3991,42 @@ bool collectTruncRootedValueCost(
                                        AddedValues, RemovedInstructions,
                                        Visited))
         return false;
-      AddedValues.insert(V);
+      bool FoldsAway = false;
+      switch (BO->getOpcode()) {
+      case Instruction::And:
+        FoldsAway = isAllOnesNarrow(BO->getOperand(0)) ||
+                    isAllOnesNarrow(BO->getOperand(1)) ||
+                    isZeroNarrow(BO->getOperand(0)) ||
+                    isZeroNarrow(BO->getOperand(1));
+        break;
+      case Instruction::Or:
+        FoldsAway = isZeroNarrow(BO->getOperand(0)) ||
+                    isZeroNarrow(BO->getOperand(1)) ||
+                    isAllOnesNarrow(BO->getOperand(0)) ||
+                    isAllOnesNarrow(BO->getOperand(1));
+        break;
+      case Instruction::Xor:
+        FoldsAway = isZeroNarrow(BO->getOperand(0)) ||
+                    isZeroNarrow(BO->getOperand(1));
+        break;
+      case Instruction::Add:
+        FoldsAway = isZeroNarrow(BO->getOperand(0)) ||
+                    isZeroNarrow(BO->getOperand(1));
+        break;
+      case Instruction::Sub:
+        FoldsAway = isZeroNarrow(BO->getOperand(1));
+        break;
+      case Instruction::Mul:
+        FoldsAway = isOneNarrow(BO->getOperand(0)) ||
+                    isOneNarrow(BO->getOperand(1)) ||
+                    isZeroNarrow(BO->getOperand(0)) ||
+                    isZeroNarrow(BO->getOperand(1));
+        break;
+      default:
+        break;
+      }
+      if (!FoldsAway)
+        AddedValues.insert(V);
       if (BO->hasOneUse())
         RemovedInstructions.insert(BO);
       return true;
@@ -3934,7 +4041,8 @@ bool collectTruncRootedValueCost(
                                        AddedValues, RemovedInstructions,
                                        Visited))
         return false;
-      AddedValues.insert(V);
+      if (!isZeroNarrow(BO->getOperand(1)))
+        AddedValues.insert(V);
       if (BO->hasOneUse())
         RemovedInstructions.insert(BO);
       return true;
@@ -3962,7 +4070,8 @@ bool collectTruncRootedValueCost(
                                        AddedValues, RemovedInstructions,
                                        Visited))
         return false;
-      AddedValues.insert(V);
+      if (!isZeroNarrow(BO->getOperand(1)))
+        AddedValues.insert(V);
       if (BO->hasOneUse())
         RemovedInstructions.insert(BO);
       return true;
@@ -4105,13 +4214,15 @@ bool tryShrinkTruncOfSelect(TruncInst &Tr) {
                                    AddedValues, RemovedInstructions,
                                    VisitedValues))
     return false;
+  accountForRegionInternalRemovals(VisitedValues, RemovedInstructions, {Sel});
 
   unsigned AddedInstructionCost = AddedValues.size();
   unsigned RemovedInstructionCost = 1 + RemovedInstructions.size();
 
   // Rebuild the select at the narrow width only when removable instructions
-  // around the region pay for any new arm materialization we introduce.
-  if (AddedInstructionCost > RemovedInstructionCost)
+  // around the region more than pay for any new arm materialization we
+  // introduce.
+  if (AddedInstructionCost >= RemovedInstructionCost)
     return false;
 
   // Materialize each arm at the truncated width first, then rebuild the select
@@ -4170,6 +4281,10 @@ bool tryShrinkTruncOfShiftRecurrence(TruncInst &Tr) {
   // a constant shift amount, rooted at a final truncation.
   if (!Phi->hasOneUse())
     return false;
+  // Require the wide recurrence to become dead after removing the trunc.
+  // Otherwise this rewrite would only add a parallel narrow recurrence.
+  if (Shl->getNumUses() != 2)
+    return false;
 
   unsigned TargetWidth = getValueWidth(&Tr);
   unsigned SourceWidth = getValueWidth(Shl);
@@ -4206,6 +4321,13 @@ bool tryShrinkTruncOfShiftRecurrence(TruncInst &Tr) {
 
   Tr.replaceAllUsesWith(NarrowShl);
   Tr.eraseFromParent();
+
+  // The old wide phi/shl recurrence is now isolated; erase it so the rewrite
+  // strictly reduces instruction count instead of relying on a later DCE pass.
+  Shl->dropAllReferences();
+  Phi->dropAllReferences();
+  Shl->eraseFromParent();
+  Phi->eraseFromParent();
   return true;
 }
 
@@ -4250,6 +4372,10 @@ bool tryShrinkTruncOfLowBitsRecurrence(TruncInst &Tr) {
   // Require the phi to have only one use (the binop) so we can remove it.
   if (!Phi->hasOneUse())
     return false;
+  // Require the wide recurrence to become dead after removing the trunc.
+  // Otherwise this rewrite would only add a parallel narrow recurrence.
+  if (BO->getNumUses() != 2)
+    return false;
 
   unsigned TargetWidth = getValueWidth(&Tr);
   unsigned SourceWidth = getValueWidth(BO);
@@ -4287,6 +4413,13 @@ bool tryShrinkTruncOfLowBitsRecurrence(TruncInst &Tr) {
 
   Tr.replaceAllUsesWith(NarrowBO);
   Tr.eraseFromParent();
+
+  // The old wide phi/binop recurrence is now isolated; erase it so the rewrite
+  // strictly reduces instruction count instead of relying on a later DCE pass.
+  BO->dropAllReferences();
+  Phi->dropAllReferences();
+  BO->eraseFromParent();
+  Phi->eraseFromParent();
   return true;
 }
 
@@ -4320,9 +4453,9 @@ bool tryShrinkTruncOfZeroBoundedPhi(TruncInst &Tr) {
                                      AddedValues, RemovedInstructions, Visited))
       return false;
   }
-  // The phi itself and the trunc are being replaced; require net non-increase.
+  // The phi itself and the trunc are being replaced; require a strict decrease.
   unsigned RemovedCost = 1 + RemovedInstructions.size(); // 1 for the trunc
-  if (AddedValues.size() > RemovedCost)
+  if (AddedValues.size() >= RemovedCost)
     return false;
 
   // Materialize each incoming value at TargetWidth, inserting before the
@@ -4413,7 +4546,8 @@ bool tryShrinkTruncOfMinMaxAbs(TruncInst &Tr) {
   }
 
   // Cost check: all args (and transitively their subexpressions) must be
-  // materializable at TargetWidth without increasing instruction count.
+  // materializable at TargetWidth with a strict local instruction-count
+  // decrease.
   SmallPtrSet<Value *, 8> AddedValues;
   SmallPtrSet<Instruction *, 8> RemovedInstructions;
   SmallPtrSet<Value *, 8> Visited;
@@ -4421,7 +4555,7 @@ bool tryShrinkTruncOfMinMaxAbs(TruncInst &Tr) {
                                    RemovedInstructions, Visited))
     return false;
   // +1 for the trunc itself being removed.
-  if (AddedValues.size() > RemovedInstructions.size() + 1)
+  if (AddedValues.size() >= RemovedInstructions.size() + 1)
     return false;
 
   DenseMap<Value *, Value *> Cache;

@@ -10,8 +10,8 @@
 ;    incoming values!"
 
 ; Both arms of the branch go to %bb, creating two predecessor edges from
-; %entry.  The PHI has two entries for %entry with the same value; after
-; narrowing both entries must use the same i8 instruction.
+; %entry. Under the strict profitability rule this narrowing no longer fires,
+; but the pass must still leave valid IR that satisfies the verifier.
 define i8 @dup_pred_phi_trunc(i1 %cond, i32 %x) {
 entry:
   br i1 %cond, label %bb, label %bb
@@ -22,9 +22,9 @@ bb:
 }
 
 ; CHECK-LABEL: define i8 @dup_pred_phi_trunc(
-; CHECK:         [[NARROW:%.*]] = trunc i32 %x to i8
-; CHECK:         [[PHI:%.*]] = phi i8 [ [[NARROW]], %entry ], [ [[NARROW]], %entry ]
-; CHECK:         ret i8 [[PHI]]
+; CHECK:         %phi = phi i32 [ %x, %entry ], [ %x, %entry ]
+; CHECK:         %tr = trunc i32 %phi to i8
+; CHECK:         ret i8 %tr
 
 define <4 x i8> @dup_pred_phi_trunc_vec(i1 %cond, <4 x i32> %x) {
 entry:
@@ -36,6 +36,6 @@ bb:
 }
 
 ; CHECK-LABEL: define <4 x i8> @dup_pred_phi_trunc_vec(
-; CHECK:         [[NARROW:%.*]] = trunc <4 x i32> %x to <4 x i8>
-; CHECK:         [[PHI:%.*]] = phi <4 x i8> [ [[NARROW]], %entry ], [ [[NARROW]], %entry ]
-; CHECK:         ret <4 x i8> [[PHI]]
+; CHECK:         %phi = phi <4 x i32> [ %x, %entry ], [ %x, %entry ]
+; CHECK:         %tr = trunc <4 x i32> %phi to <4 x i8>
+; CHECK:         ret <4 x i8> %tr

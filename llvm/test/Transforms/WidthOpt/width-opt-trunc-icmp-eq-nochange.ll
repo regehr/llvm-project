@@ -1,3 +1,5 @@
+; The old widening step was only break-even and is now rejected, so the
+; trunc-based compare remains unchanged.
 ; RUN: opt -passes='width-opt' -S %s | FileCheck %s
 
 declare void @llvm.assume(i1)
@@ -15,7 +17,8 @@ entry:
 }
 
 ; CHECK-LABEL: define i1 @f(
-; CHECK-NOT: trunc i32
-; CHECK: %[[XLOW:.*]] = and i32 %x, 65535
-; CHECK: %cmp = icmp eq i32 %[[XLOW]], %y
+; CHECK: %x16 = trunc i32 %x to i16
+; CHECK: %y16 = trunc i32 %y to i16
+; CHECK: %cmp = icmp eq i16 %x16, %y16
+; CHECK-NOT: and i32 %x, 65535
 ; CHECK: ret i1 %cmp
