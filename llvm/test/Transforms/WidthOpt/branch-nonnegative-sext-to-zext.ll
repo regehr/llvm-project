@@ -1,5 +1,6 @@
 ; Current LLVM (/Users/regehr/llvm-project/for-alive/bin/opt -passes='default<O2>' -S): YES
-; Branch information can justify replacing sext with zext for a wider use.
+; Branch information can justify replacing sext with zext for a wider use, but
+; that rewrite is only break-even locally and is now disabled.
 ; RUN: opt -passes='width-opt' -S %s | FileCheck %s
 
 declare void @use64(i64)
@@ -20,7 +21,6 @@ exit:
 }
 
 ; CHECK-LABEL: define void @f(
-; CHECK-NOT: sext
 ; CHECK: bb:
-; CHECK: %ext.wide = zext nneg i32 %n to i64
+; CHECK: %ext.wide = sext i32 %n to i64
 ; CHECK: call void @use64(i64 %ext.wide)

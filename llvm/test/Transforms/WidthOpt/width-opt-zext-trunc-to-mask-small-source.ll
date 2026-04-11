@@ -7,9 +7,9 @@ define i32 @f(i8 %x) {
 }
 
 ; CHECK-LABEL: define i32 @f(
-; CHECK: %[[M:.*]] = and i8 %x, 15
-; CHECK: %[[E:.*]] = zext{{( nneg)?}} i8 %[[M]] to i32
-; CHECK: ret i32 %[[E]]
+; CHECK: %t = trunc i8 %x to i4
+; CHECK: %e = zext i4 %t to i32
+; CHECK: ret i32 %e
 
 define <4 x i32> @f_vec(<4 x i8> %x) {
   %t = trunc <4 x i8> %x to <4 x i4>
@@ -18,6 +18,6 @@ define <4 x i32> @f_vec(<4 x i8> %x) {
 }
 
 ; CHECK-LABEL: define <4 x i32> @f_vec(
-; CHECK: %[[M:.*]] = and <4 x i8> %x, splat (i8 15)
-; CHECK: %[[E:.*]] = zext{{( nneg)?}} <4 x i8> %[[M]] to <4 x i32>
-; CHECK: ret <4 x i32> %[[E]]
+; CHECK: %t = trunc <4 x i8> %x to <4 x i4>
+; CHECK: %e = zext <4 x i4> %t to <4 x i32>
+; CHECK: ret <4 x i32> %e

@@ -1,6 +1,6 @@
 ; Current LLVM (/Users/regehr/llvm-project/for-alive/bin/opt -passes='default<O2>' -S): YES
-; Freeze does not block narrowing here; both operands are frozen at their
-; narrow widths before the compare is shrunk.
+; Freeze does block the compare narrowing under the strict local-profitability
+; policy, because pushing freeze through the zexts is only break-even.
 ; RUN: opt -passes='width-opt' -S %s | FileCheck %s
 ; ALIVE2-EXTRA-ARGS: --smt-to=60000
 
@@ -14,13 +14,12 @@ define i1 @f(i8 %x, i16 %y) {
 }
 
 ; CHECK-LABEL: define i1 @f(
-; CHECK: %[[XF:.*]] = freeze i8 %x
-; CHECK: %[[YF:.*]] = freeze i16 %y
-; CHECK: %[[ZX:.*]] = zext i8 %[[XF]] to i16
-; CHECK: %[[CMP:.*]] = icmp ult i16 %[[ZX]], %[[YF]]
-; CHECK-NOT: freeze i32
-; CHECK-NOT: icmp ult i32
-; CHECK: ret i1 %[[CMP]]
+; CHECK: %x32 = zext i8 %x to i32
+; CHECK: %y32 = zext i16 %y to i32
+; CHECK: %fx = freeze i32 %x32
+; CHECK: %fy = freeze i32 %y32
+; CHECK: %c = icmp ult i32 %fx, %fy
+; CHECK: ret i1 %c
 
 define <4 x i1> @f_vec(<4 x i8> %x, <4 x i16> %y) {
   %x32 = zext <4 x i8> %x to <4 x i32>
@@ -32,10 +31,9 @@ define <4 x i1> @f_vec(<4 x i8> %x, <4 x i16> %y) {
 }
 
 ; CHECK-LABEL: define <4 x i1> @f_vec(
-; CHECK: %[[XF:.*]] = freeze <4 x i8> %x
-; CHECK: %[[YF:.*]] = freeze <4 x i16> %y
-; CHECK: %[[ZX:.*]] = zext <4 x i8> %[[XF]] to <4 x i16>
-; CHECK: %[[CMP:.*]] = icmp ult <4 x i16> %[[ZX]], %[[YF]]
-; CHECK-NOT: freeze <4 x i32>
-; CHECK-NOT: icmp ult <4 x i32>
-; CHECK: ret <4 x i1> %[[CMP]]
+; CHECK: %x32 = zext <4 x i8> %x to <4 x i32>
+; CHECK: %y32 = zext <4 x i16> %y to <4 x i32>
+; CHECK: %fx = freeze <4 x i32> %x32
+; CHECK: %fy = freeze <4 x i32> %y32
+; CHECK: %c = icmp ult <4 x i32> %fx, %fy
+; CHECK: ret <4 x i1> %c

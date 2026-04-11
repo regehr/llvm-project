@@ -31,9 +31,8 @@ define i8 @trunc_of_trunc_i32_to_i16_to_i8(i32 %a) {
 ; CHECK: ret i8
 
 ; ---- tryFoldTruncToI1ViaLShrAndMask ------------------------------------
-; trunc(lshr(x, K)) to i1  →  icmp ne (and x, 1<<K), 0
-; The fixed code uses dyn_cast<Instruction> for both B.CreateAnd and
-; B.CreateICmpNE results in case they fold (when X is constant).
+; This fold is disabled under the strict local-profitability policy because it
+; expands one trunc into an and+icmp pair.
 
 define i1 @trunc_lshr_to_i1(i32 %x) {
   %sh = lshr i32 %x, 3
@@ -41,11 +40,9 @@ define i1 @trunc_lshr_to_i1(i32 %x) {
   ret i1 %tr
 }
 ; CHECK-LABEL: define i1 @trunc_lshr_to_i1(
-; CHECK-NOT: lshr
-; CHECK-NOT: trunc
-; CHECK: and i32 %x, 8
-; CHECK: icmp ne i32
-; CHECK: ret i1
+; CHECK: %sh = lshr i32 %x, 3
+; CHECK: %tr = trunc i32 %sh to i1
+; CHECK: ret i1 %tr
 
 ; ---- tryFoldTruncToI1WhenSrcIsZeroBounded ------------------------------
 ; trunc i32 %zext to i1  where %zext = zext i1 → icmp ne %zext, 0
@@ -63,17 +60,16 @@ define i1 @trunc_to_i1_zero_bounded(i1 %flag) {
 ; CHECK: ret i1 %flag
 
 ; ---- tryFoldTruncNuwToI1 -----------------------------------------------
-; trunc nuw i32 %x to i1  →  icmp ne i32 %x, 0
-; The fixed code uses dyn_cast<Instruction> for B.CreateICmpNE result.
+; This fold is also disabled under the strict local-profitability policy
+; because it is only a break-even trunc→icmp rewrite.
 
 define i1 @trunc_nuw_to_i1(i32 %x) {
   %tr = trunc nuw i32 %x to i1
   ret i1 %tr
 }
 ; CHECK-LABEL: define i1 @trunc_nuw_to_i1(
-; CHECK-NOT: trunc
-; CHECK: icmp ne i32 %x, 0
-; CHECK: ret i1
+; CHECK: %tr = trunc nuw i32 %x to i1
+; CHECK: ret i1 %tr
 
 ; ---- tryNarrowUDivWithRange (zext-bounded operands) --------------------
 ; udiv of zext-bounded operands with a trunc result → narrow the udiv.

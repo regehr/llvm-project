@@ -8,9 +8,9 @@ entry:
 }
 
 ; CHECK-LABEL: define i32 @f(
-; CHECK: %[[FR:.*]] = freeze i8 %x
-; CHECK: %[[ZX:.*]] = zext i8 %[[FR]] to i32
-; CHECK: ret i32 %[[ZX]]
+; CHECK: %zx = zext i8 %x to i32
+; CHECK: %fr = freeze i32 %zx
+; CHECK: ret i32 %fr
 
 define <4 x i32> @f_vec(<4 x i8> %x) {
 entry:
@@ -20,6 +20,6 @@ entry:
 }
 
 ; CHECK-LABEL: define <4 x i32> @f_vec(
-; CHECK: %[[FR:.*]] = freeze <4 x i8> %x
-; CHECK: %[[ZX:.*]] = zext <4 x i8> %[[FR]] to <4 x i32>
-; CHECK: ret <4 x i32> %[[ZX]]
+; CHECK: %zx = zext <4 x i8> %x to <4 x i32>
+; CHECK: %fr = freeze <4 x i32> %zx
+; CHECK: ret <4 x i32> %fr

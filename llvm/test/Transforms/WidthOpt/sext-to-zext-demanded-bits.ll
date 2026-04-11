@@ -1,5 +1,6 @@
 ; Current LLVM (/Users/regehr/llvm-project/for-alive/bin/opt -passes='default<O2>' -S): YES
-; The sign extension is weakened to zext because the mask only demands low bits.
+; The sign extension could be weakened to zext because the mask only demands
+; low bits, but that rewrite is only break-even locally and is now disabled.
 ; RUN: opt -passes='width-opt' -S %s | FileCheck %s
 
 define i32 @f(i8 %x) {
@@ -9,9 +10,8 @@ define i32 @f(i8 %x) {
 }
 
 ; CHECK-LABEL: define i32 @f(
-; CHECK: %[[ZX:.*]] = zext i8 %x to i32
-; CHECK-NOT: sext i8 %x to i32
-; CHECK: %[[R:.*]] = and i32 %[[ZX]], 255
+; CHECK: %[[SX:.*]] = sext i8 %x to i32
+; CHECK: %[[R:.*]] = and i32 %[[SX]], 255
 ; CHECK: ret i32 %[[R]]
 
 define <4 x i32> @f_vec(<4 x i8> %x) {
@@ -21,7 +21,6 @@ define <4 x i32> @f_vec(<4 x i8> %x) {
 }
 
 ; CHECK-LABEL: define <4 x i32> @f_vec(
-; CHECK: %[[ZX:.*]] = zext <4 x i8> %x to <4 x i32>
-; CHECK-NOT: sext <4 x i8> %x to <4 x i32>
-; CHECK: %[[R:.*]] = and <4 x i32> %[[ZX]], splat (i32 255)
+; CHECK: %[[SX:.*]] = sext <4 x i8> %x to <4 x i32>
+; CHECK: %[[R:.*]] = and <4 x i32> %[[SX]], splat (i32 255)
 ; CHECK: ret <4 x i32> %[[R]]

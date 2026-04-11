@@ -862,6 +862,8 @@ bool tryShrinkICmpExtConst(ICmpInst &Cmp) {
     if (ExtInfo->Kind == ExtKind::SExt && isUnsignedICmp(NormalizedPred)) {
       const APInt &CV = C->getValue();
       if (CV.isIntN(ExtInfo->NarrowWidth - 1)) {
+        if (!ExtInfo->Producer->hasOneUse())
+          continue;
         // The constant fits in the non-negative range of the narrow type:
         // convert unsigned predicate to same unsigned predicate at narrow width.
         // (canRepresentConstant for ZExt checks this without sign; we reuse
@@ -916,6 +918,8 @@ bool tryShrinkICmpExtConst(ICmpInst &Cmp) {
     IRBuilder<> B(&Cmp);
     Value *NewCmp = nullptr;
     if (canRepresentConstant(*OrigC, ExtInfo->Kind, ExtInfo->NarrowWidth)) {
+      if (!ExtInfo->Producer->hasOneUse())
+        continue;
       Constant *NarrowC = convertConstantToNarrow(*OrigC, ExtInfo->NarrowWidth);
       NewCmp = buildConstantAwareICmp(B, NormalizedPred, ExtInfo->NarrowValue,
                                       NarrowC, Cmp.getName());
@@ -1043,6 +1047,19 @@ bool tryWidenTruncEqualityICmp(ICmpInst &Cmp, const DataLayout &DL,
 
   if (!areHighBitsKnownZero(WideLHS, NarrowWidth, DL, AC, DT, &Cmp) ||
       !areHighBitsKnownZero(WideRHS, NarrowWidth, DL, AC, DT, &Cmp))
+    return false;
+
+  unsigned RemovedBoundaryCost = 0;
+  if (LHS == RHS) {
+    if (LHS->hasOneUse())
+      RemovedBoundaryCost = 1;
+  } else {
+    if (LHS->hasOneUse())
+      ++RemovedBoundaryCost;
+    if (RHS->hasOneUse())
+      ++RemovedBoundaryCost;
+  }
+  if (RemovedBoundaryCost == 0)
     return false;
 
   IRBuilder<> B(&Cmp);
@@ -1489,164 +1506,6 @@ bool tryShrinkSelectOfExts(SelectInst &Sel) {
   return true;
 }
 
-bool mayMergeActualUndef(Value *V) {
-  if (isa<UndefValue>(V))
-    return true;
-  if (auto *Phi = dyn_cast<PHINode>(V))
-    return llvm::any_of(Phi->incoming_values(),
-                        [](Value *Incoming) { return isa<UndefValue>(Incoming); });
-  if (auto *Sel = dyn_cast<SelectInst>(V))
-    return isa<UndefValue>(Sel->getTrueValue()) ||
-           isa<UndefValue>(Sel->getFalseValue());
-  return false;
-}
-
-bool tryConvertSExtToNonNegZExt(SExtInst &Ext, LazyValueInfo &LVI) {
-  if (!isa<IntegerType>(Ext.getSrcTy()) || !isa<IntegerType>(Ext.getType()))
-    return false;
-  const Use &Base = Ext.getOperandUse(0);
-  if (!LVI.getConstantRangeAtUse(Base, /*UndefAllowed=*/false).isAllNonNegative())
-    return false;
-  if (mayMergeActualUndef(Base.get()))
-    return false;
-
-  // Once the operand is known non-negative at this use, sign extension and
-  // zero extension agree. Mark the replacement non-negative as well so later
-  // folds can continue to exploit that fact.
-  auto *ZExt = CastInst::CreateZExtOrBitCast(Base, Ext.getType(), "",
-                                             Ext.getIterator());
-  ZExt->takeName(&Ext);
-  ZExt->setDebugLoc(Ext.getDebugLoc());
-  ZExt->setNonNeg();
-  Ext.replaceAllUsesWith(ZExt);
-  Ext.eraseFromParent();
-  return true;
-}
-
-bool tryFoldAndOfSExtToZExt(BinaryOperator &And) {
-  ConstantInt *Mask = getScalarOrSplatConstantInt(And.getOperand(0));
-  SExtInst *Ext = dyn_cast<SExtInst>(And.getOperand(1));
-  if (!Mask || !Ext) {
-    Mask = getScalarOrSplatConstantInt(And.getOperand(1));
-    Ext = dyn_cast<SExtInst>(And.getOperand(0));
-  }
-  if (!Mask || !Ext)
-    return false;
-
-  // Leave shared sign-extensions to the whole-value conversion path so we
-  // preserve a single widened value across all compatible uses.
-  if (!Ext->hasOneUse())
-    return false;
-
-  unsigned SrcWidth = getValueWidth(Ext->getOperand(0));
-  unsigned WideWidth = getValueWidth(Ext);
-  assert(Mask->getBitWidth() == WideWidth &&
-         "And mask should match operand width");
-
-  APInt DemandedMask = APInt::getLowBitsSet(WideWidth, SrcWidth);
-  if ((Mask->getValue() & ~DemandedMask) != 0)
-    return false;
-
-  IRBuilder<> B(&And);
-  auto *ZExt = CastInst::CreateZExtOrBitCast(Ext->getOperand(0), Ext->getType(),
-                                             "", Ext->getIterator());
-  ZExt->setDebugLoc(Ext->getDebugLoc());
-  ZExt->takeName(Ext);
-  // Do NOT setNonNeg here: the transformation is valid because the mask zeroes
-  // out all bits above SrcWidth, so sext and zext agree on the unmasked bits.
-  // But this says nothing about whether the source value is non-negative.
-  And.replaceUsesOfWith(Ext, ZExt);
-  if (Ext->use_empty())
-    Ext->eraseFromParent();
-  return true;
-}
-
-bool sextUseAllowsZExt(User &U, SExtInst &Ext) {
-  if (auto *BO = dyn_cast<BinaryOperator>(&U)) {
-    switch (BO->getOpcode()) {
-    case Instruction::And:
-      if (auto *Mask = dyn_cast<ConstantInt>(BO->getOperand(0) == &Ext
-                                                 ? BO->getOperand(1)
-                                                 : BO->getOperand(0))) {
-        unsigned SrcWidth = getValueWidth(Ext.getOperand(0));
-        unsigned WideWidth = getValueWidth(&Ext);
-        if (SrcWidth > WideWidth)
-          return false;
-        APInt DemandedMask = APInt::getLowBitsSet(WideWidth, SrcWidth);
-        return (Mask->getValue() & ~DemandedMask) == 0;
-      }
-      return false;
-    case Instruction::LShr: {
-      // lshr(sext(a:N→W), k) is safe to convert sext→zext only when every use
-      // of the lshr result accesses bits that fall within the original narrow
-      // range (0..N-k-1).  Bits N-k..W-k-1 of the lshr result contain sign
-      // bits for sext but zeros for zext, so any use reaching those positions
-      // makes sext and zext non-equivalent.
-      if (BO->getOperand(0) != &Ext)
-        return false;
-      auto *AmtC = dyn_cast<ConstantInt>(BO->getOperand(1));
-      if (!AmtC)
-        return false;
-      unsigned N = getValueWidth(Ext.getOperand(0)); // narrow source width
-      unsigned W = getValueWidth(&Ext);               // wide width
-      uint64_t k = AmtC->getValue().getZExtValue();
-      if (k >= N)
-        return false;
-      // Bits 0..N-k-1 of the lshr result are safe (from original a).
-      APInt SafeMask = APInt::getLowBitsSet(W, N - k);
-      if (BO->use_empty())
-        return false;
-      for (User *LshrUser : BO->users()) {
-        // and(lshr, const_mask) where mask ⊆ SafeMask is fine.
-        if (auto *AndU = dyn_cast<BinaryOperator>(LshrUser)) {
-          if (AndU->getOpcode() != Instruction::And)
-            return false;
-          auto *MaskC = dyn_cast<ConstantInt>(
-              AndU->getOperand(0) == BO ? AndU->getOperand(1)
-                                        : AndU->getOperand(0));
-          if (!MaskC || (MaskC->getValue() & ~SafeMask) != 0)
-            return false;
-        } else if (auto *TrU = dyn_cast<TruncInst>(LshrUser)) {
-          // trunc(lshr, M) where M <= N-k only touches safe bits.
-          if (getValueWidth(TrU) > N - k)
-            return false;
-        } else {
-          return false;
-        }
-      }
-      return true;
-    }
-    default:
-      return false;
-    }
-  }
-
-  return false;
-}
-
-bool tryConvertWholeSExtToZExt(SExtInst &Ext) {
-  if (Ext.use_empty())
-    return false;
-
-  // This is the shared-value variant of the masked-use fold above. Only weaken
-  // the defining sext when every use is compatible with zero-extension
-  // semantics; otherwise keep the single shared sext.
-  for (User *U : Ext.users())
-    if (!sextUseAllowsZExt(*U, Ext))
-      return false;
-
-  auto *ZExt = CastInst::CreateZExtOrBitCast(Ext.getOperand(0), Ext.getType(),
-                                             "", Ext.getIterator());
-  ZExt->setDebugLoc(Ext.getDebugLoc());
-  ZExt->takeName(&Ext);
-  // This shared-value rewrite is justified only because every use ignores the
-  // sign-propagated high bits of the sext. That does not imply the source
-  // itself is non-negative, so the replacement must not carry nneg.
-  Ext.replaceAllUsesWith(ZExt);
-  Ext.eraseFromParent();
-  return true;
-}
-
 unsigned getUnsignedRangeWidth(const Use &OperandUse, LazyValueInfo &LVI) {
   Value *V = OperandUse.get();
   if (auto Ext = getExtOperandInfo(V))
@@ -1908,21 +1767,26 @@ bool tryWidenAddThroughZExt(BinaryOperator &BO) {
     if (!canWidenAddOperandWithoutOverflow(*ExtInfo, *C))
       return false;
 
-    Value *WideBase =
-        findExistingZExtToWidth(ExtInfo->NarrowValue, WideWidth);
-    IRBuilder<> B(WideZ);
-    // Only reuse an existing zext if it is guaranteed to dominate the
-    // insertion point (immediately before WideZ).  A zext in a different
-    // basic block may not dominate WideZ's block, producing a use-before-def
-    // verifier error.  NarrowValue dominates WideZ (it flows BO→WideZ), so a
-    // freshly created zext here is always safe.
+    Value *WideBase = findExistingZExtToWidth(ExtInfo->NarrowValue, WideWidth);
+    bool ReuseWideBase = false;
     if (WideBase) {
       auto *WideBaseI = cast<Instruction>(WideBase);
-      if (WideBaseI->getParent() != WideZ->getParent() ||
-          !WideBaseI->comesBefore(WideZ))
-        WideBase = nullptr;
+      if (WideBaseI->getParent() == WideZ->getParent() &&
+          WideBaseI->comesBefore(WideZ))
+        ReuseWideBase = true;
     }
-    if (!WideBase)
+
+    unsigned AddedInstructionCost = 1;   // The rebuilt wide add.
+    unsigned RemovedInstructionCost = 2; // The original add and trailing zext.
+    if (!ReuseWideBase)
+      ++AddedInstructionCost;
+    if (ExtInfo->Producer->hasOneUse())
+      ++RemovedInstructionCost;
+    if (AddedInstructionCost >= RemovedInstructionCost)
+      return false;
+
+    IRBuilder<> B(WideZ);
+    if (!ReuseWideBase)
       WideBase = B.CreateZExt(ExtInfo->NarrowValue,
                               IntegerType::get(BO.getContext(), WideWidth));
 
@@ -2662,6 +2526,18 @@ bool tryFoldZExtOfTruncToMask(ZExtInst &Ext) {
   if (NarrowWidth >= WideWidth)
     return false;
 
+  unsigned AddedInstructionCost = 0;
+  if (SrcWidth >= WideWidth) {
+    AddedInstructionCost = (SrcWidth == WideWidth) ? 1 : 2;
+  } else {
+    AddedInstructionCost = 2;
+  }
+  unsigned RemovedInstructionCost = 1; // The original zext.
+  if (Tr->hasOneUse())
+    ++RemovedInstructionCost;
+  if (AddedInstructionCost >= RemovedInstructionCost)
+    return false;
+
   IRBuilder<> B(&Ext);
 
   // Materialize the mask in the most convenient width we can without
@@ -2849,122 +2725,6 @@ bool tryFoldTruncOfTrunc(TruncInst &Tr) {
   Tr.eraseFromParent();
   if (Inner->use_empty())
     RecursivelyDeleteTriviallyDeadInstructions(Inner);
-  return true;
-}
-
-// Fold: trunc(lshr(X, K)) to i1  →  icmp ne (and X, 1<<K), 0
-//
-// When the target width is 1, truncating a value extracts exactly bit 0 of
-// that value.  After lshr(X, K), bit 0 is original bit K of X.  We can
-// express this without a trunc using a bitmask test:
-//   bit K of X ≠ 0   ⟺   (X & (1 << K)) ≠ 0
-//
-// Requirements:
-//  - TargetWidth is 1 (we're producing an i1)
-//  - Operand is lshr with a constant shift K satisfying 0 < K < SrcWidth
-//  - The single-use condition for lshr is NOT required (we only mask X)
-bool tryFoldTruncToI1ViaLShrAndMask(TruncInst &Tr) {
-  if (!isIntegerValue(&Tr))
-    return false;
-  if (getValueWidth(&Tr) != 1)
-    return false;
-
-  auto *LShr = dyn_cast<BinaryOperator>(Tr.getOperand(0));
-  if (!LShr || LShr->getOpcode() != Instruction::LShr)
-    return false;
-  if (!isIntegerValue(LShr))
-    return false;
-
-  auto *ShiftC = dyn_cast<ConstantInt>(LShr->getOperand(1));
-  if (!ShiftC)
-    return false;
-
-  unsigned SrcWidth = getValueWidth(LShr);
-  uint64_t K = ShiftC->getZExtValue();
-  // K must be in [1, SrcWidth-1]: K=0 is identity (no shift to undo),
-  // K>=SrcWidth gives poison in LLVM IR.
-  if (K == 0 || K >= SrcWidth)
-    return false;
-
-  // Build: and X, (1 << K); icmp ne ..., 0
-  // CreateAnd/CreateICmpNE may fold to a constant if X is a ConstantInt.
-  Value *X = LShr->getOperand(0);
-  IRBuilder<> B(&Tr);
-  APInt BitMask = APInt::getOneBitSet(SrcWidth, (unsigned)K);
-  Value *AndV = B.CreateAnd(X, ConstantInt::get(LShr->getType(), BitMask),
-                             Twine("bit") + Twine((unsigned)K));
-  if (auto *AndInst = dyn_cast<Instruction>(AndV))
-    AndInst->setDebugLoc(Tr.getDebugLoc());
-  Value *CmpV = B.CreateICmpNE(AndV, ConstantInt::get(LShr->getType(), 0),
-                                Tr.getName());
-  if (auto *Cmp = dyn_cast<Instruction>(CmpV))
-    Cmp->setDebugLoc(Tr.getDebugLoc());
-
-  Tr.replaceAllUsesWith(CmpV);
-  Tr.eraseFromParent();
-  if (LShr->use_empty())
-    RecursivelyDeleteTriviallyDeadInstructions(LShr);
-  return true;
-}
-
-// Fold: trunc iN X to i1 when X is zero-bounded at 1 bit  →  icmp ne iN X, 0
-//
-// When X is provably in [0, 2) (via !range metadata or other structural
-// analysis), truncating to i1 extracts bit 0 which is X itself.
-// Replacing with icmp ne eliminates the trunc.
-bool tryFoldTruncToI1WhenSrcIsZeroBounded(TruncInst &Tr) {
-  if (!isIntegerValue(&Tr))
-    return false;
-  if (getValueWidth(&Tr) != 1)
-    return false;
-
-  Value *Src = Tr.getOperand(0);
-  // nuw case is already handled by tryFoldTruncNuwToI1; only run this check
-  // for instructions whose source is zero-bounded via other evidence.
-  if (Tr.hasNoUnsignedWrap())
-    return false;
-  if (!isZeroBoundedAtWidth(Src, 1))
-    return false;
-
-  IRBuilder<> B(&Tr);
-  // CreateICmpNE may fold to a ConstantInt when Src is a ConstantInt.
-  Value *CmpV = B.CreateICmpNE(Src,
-                               getSameShapeIntegerConstant(Src->getType(),
-                                                           APInt(getValueWidth(Src), 0)),
-                               Tr.getName());
-  if (auto *Cmp = dyn_cast<Instruction>(CmpV))
-    Cmp->setDebugLoc(Tr.getDebugLoc());
-  Tr.replaceAllUsesWith(CmpV);
-  Tr.eraseFromParent();
-  return true;
-}
-
-// Fold: trunc nuw iN X to i1  →  icmp ne iN X, 0
-//
-// The `nuw` flag on a trunc means the truncated-away bits are all zero.
-// For a target width of 1, this means X ∈ {0, 1}.  In that case:
-//   trunc nuw iN X to i1  is equivalent to  icmp ne iN X, 0
-// Both yield 0 when X=0 and 1 when X=1.  Replacing eliminates the trunc.
-bool tryFoldTruncNuwToI1(TruncInst &Tr) {
-  if (!isIntegerValue(&Tr))
-    return false;
-  if (getValueWidth(&Tr) != 1)
-    return false;
-  if (!Tr.hasNoUnsignedWrap())
-    return false;
-
-  Value *Src = Tr.getOperand(0);
-  IRBuilder<> B(&Tr);
-  // CreateICmpNE may fold to a ConstantInt when Src is a ConstantInt.
-  Value *CmpV = B.CreateICmpNE(Src,
-                               getSameShapeIntegerConstant(Src->getType(),
-                                                           APInt(getValueWidth(Src), 0)),
-                               Tr.getName());
-  if (auto *Cmp = dyn_cast<Instruction>(CmpV))
-    Cmp->setDebugLoc(Tr.getDebugLoc());
-
-  Tr.replaceAllUsesWith(CmpV);
-  Tr.eraseFromParent();
   return true;
 }
 
@@ -4571,40 +4331,6 @@ bool tryShrinkTruncOfMinMaxAbs(TruncInst &Tr) {
   return true;
 }
 
-bool tryPushFreezeThroughExt(FreezeInst &FI) {
-  // Canonicalize freeze(ext x) into ext(freeze x) for simple integer casts.
-  // This follows the safe direction used by InstCombine: the cast only
-  // propagates poison from its operand, so freezing the narrow operand is
-  // sufficient to stop poison without inventing a wider arbitrary value.
-  auto *Cast = dyn_cast<CastInst>(FI.getOperand(0));
-  if (!Cast || !Cast->hasOneUse())
-    return false;
-
-  if (!isa<ZExtInst>(Cast) && !isa<SExtInst>(Cast) && !isa<TruncInst>(Cast))
-    return false;
-
-  Value *Src = Cast->getOperand(0);
-  if (!isIntegerValue(Src) || !isIntegerValue(&FI))
-    return false;
-
-  IRBuilder<> B(Cast);
-  auto *FrozenSrc = cast<FreezeInst>(
-      B.CreateFreeze(Src, Src->hasName() ? Src->getName() + ".fr" : ""));
-
-  Instruction *NewCast = CastInst::Create(Cast->getOpcode(), FrozenSrc,
-                                          FI.getType(), "",
-                                          FI.getIterator());
-  NewCast->setDebugLoc(FI.getDebugLoc());
-  NewCast->takeName(&FI);
-  FI.replaceAllUsesWith(NewCast);
-  FI.eraseFromParent();
-
-  if (Cast->use_empty())
-    RecursivelyDeleteTriviallyDeadInstructions(Cast);
-
-  return true;
-}
-
 struct LocalRewriteWorklists {
   // Instructions collected here may be erased by earlier transformations in the
   // same round (via RecursivelyDeleteTriviallyDeadInstructions). Use
@@ -4615,11 +4341,9 @@ struct LocalRewriteWorklists {
   SmallVector<WeakTrackingVH, 16> Phis;
   SmallVector<WeakTrackingVH, 16> SExts;
   SmallVector<WeakTrackingVH, 16> Adds;
-  SmallVector<WeakTrackingVH, 16> Ands;
   SmallVector<WeakTrackingVH, 16> UDivs;
   SmallVector<WeakTrackingVH, 16> ZExts;
   SmallVector<WeakTrackingVH, 16> Truncs;
-  SmallVector<WeakTrackingVH, 16> Freezes;
 };
 
 LocalRewriteWorklists collectLocalRewriteWorklists(Function &F) {
@@ -4634,8 +4358,6 @@ LocalRewriteWorklists collectLocalRewriteWorklists(Function &F) {
     else if (auto *BO = dyn_cast<BinaryOperator>(&I)) {
       if (BO->getOpcode() == Instruction::Add)
         WL.Adds.push_back(BO);
-      else if (BO->getOpcode() == Instruction::And)
-        WL.Ands.push_back(BO);
       else if (BO->getOpcode() == Instruction::UDiv ||
                BO->getOpcode() == Instruction::URem)
         WL.UDivs.push_back(BO);
@@ -4645,8 +4367,6 @@ LocalRewriteWorklists collectLocalRewriteWorklists(Function &F) {
       WL.SExts.push_back(SExt);
     else if (auto *Tr = dyn_cast<TruncInst>(&I))
       WL.Truncs.push_back(Tr);
-    else if (auto *FI = dyn_cast<FreezeInst>(&I))
-      WL.Freezes.push_back(FI);
   return WL;
 }
 
@@ -4661,13 +4381,6 @@ bool runAnalysisAwareLocalRewrites(Function &F, LazyValueInfo &LVI,
     if (!UDiv || UDiv->getParent() == nullptr)
       continue;
     Changed |= tryNarrowUDivWithRange(*UDiv, LVI);
-  }
-
-  for (WeakTrackingVH &VH : WL.SExts) {
-    auto *SExt = dyn_cast_or_null<SExtInst>(VH);
-    if (!SExt || SExt->getParent() == nullptr)
-      continue;
-    Changed |= tryConvertSExtToNonNegZExt(*SExt, LVI);
   }
 
   // When LVI proves the source of a zext is non-negative at this use, mark
@@ -4723,13 +4436,6 @@ bool runStructuralLocalRewritesToFixpoint(Function &F,
         continue;
       }
       ChangedThisRound |= tryWidenAddOverTruncThroughZExt(*Add);
-    }
-
-    for (WeakTrackingVH &VH : WL.Ands) {
-      auto *And = dyn_cast_or_null<BinaryOperator>(VH);
-      if (!And || And->getParent() == nullptr)
-        continue;
-      ChangedThisRound |= tryFoldAndOfSExtToZExt(*And);
     }
 
     for (WeakTrackingVH &VH : WL.SExts) {
@@ -4847,19 +4553,7 @@ bool runStructuralLocalRewritesToFixpoint(Function &F,
         ChangedThisRound = true;
         continue;
       }
-      if (tryFoldTruncToI1WhenSrcIsZeroBounded(*Tr)) {
-        ChangedThisRound = true;
-        continue;
-      }
-      if (tryFoldTruncNuwToI1(*Tr)) {
-        ChangedThisRound = true;
-        continue;
-      }
       if (tryFoldTruncOfCtpop(*Tr)) {
-        ChangedThisRound = true;
-        continue;
-      }
-      if (tryFoldTruncToI1ViaLShrAndMask(*Tr)) {
         ChangedThisRound = true;
         continue;
       }
@@ -4894,20 +4588,6 @@ bool runStructuralLocalRewritesToFixpoint(Function &F,
       if (tryShrinkTruncOfLowBitsBinOp(*Tr)) {
         ChangedThisRound = true;
       }
-    }
-
-    for (WeakTrackingVH &VH : WL.SExts) {
-      auto *SExt = dyn_cast_or_null<SExtInst>(VH);
-      if (!SExt || SExt->getParent() == nullptr)
-        continue;
-      ChangedThisRound |= tryConvertWholeSExtToZExt(*SExt);
-    }
-
-    for (WeakTrackingVH &VH : WL.Freezes) {
-      auto *FI = dyn_cast_or_null<FreezeInst>(VH);
-      if (!FI || FI->getParent() == nullptr)
-        continue;
-      ChangedThisRound |= tryPushFreezeThroughExt(*FI);
     }
 
     for (WeakTrackingVH &VH : WL.Compares) {

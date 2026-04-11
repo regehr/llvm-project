@@ -1,10 +1,5 @@
-; tryFoldAndOfSExtToZExt converts and(sext(X), mask) to and(zext(X), mask).
-; The transformation is valid when mask covers only the low SrcWidth bits,
-; because sext and zext agree on those bits.  However, this does NOT imply X
-; is non-negative, so the new zext must NOT carry nneg.  Setting nneg
-; unconditionally was a miscompile: a downstream pass could treat zext nneg as
-; a sign-extension (values agree) and propagate incorrect range information to
-; other instructions, producing wrong code.
+; tryFoldAndOfSExtToZExt is disabled under the strict local-profitability
+; policy because it is only a break-even canonicalization.
 ;
 ; RUN: opt -passes='width-opt' -S %s | FileCheck %s
 
@@ -16,8 +11,8 @@ entry:
   ret i32 %r
 }
 ; CHECK-LABEL: @and_sext_mask_no_nneg(
-; CHECK: zext i8 %x to i32
-; CHECK-NOT: zext nneg
+; CHECK: sext i8 %x to i32
+; CHECK-NOT: zext
 ; CHECK: and i32 {{.*}}, 255
 
 define <4 x i32> @and_sext_mask_no_nneg_vec(<4 x i8> %x) {
@@ -27,8 +22,8 @@ entry:
   ret <4 x i32> %r
 }
 ; CHECK-LABEL: @and_sext_mask_no_nneg_vec(
-; CHECK: zext <4 x i8> %x to <4 x i32>
-; CHECK-NOT: zext nneg
+; CHECK: sext <4 x i8> %x to <4 x i32>
+; CHECK-NOT: zext
 ; CHECK: and <4 x i32> {{.*}}, splat (i32 255)
 
 ; Mask that does not cover the full source width: still no nneg.
@@ -39,8 +34,8 @@ entry:
   ret i32 %r
 }
 ; CHECK-LABEL: @and_sext_partial_mask_no_nneg(
-; CHECK: zext i8 %x to i32
-; CHECK-NOT: zext nneg
+; CHECK: sext i8 %x to i32
+; CHECK-NOT: zext
 
 define <4 x i32> @and_sext_partial_mask_no_nneg_vec(<4 x i8> %x) {
 entry:
@@ -49,8 +44,8 @@ entry:
   ret <4 x i32> %r
 }
 ; CHECK-LABEL: @and_sext_partial_mask_no_nneg_vec(
-; CHECK: zext <4 x i8> %x to <4 x i32>
-; CHECK-NOT: zext nneg
+; CHECK: sext <4 x i8> %x to <4 x i32>
+; CHECK-NOT: zext
 
 ; Reversed operand order: and(mask, sext(X)) — same rule.
 define i32 @and_sext_reversed_no_nneg(i8 %x) {
@@ -60,8 +55,8 @@ entry:
   ret i32 %r
 }
 ; CHECK-LABEL: @and_sext_reversed_no_nneg(
-; CHECK: zext i8 %x to i32
-; CHECK-NOT: zext nneg
+; CHECK: sext i8 %x to i32
+; CHECK-NOT: zext
 
 define <4 x i32> @and_sext_reversed_no_nneg_vec(<4 x i8> %x) {
 entry:
@@ -70,5 +65,5 @@ entry:
   ret <4 x i32> %r
 }
 ; CHECK-LABEL: @and_sext_reversed_no_nneg_vec(
-; CHECK: zext <4 x i8> %x to <4 x i32>
-; CHECK-NOT: zext nneg
+; CHECK: sext <4 x i8> %x to <4 x i32>
+; CHECK-NOT: zext
