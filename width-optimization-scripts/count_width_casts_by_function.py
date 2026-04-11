@@ -321,6 +321,7 @@ def process_ir_file(
     optimized_root: Path,
     opt_bin: Path,
     llvm_extract_bin: Path,
+    progress_cb=None,
 ) -> list[FunctionCounts] | CrashRecord:
     function_names = parse_function_names(ir_file)
     if not function_names:
@@ -329,7 +330,9 @@ def process_ir_file(
     try:
         rows: list[FunctionCounts] = []
         relative_ir = ir_file.relative_to(optimized_root)
-        for function_name in function_names:
+        for func_idx, function_name in enumerate(function_names, 1):
+            if progress_cb:
+                progress_cb(func_idx, len(function_names), function_name)
             before_extract = extract_function_to_temp(llvm_extract_bin, ir_file, function_name)
             try:
                 before_counts, before_total_insts = run_instcount(opt_bin, before_extract)
@@ -413,8 +416,8 @@ def escape_markdown_cell(text: str) -> str:
 
 
 def print_table_header() -> None:
-    print("| Benchmark | IR File | Function | Insts | SExt | ZExt | Trunc | Total | WidthOpt Time (s) |")
-    print("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |")
+    print("| Benchmark | IR File | Function | SExt | ZExt | Trunc | Total Width Change Instructions | Total Instructions |")
+    print("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |")
 
 
 def print_function_row(row: FunctionCounts) -> None:
@@ -424,12 +427,11 @@ def print_function_row(row: FunctionCounts) -> None:
         f"| {escape_markdown_cell(row.benchmark)} | "
         f"{escape_markdown_cell(str(row.ir_file))} | "
         f"{escape_markdown_cell(row.function_name)} | "
-        f"{format_metric_cell(row.before_total_insts, row.after_total_insts)} | "
         f"{format_metric_cell(row.before['sext'], row.after['sext'])} | "
         f"{format_metric_cell(row.before['zext'], row.after['zext'])} | "
         f"{format_metric_cell(row.before['trunc'], row.after['trunc'])} | "
         f"{format_metric_cell(before_total, after_total)} | "
-        f"{format_seconds(row.width_opt_seconds)} |"
+        f"{format_metric_cell(row.before_total_insts, row.after_total_insts)} |"
     )
 
 
@@ -445,12 +447,11 @@ def print_total_row(
     after_total = sum(after[opcode] for opcode in WIDTH_OPCODES)
     print(
         f"| {escape_markdown_cell(label)} |  |  | "
-        f"{format_metric_cell(before_total_insts, after_total_insts)} | "
         f"{format_metric_cell(before['sext'], after['sext'])} | "
         f"{format_metric_cell(before['zext'], after['zext'])} | "
         f"{format_metric_cell(before['trunc'], after['trunc'])} | "
         f"{format_metric_cell(before_total, after_total)} | "
-        f"{format_seconds(width_opt_seconds)} |"
+        f"{format_metric_cell(before_total_insts, after_total_insts)} |"
     )
 
 
@@ -531,14 +532,21 @@ def main() -> int:
         benchmark_width_opt_seconds = 0.0
         optimized_root = benchmark_dir / "optimized"
         max_workers = min(jobs, len(ir_files))
+        n_ir = len(ir_files)
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            for result in executor.map(
-                lambda path: process_ir_file(
-                    benchmark_name, path, optimized_root, opt_bin, llvm_extract_bin
-                ),
-                ir_files,
-            ):
+            futures = {
+                executor.submit(
+                    process_ir_file,
+                    benchmark_name, path, optimized_root, opt_bin, llvm_extract_bin,
+                    lambda fi, fn, name, _file_idx=file_idx: print(
+                        f"[{benchmark_name}] file {_file_idx}/{n_ir}  fn {fi}/{fn} {name}",
+                        file=sys.stderr,
+                    ),
+                ): path
+                for file_idx, path in enumerate(ir_files, 1)
+            }
+            for result in (f.result() for f in futures):
                 if isinstance(result, CrashRecord):
                     crashes.append(result)
                     continue
