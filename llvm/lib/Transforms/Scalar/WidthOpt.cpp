@@ -507,7 +507,8 @@ bool isTruncRootedLowBitsPreservingOpcode(unsigned Opcode);
 void accountForRegionInternalRemovals(
     SmallPtrSetImpl<Value *> &RegionValues,
     SmallPtrSetImpl<Instruction *> &RemovedInstructions,
-    ArrayRef<Instruction *> BoundaryUsers);
+    ArrayRef<Instruction *> BoundaryUsers,
+    const SmallPtrSetImpl<Value *> *AddedValues = nullptr);
 bool collectTruncRootedValueCost(Value *V, unsigned TargetWidth,
                                  SmallPtrSetImpl<Value *> &AddedValues,
                                  SmallPtrSetImpl<Instruction *> &RemovedInstructions,
@@ -3295,7 +3296,8 @@ bool tryShrinkTruncOfLowBitsBinOp(TruncInst &Tr) {
       !collectTruncRootedValueCost(BO->getOperand(1), TargetWidth, AddedValues,
                                    RemovedInstructions, VisitedValues))
     return false;
-  accountForRegionInternalRemovals(VisitedValues, RemovedInstructions, {BO});
+  accountForRegionInternalRemovals(VisitedValues, RemovedInstructions, {BO},
+                                   &AddedValues);
 
   unsigned AddedInstructionCost = AddedValues.size();
   unsigned RemovedInstructionCost = 1 + RemovedInstructions.size();
@@ -3399,7 +3401,8 @@ bool isTruncRootedLowBitsPreservingOpcode(unsigned Opcode) {
 void accountForRegionInternalRemovals(
     SmallPtrSetImpl<Value *> &RegionValues,
     SmallPtrSetImpl<Instruction *> &RemovedInstructions,
-    ArrayRef<Instruction *> BoundaryUsers) {
+    ArrayRef<Instruction *> BoundaryUsers,
+    const SmallPtrSetImpl<Value *> *AddedValues) {
   SmallPtrSet<Instruction *, 8> BoundarySet;
   for (Instruction *I : BoundaryUsers)
     if (I)
@@ -3411,6 +3414,14 @@ void accountForRegionInternalRemovals(
     for (Value *V : RegionValues) {
       auto *I = dyn_cast<Instruction>(V);
       if (!I || RemovedInstructions.contains(I))
+        continue;
+      // "Leaf" values in AddedValues (non-ext, non-constant, non-BO/intrinsic
+      // values wider than TargetWidth) will have a new trunc instruction
+      // created for them by materializeTruncRootedValueAtWidth. That trunc
+      // keeps the leaf value alive, so it cannot actually be removed.
+      // Ext values in AddedValues are rebuilt using their narrow source (not V
+      // itself), so they do become dead and can still be counted as removable.
+      if (AddedValues && AddedValues->contains(I) && !getExtOperandInfo(I))
         continue;
 
       bool AllUsesDisappear = true;
@@ -3974,7 +3985,8 @@ bool tryShrinkTruncOfSelect(TruncInst &Tr) {
                                    AddedValues, RemovedInstructions,
                                    VisitedValues))
     return false;
-  accountForRegionInternalRemovals(VisitedValues, RemovedInstructions, {Sel});
+  accountForRegionInternalRemovals(VisitedValues, RemovedInstructions, {Sel},
+                                   &AddedValues);
 
   unsigned AddedInstructionCost = AddedValues.size();
   unsigned RemovedInstructionCost = 1 + RemovedInstructions.size();
