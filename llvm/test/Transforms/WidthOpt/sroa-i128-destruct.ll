@@ -24,3 +24,23 @@ define i64 @high_half(i64 %hi) {
 }
 ; CHECK-LABEL: define i64 @high_half(
 ; CHECK-NEXT: ret i64 %hi
+
+; Both halves: OR has both a direct trunc (low) and an lshr+trunc (high) user.
+; The lshr is the HighShifts path (lines 3039-3049 in WidthOpt.cpp).
+define void @both_halves(i64 %lo, i128 %wide, ptr %p0, ptr %p1) {
+  %masked = and i128 %wide, -18446744073709551616
+  %lo_ext = zext i64 %lo to i128
+  %combined = or i128 %masked, %lo_ext
+  %lo_result = trunc i128 %combined to i64
+  store i64 %lo_result, ptr %p0
+  %hi_shifted = lshr i128 %combined, 64
+  %hi_result = trunc i128 %hi_shifted to i64
+  store i64 %hi_result, ptr %p1
+  ret void
+}
+; CHECK-LABEL: define void @both_halves(
+; CHECK:       store i64 %lo, ptr %p0
+; CHECK-NOT:   trunc i128 %combined
+; CHECK:       %hi_shifted = lshr i128 %masked, 64
+; CHECK:       %hi_result = trunc i128 %hi_shifted to i64
+; CHECK:       store i64 %hi_result, ptr %p1
