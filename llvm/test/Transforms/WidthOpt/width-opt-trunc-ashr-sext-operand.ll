@@ -86,3 +86,20 @@ define <4 x i8> @ashr_sext_shift_by_one_vec(<4 x i8> %x) {
 ; CHECK-NOT: trunc
 ; CHECK: ashr <4 x i8> %x, splat (i8 1)
 ; CHECK: ret <4 x i8>
+
+; zext variant: trunc(ashr(zext(x), k), N) = lshr(x, k)
+; The zext fills upper bits with zero, so arithmetic shift acts like logical shift.
+
+define i8 @ashr_zext_i8_to_i32(i8 %x) {
+  %wide = zext i8 %x to i32
+  %shifted = ashr i32 %wide, 3
+  %narrow = trunc i32 %shifted to i8
+  ret i8 %narrow
+}
+
+; CHECK-LABEL: define i8 @ashr_zext_i8_to_i32(
+; CHECK-NOT: zext
+; CHECK-NOT: ashr
+; CHECK-NOT: trunc
+; CHECK: lshr i8 %x, 3
+; CHECK: ret i8
