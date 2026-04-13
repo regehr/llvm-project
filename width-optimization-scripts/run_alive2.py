@@ -15,6 +15,7 @@ Defaults: jobs=cpu_count, smt-timeout=10000ms, verbose=False
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -24,7 +25,14 @@ from pathlib import Path
 REPO_ROOT  = Path(__file__).parent.parent
 TEST_DIR   = REPO_ROOT / "llvm/test/Transforms/WidthOpt"
 OPT        = REPO_ROOT / "build/bin/opt"
-ALIVE_TV   = Path("/home/regehr/alive2-regehr/build/alive-tv")
+
+
+def find_alive_tv() -> str:
+    """Resolve alive-tv from PATH and exit with a readable error if missing."""
+    alive_tv = shutil.which("alive-tv")
+    if alive_tv is None:
+        sys.exit("Could not find `alive-tv` in PATH")
+    return alive_tv
 
 
 def run(cmd, timeout_sec=120):
@@ -58,7 +66,7 @@ def extra_alive_args(ll_path: Path) -> list:
     return []
 
 
-def verify_file(ll_path: Path, smt_timeout_ms: int, verbose: bool):
+def verify_file(ll_path: Path, alive_tv: str, smt_timeout_ms: int, verbose: bool):
     """
     Optimise ll_path with width-opt, then verify with alive-tv.
     Returns (status, detail) where status is one of:
@@ -76,7 +84,7 @@ def verify_file(ll_path: Path, smt_timeout_ms: int, verbose: bool):
 
         # Step 2: verify
         rc, out = run(
-            [str(ALIVE_TV),
+            [alive_tv,
              "--disable-undef-input",
              f"--smt-to={smt_timeout_ms}",
              *extra_alive_args(ll_path),
@@ -129,6 +137,7 @@ def main():
     ap.add_argument("--verbose", "-v", action="store_true",
                     help="print alive-tv output for every file")
     args = ap.parse_args()
+    alive_tv = find_alive_tv()
 
     ll_files = sorted(TEST_DIR.glob("*.ll"))
     if not ll_files:
@@ -144,7 +153,7 @@ def main():
 
     with ThreadPoolExecutor(max_workers=args.jobs) as ex:
         futures = {
-            ex.submit(verify_file, f, args.timeout, args.verbose): f
+            ex.submit(verify_file, f, alive_tv, args.timeout, args.verbose): f
             for f in ll_files
         }
         for fut in as_completed(futures):

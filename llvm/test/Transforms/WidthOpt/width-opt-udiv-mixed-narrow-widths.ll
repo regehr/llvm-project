@@ -1,4 +1,5 @@
 ; RUN: opt -passes='width-opt' -S %s | FileCheck %s
+; ALIVE2-EXTRA-ARGS: --smt-to=60000
 ;
 ; Cover mixed-width operand planning in tryNarrowUDivWithRange(), including
 ; the path that introduces a new intermediate zext for the narrower operand.
