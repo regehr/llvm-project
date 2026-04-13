@@ -1,9 +1,9 @@
-; tryShrinkSExtGEPIndex: when sext iN x to iM is used only as GEP index
-; operands (not the base pointer), replace those uses with the narrow x and
-; erase the sext. GEP sign-extends indices anyway, so the result is identical.
+; The plain sext-to-GEP-index rewrite is disabled for now: deleting the sext
+; here does not reliably produce a strict instruction-count win, and can even
+; lead to duplicated sexts after later canonicalization.
 ; RUN: opt -passes='width-opt' -S %s | FileCheck %s
 
-; Single GEP use: sext i8 -> i32 used as index into byte array.
+; No-change: keep the explicit sext.
 define ptr @sext_gep_single(i8 %x, ptr %base) {
   %sx = sext i8 %x to i32
   %p = getelementptr i8, ptr %base, i32 %sx
@@ -11,11 +11,11 @@ define ptr @sext_gep_single(i8 %x, ptr %base) {
 }
 
 ; CHECK-LABEL: define ptr @sext_gep_single(
-; CHECK-NOT:   sext
-; CHECK:       getelementptr i8, ptr %base, i8 %x
+; CHECK:       sext i8 %x to i32
+; CHECK:       getelementptr i8, ptr %base, i32 %sx
 ; CHECK:       ret ptr
 
-; Multiple GEP uses of the same sext: both should be updated.
+; No-change: shared sext should remain shared.
 define void @sext_gep_multi(i8 %x, ptr %a, ptr %b, ptr %out0, ptr %out1) {
   %sx = sext i8 %x to i32
   %p0 = getelementptr i8, ptr %a, i32 %sx
@@ -28,9 +28,9 @@ define void @sext_gep_multi(i8 %x, ptr %a, ptr %b, ptr %out0, ptr %out1) {
 }
 
 ; CHECK-LABEL: define void @sext_gep_multi(
-; CHECK-NOT:   sext
-; CHECK-DAG:   getelementptr i8, ptr %a, i8 %x
-; CHECK-DAG:   getelementptr i8, ptr %b, i8 %x
+; CHECK:       %sx = sext i8 %x to i32
+; CHECK-DAG:   getelementptr i8, ptr %a, i32 %sx
+; CHECK-DAG:   getelementptr i8, ptr %b, i32 %sx
 
 ; No-change: sext also used for something other than a GEP index.
 define ptr @sext_gep_nochange_extra_use(i8 %x, ptr %base, ptr %out) {

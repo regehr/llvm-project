@@ -1967,60 +1967,22 @@ bool tryWidenSubOverTruncThroughZExtNneg(ZExtInst &ZExt) {
 // by using X directly as the GEP index. GEP sign-extends its indices to
 // pointer width, which is exactly what sext does, so they are always equivalent.
 bool tryShrinkSExtGEPIndex(SExtInst &SExt) {
-  if (!isa<IntegerType>(SExt.getSrcTy()) || !isa<IntegerType>(SExt.getType()))
-    return false;
-  if (SExt.use_empty())
-    return false;
-  // All uses must be GEP index operands (not the base pointer, operand 0).
-  for (Use &U : SExt.uses()) {
-    auto *GEP = dyn_cast<GetElementPtrInst>(U.getUser());
-    if (!GEP || U.getOperandNo() == 0)
-      return false;
-  }
-  Value *NarrowSrc = SExt.getOperand(0);
-  SmallVector<GetElementPtrInst *, 4> GEPs;
-  for (Use &U : SExt.uses())
-    GEPs.push_back(cast<GetElementPtrInst>(U.getUser()));
-  for (GetElementPtrInst *GEP : GEPs)
-    GEP->replaceUsesOfWith(&SExt, NarrowSrc);
-  SExt.eraseFromParent();
-  return true;
+  // Like the plain zext-to-GEP rewrite below, this local deletion does not
+  // reliably correspond to a strict instruction-count win in the final IR.
+  // Later canonicalization often just recreates a sign-extension for the GEP
+  // index, and can even regress by duplicating it. Keep this disabled until
+  // it has a real count-based profitability model.
+  (void)SExt;
+  return false;
 }
 
 bool tryShrinkZExtGEPIndex(ZExtInst &ZExt) {
-  if (!isa<IntegerType>(ZExt.getSrcTy()) || !isa<IntegerType>(ZExt.getType()))
-    return false;
-  if (!isIntegerValue(&ZExt))
-    return false;
-  // GEP sign-extends indices to pointer width, so replacing zext(X) with X
-  // is valid only when sext(X) == zext(X), i.e., X is non-negative.
-  // The nneg flag makes this explicit; alternatively, structural analysis can
-  // prove the source fits in (NarrowBits-1) unsigned bits, meaning the sign
-  // bit of the narrow type is always 0.
-  unsigned NarrowBits = ZExt.getSrcTy()->getIntegerBitWidth();
-  if (!ZExt.hasNonNeg() &&
-      !isZeroBoundedAtWidth(ZExt.getOperand(0), NarrowBits - 1))
-    return false;
-  // Only when all uses are GEP instructions using this as an index (not base).
-  if (ZExt.use_empty())
-    return false;
-  for (Use &U : ZExt.uses()) {
-    auto *GEP = dyn_cast<GetElementPtrInst>(U.getUser());
-    if (!GEP)
-      return false;
-    // Make sure this use is as an index operand, not the base pointer (op 0).
-    if (U.getOperandNo() == 0)
-      return false;
-  }
-  // Replace each GEP's use of this zext with the narrow source value.
-  Value *NarrowSrc = ZExt.getOperand(0);
-  SmallVector<GetElementPtrInst *, 4> GEPs;
-  for (Use &U : ZExt.uses())
-    GEPs.push_back(cast<GetElementPtrInst>(U.getUser()));
-  for (GetElementPtrInst *GEP : GEPs)
-    GEP->replaceUsesOfWith(&ZExt, NarrowSrc);
-  ZExt.eraseFromParent();
-  return true;
+  // This rewrite removes an explicit zext at the width-opt IR level, but it
+  // does not reliably produce a strict instruction-count win: later canonical
+  // IR often just materializes a sext for the GEP index instead. Until this
+  // transform has a real count-based profitability model, keep it disabled.
+  (void)ZExt;
+  return false;
 }
 
 // When zext iN X to iM is used only by binops (lshr by constant ≥ 1, or and
