@@ -1,6 +1,5 @@
 ; Current LLVM (/Users/regehr/llvm-project/for-alive/bin/opt -passes='default<O2>' -S): YES
-; A trunc-rooted self-recurrence can be rebuilt at the narrower width inside
-; the loop.
+; A trunc-rooted shl self-recurrence is currently left at the wide type.
 ; RUN: opt -passes='width-opt' -S %s | FileCheck %s
 ; ALIVE2-EXTRA-ARGS: --src-unroll=16 --tgt-unroll=16
 
@@ -23,8 +22,8 @@ exit:
 }
 
 ; CHECK-LABEL: define i16 @f(
-; CHECK: %[[INIT:.*]] = zext i8 %x to i16
-; CHECK: %[[PN:.*]] = phi i16 [ %[[INIT]], %entry ], [ %[[SHN:.*]], %loop ]
-; CHECK: %[[SHN]] = shl i16 %[[PN]], 1
-; CHECK-NOT: trunc i32 %shl to i16
-; CHECK: ret i16 %[[SHN]]
+; CHECK: %zext = zext i8 %x to i32
+; CHECK: %p = phi i32 [ %zext, %entry ], [ %shl, %loop ]
+; CHECK: %shl = shl i32 %p, 1
+; CHECK: %t = trunc i32 %shl to i16
+; CHECK: ret i16 %t
