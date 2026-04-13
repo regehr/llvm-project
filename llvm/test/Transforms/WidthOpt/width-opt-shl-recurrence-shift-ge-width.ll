@@ -38,8 +38,9 @@ exit:
 ; CHECK-NOT: shl i8 {{.*}}, 8
 ; CHECK: ret i8
 
-; --- Positive case: shift amount < target width → MAY narrow ---
-; Shift by 3 into an i8 trunc: shl.i8(x, 3) is well-defined (3 < 8).
+; --- Negative case: shift amount < target width but only breaks even ---
+; Narrowing this recurrence would just move the trunc from the exit to the
+; entry, with no net instruction reduction.
 
 define i8 @shl_recurrence_shift_lt_width(i32 %init, i32 %n) {
 entry:
@@ -57,6 +58,35 @@ exit:
 }
 
 ; CHECK-LABEL: define i8 @shl_recurrence_shift_lt_width(
-; The transformation should apply: shl i8 with amount 3 is well-defined.
+; The transform should not fire because it only breaks even on instruction
+; count.
+; CHECK: shl i32
+; CHECK: trunc i32
+; CHECK-NOT: shl i8 {{.*}}, 3
+; CHECK: ret i8
+
+; --- Positive case: shift amount < target width with a free narrow init ---
+; Here the preheader already computes the init as a zext of i8, so shrinking the
+; recurrence removes the wide phi/shl/trunc without introducing a replacement
+; trunc.
+
+define i8 @shl_recurrence_shift_lt_width_profitable(i8 %init8, i32 %n) {
+entry:
+  %init = zext i8 %init8 to i32
+  br label %loop
+loop:
+  %phi = phi i32 [ %init, %entry ], [ %shl, %loop ]
+  %ctr = phi i32 [ 0, %entry ], [ %ctr.next, %loop ]
+  %shl = shl i32 %phi, 3
+  %tr = trunc i32 %shl to i8
+  %ctr.next = add i32 %ctr, 1
+  %done = icmp eq i32 %ctr.next, %n
+  br i1 %done, label %exit, label %loop
+exit:
+  ret i8 %tr
+}
+
+; CHECK-LABEL: define i8 @shl_recurrence_shift_lt_width_profitable(
+; CHECK: phi i8
 ; CHECK: shl i8 {{.*}}, 3
 ; CHECK: ret i8

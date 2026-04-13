@@ -3685,6 +3685,28 @@ Value *materializeTruncRootedValueAtWidth(Value *V, unsigned TargetWidth,
   return nullptr;
 }
 
+static bool
+canMaterializeTruncRootedValueAtWidthWithoutNewInsts(Value *V,
+                                                     unsigned TargetWidth) {
+  if (!isIntegerValue(V))
+    return false;
+
+  unsigned Width = getValueWidth(V);
+  if (Width == TargetWidth)
+    return true;
+
+  if (auto Ext = getExtOperandInfo(V)) {
+    if (TargetWidth > Ext->WideWidth)
+      return false;
+    if (TargetWidth <= Ext->NarrowWidth)
+      return canMaterializeTruncRootedValueAtWidthWithoutNewInsts(
+          Ext->NarrowValue, TargetWidth);
+    return false;
+  }
+
+  return isa<Constant>(V);
+}
+
 bool collectTruncRootedValueCost(
     Value *V, unsigned TargetWidth, SmallPtrSetImpl<Value *> &AddedValues,
     SmallPtrSetImpl<Instruction *> &RemovedInstructions,
@@ -4073,6 +4095,11 @@ bool tryShrinkTruncOfShiftRecurrence(TruncInst &Tr) {
 
   BasicBlock *InitBB = Phi->getIncomingBlock(InitIdx);
   Value *Init = Phi->getIncomingValue(InitIdx);
+  // This rewrite removes the old wide phi/shl/trunc trio and adds a new narrow
+  // phi/shl pair. For a strict instruction-count win, the narrowed init must be
+  // available without creating any new instructions.
+  if (!canMaterializeTruncRootedValueAtWidthWithoutNewInsts(Init, TargetWidth))
+    return false;
   Value *NarrowInit =
       materializeTruncRootedValueAtWidth(Init, TargetWidth,
                                          InitBB->getTerminator());
