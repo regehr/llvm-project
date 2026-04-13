@@ -1117,6 +1117,14 @@ bool tryWidenTruncZeroExtendedICmp(ICmpInst &Cmp, const DataLayout &DL,
 
     unsigned AddedBoundaryCost = 0;
     unsigned RemovedBoundaryCost = Tr->hasOneUse() ? 1 : 0;
+    // If the trunc's source is a single-use mask, widening the compare keeps
+    // that mask alive where the narrow form could often delete it. Charge that
+    // retained instruction so we only accept the transform when it is a strict
+    // win overall rather than a break-even instruction swap.
+    if (auto *WideI = dyn_cast<Instruction>(Wide);
+        WideI && WideI->getOpcode() == Instruction::And &&
+        WideI->hasOneUse())
+      ++AddedBoundaryCost;
     auto OtherExt = getExtOperandInfo(Other);
     if (OtherExt && OtherExt->Kind == ExtKind::ZExt &&
         OtherExt->WideWidth == NarrowWidth) {
