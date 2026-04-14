@@ -24,27 +24,27 @@ exit:
 ; CHECK: trunc i32
 ; CHECK: ret i8
 
-; lines 4252-4255: incoming value is an invoke result — cannot insert before terminator.
-; The invoke %r is the terminator of invoke_bb; inserting before it is illegal.
-; The cost check passes (zext %za is removable), but the invoke check bails out.
+; Cost check fails: both call results are opaque wider values, each requiring a
+; new trunc (AddedValues.size() == 2), but only the outer trunc is removed
+; (RemovedCost == 1), so 2 >= 1 and the optimization bails out.
 
 declare i32 @may_throw()
 
-define i8 @phi_of_invoke_nochange(i8 %a, i1 %c) personality ptr null {
+define i8 @phi_of_two_calls_nochange(i1 %c) {
 entry:
-  %za = zext i8 %a to i32
-  br i1 %c, label %invoke_bb, label %normal
-invoke_bb:
-  %r = invoke i32 @may_throw() to label %normal unwind label %lpad
-normal:
-  %phi = phi i32 [ %r, %invoke_bb ], [ %za, %entry ]
+  br i1 %c, label %bb1, label %bb2
+bb1:
+  %r1 = call i32 @may_throw()
+  br label %exit
+bb2:
+  %r2 = call i32 @may_throw()
+  br label %exit
+exit:
+  %phi = phi i32 [ %r1, %bb1 ], [ %r2, %bb2 ]
   %tr = trunc i32 %phi to i8
   ret i8 %tr
-lpad:
-  %lp = landingpad { ptr, i32 } cleanup
-  ret i8 0
 }
-; CHECK-LABEL: define i8 @phi_of_invoke_nochange(
+; CHECK-LABEL: define i8 @phi_of_two_calls_nochange(
 ; CHECK: phi i32
 ; CHECK: trunc i32
 ; CHECK: ret i8

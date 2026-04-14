@@ -4213,18 +4213,31 @@ bool tryShrinkTruncOfZeroBoundedPhi(TruncInst &Tr) {
 
   unsigned N = Phi->getNumIncomingValues();
 
-  // Cost check: use the trunc-rooted infrastructure on each arm.
-  SmallPtrSet<Value *, 16> AddedValues;
+  // Cost check: run per distinct predecessor block without sharing the Visited
+  // set across arms. Materialization inserts instructions in each predecessor
+  // independently, so a value appearing in K distinct predecessor blocks costs
+  // K instructions — not 1 as a shared Visited set would report.
+  // RemovedInstructions is still shared: each wide instruction is removed once.
   SmallPtrSet<Instruction *, 16> RemovedInstructions;
-  SmallPtrSet<Value *, 16> Visited;
+  unsigned TotalAddedCost = 0;
+  SmallPtrSet<BasicBlock *, 8> CostCheckedBlocks;
   for (unsigned I = 0; I != N; ++I) {
+    BasicBlock *BB = Phi->getIncomingBlock(I);
+    if (!CostCheckedBlocks.insert(BB).second)
+      continue; // duplicate predecessor (e.g. switch): already counted.
+    SmallPtrSet<Value *, 8> ArmAdded;
+    SmallPtrSet<Instruction *, 8> ArmRemoved;
+    SmallPtrSet<Value *, 8> ArmVisited;
     if (!collectTruncRootedValueCost(Phi->getIncomingValue(I), TargetWidth,
-                                     AddedValues, RemovedInstructions, Visited))
+                                     ArmAdded, ArmRemoved, ArmVisited))
       return false;
+    TotalAddedCost += ArmAdded.size();
+    for (Instruction *RI : ArmRemoved)
+      RemovedInstructions.insert(RI);
   }
   // The phi itself and the trunc are being replaced; require a strict decrease.
   unsigned RemovedCost = 1 + RemovedInstructions.size(); // 1 for the trunc
-  if (AddedValues.size() >= RemovedCost)
+  if (TotalAddedCost >= RemovedCost)
     return false;
 
   // Materialize each incoming value at TargetWidth, inserting before the
