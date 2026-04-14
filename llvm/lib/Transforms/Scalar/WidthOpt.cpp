@@ -1777,6 +1777,7 @@ bool tryWidenAddThroughZExt(BinaryOperator &BO) {
       return false;
 
     Value *WideBase = findExistingZExtToWidth(ExtInfo->NarrowValue, WideWidth);
+    auto *ExistingWideBaseI = dyn_cast_or_null<Instruction>(WideBase);
     bool ReuseWideBase = false;
     if (WideBase) {
       auto *WideBaseI = cast<Instruction>(WideBase);
@@ -1812,6 +1813,8 @@ bool tryWidenAddThroughZExt(BinaryOperator &BO) {
 
     if (BO.use_empty())
       RecursivelyDeleteTriviallyDeadInstructions(&BO);
+    if (!ReuseWideBase && ExistingWideBaseI && ExistingWideBaseI->use_empty())
+      RecursivelyDeleteTriviallyDeadInstructions(ExistingWideBaseI);
     return true;
   };
 
@@ -3647,28 +3650,6 @@ Value *materializeTruncRootedValueAtWidth(Value *V, unsigned TargetWidth,
   return nullptr;
 }
 
-static bool
-canMaterializeTruncRootedValueAtWidthWithoutNewInsts(Value *V,
-                                                     unsigned TargetWidth) {
-  if (!isIntegerValue(V))
-    return false;
-
-  unsigned Width = getValueWidth(V);
-  if (Width == TargetWidth)
-    return true;
-
-  if (auto Ext = getExtOperandInfo(V)) {
-    if (TargetWidth > Ext->WideWidth)
-      return false;
-    if (TargetWidth <= Ext->NarrowWidth)
-      return canMaterializeTruncRootedValueAtWidthWithoutNewInsts(
-          Ext->NarrowValue, TargetWidth);
-    return false;
-  }
-
-  return isa<Constant>(V);
-}
-
 bool collectTruncRootedValueCost(
     Value *V, unsigned TargetWidth, SmallPtrSetImpl<Value *> &AddedValues,
     SmallPtrSetImpl<Instruction *> &RemovedInstructions,
@@ -4057,22 +4038,30 @@ bool tryShrinkTruncOfShiftRecurrence(TruncInst &Tr) {
 
   BasicBlock *InitBB = Phi->getIncomingBlock(InitIdx);
   Value *Init = Phi->getIncomingValue(InitIdx);
-  // This rewrite removes the old wide phi/shl/trunc trio and adds a new narrow
-  // phi/shl pair. For a strict instruction-count win, the narrowed init must be
-  // available without creating any new instructions.
-  if (!canMaterializeTruncRootedValueAtWidthWithoutNewInsts(Init, TargetWidth))
-    return false;
-  Value *NarrowInit =
-      materializeTruncRootedValueAtWidth(Init, TargetWidth,
-                                         InitBB->getTerminator());
-  if (!NarrowInit)
-    return false;
 
   // If the shift amount is >= the target width, the narrow shift shl iN x, K
   // would be poison (shift by >= bit width is UB). The original
   // trunc(shl.iW(phi, K), N) would be 0, not poison — don't narrow.
   if (AmtC->getValue().uge(TargetWidth))
     return false;
+
+  // Cost check: remove the wide phi/shl/trunc trio and rebuild only the narrow
+  // phi/shl plus whatever is needed to materialize the init at TargetWidth.
+  SmallPtrSet<Value *, 8> AddedValues;
+  SmallPtrSet<Instruction *, 8> RemovedInstructions;
+  SmallPtrSet<Value *, 8> Visited;
+  if (!collectTruncRootedValueCost(Init, TargetWidth, AddedValues,
+                                   RemovedInstructions, Visited))
+    return false;
+  if (AddedValues.size() + 2 >= RemovedInstructions.size() + 3)
+    return false;
+
+  Value *NarrowInit =
+      materializeTruncRootedValueAtWidth(Init, TargetWidth,
+                                         InitBB->getTerminator());
+  if (!NarrowInit)
+    return false;
+  auto *InitI = dyn_cast<Instruction>(Init);
 
   auto *TargetTy = IntegerType::get(Tr.getContext(), TargetWidth);
   Constant *NarrowAmt = ConstantInt::get(TargetTy, AmtC->getValue().trunc(TargetWidth));
@@ -4097,6 +4086,8 @@ bool tryShrinkTruncOfShiftRecurrence(TruncInst &Tr) {
   Phi->dropAllReferences();
   Shl->eraseFromParent();
   Phi->eraseFromParent();
+  if (InitI && InitI->use_empty())
+    RecursivelyDeleteTriviallyDeadInstructions(InitI);
   return true;
 }
 
@@ -4154,6 +4145,8 @@ bool tryShrinkTruncOfLowBitsRecurrence(TruncInst &Tr) {
   BasicBlock *InitBB = Phi->getIncomingBlock(InitIdx);
   Value *Init = Phi->getIncomingValue(InitIdx);
   Value *Step = BO->getOperand(1 - PhiIdx);
+  auto *InitI = dyn_cast<Instruction>(Init);
+  auto *StepI = dyn_cast<Instruction>(Step);
 
   Value *NarrowInit = materializeTruncRootedValueAtWidth(
       Init, TargetWidth, InitBB->getTerminator());
@@ -4189,6 +4182,10 @@ bool tryShrinkTruncOfLowBitsRecurrence(TruncInst &Tr) {
   Phi->dropAllReferences();
   BO->eraseFromParent();
   Phi->eraseFromParent();
+  if (InitI && InitI->use_empty())
+    RecursivelyDeleteTriviallyDeadInstructions(InitI);
+  if (StepI && StepI->use_empty())
+    RecursivelyDeleteTriviallyDeadInstructions(StepI);
   return true;
 }
 

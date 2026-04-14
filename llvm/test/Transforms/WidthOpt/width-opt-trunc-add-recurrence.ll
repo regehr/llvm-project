@@ -22,6 +22,8 @@ exit:
 }
 
 ; CHECK-LABEL: define i8 @add_loop(
+; CHECK-NOT: zext i8 %init to i32
+; CHECK-NOT: zext i8 %step to i32
 ; CHECK: %[[PN:.*]] = phi i8 [ %init, %entry ], [ %[[ADD:.*]], %loop ]
 ; CHECK: %[[ADD]] = add i8 %[[PN]], %step
 ; CHECK-NOT: zext
@@ -47,6 +49,7 @@ exit:
 }
 
 ; CHECK-LABEL: define i8 @add_loop_const_step(
+; CHECK-NOT: zext i8 %init to i32
 ; CHECK: %[[PN:.*]] = phi i8 [ %init, %entry ], [ %[[ADD:.*]], %loop ]
 ; CHECK: %[[ADD]] = add i8 %[[PN]], 3
 ; CHECK-NOT: zext
@@ -73,6 +76,8 @@ exit:
 }
 
 ; CHECK-LABEL: define i8 @sub_loop(
+; CHECK-NOT: zext i8 %init to i32
+; CHECK-NOT: zext i8 %step to i32
 ; CHECK: %[[PN:.*]] = phi i8 [ %init, %entry ], [ %[[SUB:.*]], %loop ]
 ; CHECK: %[[SUB]] = sub i8 %[[PN]], %step
 ; CHECK-NOT: zext
@@ -99,6 +104,8 @@ exit:
 }
 
 ; CHECK-LABEL: define i8 @xor_loop(
+; CHECK-NOT: zext i8 %init to i32
+; CHECK-NOT: zext i8 %key to i32
 ; CHECK: %[[PN:.*]] = phi i8 [ %init, %entry ], [ %[[XOR:.*]], %loop ]
 ; CHECK: %[[XOR]] = xor i8 %[[PN]], %key
 ; CHECK-NOT: zext

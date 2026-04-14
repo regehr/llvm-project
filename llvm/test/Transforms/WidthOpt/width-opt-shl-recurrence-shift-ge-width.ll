@@ -87,6 +87,8 @@ exit:
 }
 
 ; CHECK-LABEL: define i8 @shl_recurrence_shift_lt_width_profitable(
+; CHECK-NOT: zext i8 %init8 to i32
 ; CHECK: phi i8
 ; CHECK: shl i8 {{.*}}, 3
+; CHECK-NOT: trunc i32
 ; CHECK: ret i8

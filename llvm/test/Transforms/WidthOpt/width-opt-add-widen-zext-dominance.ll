@@ -28,7 +28,10 @@ main:
 }
 
 ; CHECK-LABEL: @widen_add_non_dominating_zext(
-; The pass must create a fresh zext in `main`, not use %x32_side from `side`.
+; The pass must create a fresh zext in `main`, not use %x32_side from `side`,
+; and the now-dead side-block zext should be deleted immediately.
+; CHECK: side:
+; CHECK-NEXT: br label %main
 ; CHECK-LABEL: main:
 ; CHECK: zext i8 %x to i32
 ; CHECK: add i32 {{.*}}, 3
