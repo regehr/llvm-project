@@ -92,5 +92,6 @@ static_library("Scalar") {
     "StructurizeCFG.cpp",
     "TailRecursionElimination.cpp",
     "WarnMissedTransforms.cpp",
+    "WidthOpt.cpp",
   ]
 }
