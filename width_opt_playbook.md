@@ -30,11 +30,14 @@ You should take particular care when performing cost modeling. The
 cost model is the part of the code that determines whether a proposed
 optimization will be profitable. Every optimization that you implement
 must either be obviously, structurally profitable, or else it must be
-protected by a cost model check. Whenever possible, your new
-optimization should apply to vector values as well as scalars. It is
-fine if there are some optimizations are only apply to vectors, or
-only apply to scalars, but that is not the expected case. Present
-this plan the user and then stop.
+protected by a cost model check. Be particularly careful about extra
+uses of SSA values; a common feature of cost model checks is calls to
+hasOneUse().
+
+Whenever possible, your new optimization should apply to vector values
+as well as scalars. It is fine if there are some optimizations are
+only apply to vectors, or only apply to scalars, but that is not the
+expected case. Present this plan the user and then stop.
 
 If you are in doubt about the actual profitability of a
 transformation, you may use `llc` to lower both the original function

@@ -69,6 +69,10 @@ static bool tryNarrowExpectOverZextI1(ICmpInst *Cmp) {
   if (!isI1Type(NarrowTy))
     return false;
 
+  // For eq, the only instruction saving is the zext; skip if it has other uses.
+  if (Pred == ICmpInst::ICMP_EQ && !Zext->hasOneUse())
+    return false;
+
   // The expected-value argument must be a constant so we can truncate it.
   auto *ExpectedConst = dyn_cast<Constant>(Call->getArgOperand(1));
   if (!ExpectedConst)
