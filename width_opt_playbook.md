@@ -36,6 +36,13 @@ fine if there are some optimizations are only apply to vectors, or
 only apply to scalars, but that is not the expected case. Present
 this plan the user and then stop.
 
+If you are in doubt about the actual profitability of a
+transformation, you may use `llc` to lower both the original function
+and also the transformed version to x86_64, riscv64, and aarch64
+assembly. By looking at the generated code, you will be able to get
+some information about whether the proposed transformation is a good
+one.
+
 If you are asked to proceed, then you should carry out the
 implementation plan. Keep the code simple and when there are
 conditions that you believe are impossible, place an assertion on that
