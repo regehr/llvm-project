@@ -1,12 +1,12 @@
 # Improving WidthOpt.cpp
 
+## Introduction
+    
 First, familiarize yourself with our new LLVM width optimization pass,
 you can find the implementation in `llvm/lib/Transforms/Scalar/WidthOpt.cpp`.
 
-You don't need to read it right now (the file is large) but if you
-have any questions about LLVM semantics, you may consult
-`./llvm/docs/LangRef.rst`.
-        
+## Finding a Missed Optimization
+    
 You will be given a file containing one or more functions in LLVM
 IR. These can be found in width-opt-tests. You are to optimize the
 given file using `./build/bin/opt -passes=width-opt` and then closely
@@ -50,6 +50,8 @@ as well as scalars. It is fine if there are some optimizations are
 only apply to vectors, or only apply to scalars, but that is not the
 expected case. Present this plan the user and then stop.
 
+## Implementing the New Optimization
+    
 If you are in doubt about the actual profitability of a
 transformation, you may use `llc` to lower both the original function
 and also the transformed version to x86_64, riscv64, and aarch64
@@ -65,3 +67,9 @@ condition.
 After you have implemented the optimization, then you should add a new
 unit test to the existing collection in llvm/test/Transforms/WidthOpt,
 that is based upon the original file you were given.
+
+## Extra Information
+
+You may rapidly build just the part of LLVM that we care about using
+`ninja -C build LLVMScalarOpts`.
+    

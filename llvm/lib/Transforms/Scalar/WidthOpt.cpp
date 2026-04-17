@@ -226,6 +226,46 @@ static bool tryNarrowTrunc(TruncInst *Trunc) {
   return true;
 }
 
+// Optimize: trunc (binop X, (zext Y from NarrowTy)) to NarrowTy
+//        -> binop (trunc X to NarrowTy), Y
+// for any truncation-commuting binary operator.
+//
+// Handles the case where X cannot be narrowed by canNarrow/tryNarrowTrunc
+// (e.g. X is a function call).  Requires the binop and the zext each have
+// exactly one use.  Eliminates zext + wide-binop + trunc and adds narrow-trunc
+// + narrow-binop = net -1 instruction.  Structurally profitable; no cost-model
+// check needed.  Works for scalar and vector types.
+static bool tryNarrowTruncBinopZext(TruncInst *Trunc) {
+  Type *NarrowTy = Trunc->getType();
+  Value *Src = Trunc->getOperand(0);
+
+  auto *BO = dyn_cast<BinaryOperator>(Src);
+  if (!BO || !isTruncCommutingBinop(BO->getOpcode()) || !BO->hasOneUse())
+    return false;
+
+  Value *ZextSrc = nullptr, *Other = nullptr;
+  for (int I = 0; I < 2; ++I) {
+    auto *Z = dyn_cast<ZExtInst>(BO->getOperand(I));
+    if (Z && Z->getOperand(0)->getType() == NarrowTy && Z->hasOneUse()) {
+      ZextSrc = Z->getOperand(0);
+      Other = BO->getOperand(1 - I);
+      break;
+    }
+  }
+  if (!ZextSrc)
+    return false;
+
+  IRBuilder<> Builder(Trunc);
+  Value *NarrowOther = Builder.CreateTrunc(Other, NarrowTy);
+  Value *Result = Builder.CreateBinOp(BO->getOpcode(), NarrowOther, ZextSrc);
+
+  Trunc->replaceAllUsesWith(Result);
+  Trunc->eraseFromParent();
+  RecursivelyDeleteTriviallyDeadInstructions(BO);
+
+  return true;
+}
+
 PreservedAnalyses WidthOptPass::run(Function &F, FunctionAnalysisManager &AM) {
   bool EverChanged = false, Changed;
 
@@ -236,7 +276,7 @@ PreservedAnalyses WidthOptPass::run(Function &F, FunctionAnalysisManager &AM) {
         if (auto *Cmp = dyn_cast<ICmpInst>(&I))
           Changed |= tryNarrowExpectOverZextI1(Cmp);
         else if (auto *Trunc = dyn_cast<TruncInst>(&I))
-          Changed |= tryNarrowTrunc(Trunc);
+          Changed |= tryNarrowTrunc(Trunc) || tryNarrowTruncBinopZext(Trunc);
     EverChanged |= Changed;
   } while (Changed);
 
