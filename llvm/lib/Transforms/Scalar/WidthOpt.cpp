@@ -11,12 +11,15 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Scalar/WidthOpt.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/Analysis/InstSimplifyFolder.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/PatternMatch.h"
+#include "llvm/Transforms/Utils/Local.h"
 
 using namespace llvm;
 using namespace PatternMatch;
@@ -112,6 +115,117 @@ static bool tryNarrowExpectOverZextI1(ICmpInst *Cmp) {
   return true;
 }
 
+// Opcodes that commute truncation: trunc(op(a,b)) == op(trunc(a), trunc(b)).
+static bool isTruncCommutingBinop(unsigned Opc) {
+  switch (Opc) {
+  case Instruction::Add:
+  case Instruction::Sub:
+  case Instruction::Mul:
+  case Instruction::And:
+  case Instruction::Or:
+  case Instruction::Xor:
+    return true;
+  default:
+    return false;
+  }
+}
+
+// Phase 1: check whether V can be expressed in NarrowTy without creating any
+// instructions.  Returns true iff doNarrow() will succeed.  foundZext is set
+// to true the first time a ZExtInst whose source has type NarrowTy is found,
+// which proves at least one width-changing instruction will be eliminated.
+static bool canNarrow(Value *V, Type *NarrowTy, bool &FoundZext,
+                      SmallDenseMap<Value *, bool> &Cache) {
+  auto It = Cache.find(V);
+  if (It != Cache.end())
+    return It->second;
+
+  // Compute result before inserting into Cache: recursive calls may rehash it,
+  // invalidating any iterator we hold across the call.
+  bool Result = false;
+  if (auto *Z = dyn_cast<ZExtInst>(V)) {
+    if (Z->getOperand(0)->getType() == NarrowTy) {
+      FoundZext = true;
+      Result = true;
+    }
+  } else if (isa<Constant>(V)) {
+    Result = true;
+  } else if (auto *BO = dyn_cast<BinaryOperator>(V)) {
+    if (isTruncCommutingBinop(BO->getOpcode()))
+      Result = canNarrow(BO->getOperand(0), NarrowTy, FoundZext, Cache) &&
+               canNarrow(BO->getOperand(1), NarrowTy, FoundZext, Cache);
+  }
+
+  Cache[V] = Result;
+  return Result;
+}
+
+// Phase 2: create the narrowed version of V in NarrowTy.  Must only be called
+// after canNarrow() returned true for the same V.  Builder's constant folding
+// collapses identities (and i8 x, -1 -> x) and annihilators (mul i8 x, 0 -> 0)
+// so no explicit folding is needed here.
+static Value *doNarrow(Value *V, Type *NarrowTy,
+                       IRBuilder<InstSimplifyFolder> &Builder,
+                       SmallDenseMap<Value *, Value *> &NarrowCache) {
+  auto It = NarrowCache.find(V);
+  if (It != NarrowCache.end())
+    return It->second;
+
+  // Compute result before inserting: recursive calls may rehash the map.
+  Value *Result;
+  if (auto *Z = dyn_cast<ZExtInst>(V)) {
+    assert(Z->getOperand(0)->getType() == NarrowTy);
+    Result = Z->getOperand(0);
+  } else if (auto *C = dyn_cast<Constant>(V)) {
+    Result = cast<Constant>(Builder.CreateTrunc(C, NarrowTy));
+  } else {
+    auto *BO = cast<BinaryOperator>(V);
+    Value *NA = doNarrow(BO->getOperand(0), NarrowTy, Builder, NarrowCache);
+    Value *NB = doNarrow(BO->getOperand(1), NarrowTy, Builder, NarrowCache);
+    Result = Builder.CreateBinOp(BO->getOpcode(), NA, NB);
+  }
+
+  NarrowCache[V] = Result;
+  return Result;
+}
+
+// Optimize: trunc (binop-chain of zexts and constants) to NarrowTy
+//        -> equivalent binop-chain operating entirely in NarrowTy
+//
+// Example: trunc(or(and(zext i8 %a to i32, 255), zext i8 %b to i32)) to i8
+//       -> or(and(%a, -1), %b) -> or(%a, %b)   [constant-folded by IRBuilder]
+//
+// Profitable whenever at least one zext is eliminated.  Structurally
+// profitable; no cost-model check needed.  Works for scalar and vector types.
+static bool tryNarrowTrunc(TruncInst *Trunc) {
+  Type *NarrowTy = Trunc->getType();
+  Value *Src = Trunc->getOperand(0);
+
+  SmallDenseMap<Value *, bool> CheckCache;
+  bool FoundZext = false;
+  if (!canNarrow(Src, NarrowTy, FoundZext, CheckCache))
+    return false;
+  if (!FoundZext)
+    return false;
+
+  const DataLayout &DL = Trunc->getDataLayout();
+  InstSimplifyFolder Folder(DL);
+  IRBuilder<InstSimplifyFolder> Builder(Trunc->getContext(), Folder);
+  Builder.SetInsertPoint(Trunc);
+
+  SmallDenseMap<Value *, Value *> NarrowCache;
+  Value *Narrowed = doNarrow(Src, NarrowTy, Builder, NarrowCache);
+
+  Trunc->replaceAllUsesWith(Narrowed);
+  Trunc->eraseFromParent();
+
+  // Remove wide instructions that are now dead.
+  if (auto *SrcInst = dyn_cast<Instruction>(Src))
+    RecursivelyDeleteTriviallyDeadInstructions(SrcInst);
+
+  return true;
+}
+
 PreservedAnalyses WidthOptPass::run(Function &F, FunctionAnalysisManager &AM) {
   bool EverChanged = false, Changed;
 
@@ -121,6 +235,8 @@ PreservedAnalyses WidthOptPass::run(Function &F, FunctionAnalysisManager &AM) {
       for (Instruction &I : make_early_inc_range(BB))
         if (auto *Cmp = dyn_cast<ICmpInst>(&I))
           Changed |= tryNarrowExpectOverZextI1(Cmp);
+        else if (auto *Trunc = dyn_cast<TruncInst>(&I))
+          Changed |= tryNarrowTrunc(Trunc);
     EverChanged |= Changed;
   } while (Changed);
 
