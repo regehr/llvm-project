@@ -27,7 +27,7 @@ optimize it further. The optimization that you are looking for:
   zext to a sext. This kind of change is only permitted if it
   if necessary to support removing an instruction.
 - Should *NOT* involve removing a width-change that is going to
-  be fed directly to a GEP instruction. This not not expected to
+  be fed directly to a GEP instruction. This is not expected to
   be profitable.
 
 If you cannot find such an optimization in the file you have been
@@ -70,6 +70,23 @@ that is based upon the original file you were given.
 
 ## Extra Information
 
-You may rapidly build just the part of LLVM that we care about using
-`ninja -C build LLVMScalarOpts`.
-    
+You may rapidly build just the part of LLVM that we care about using:
+```
+ninja -C build LLVMScalarOpts
+ninja -C build opt
+```
+
+You may run just the tests for our new pass like this:
+```
+./build/bin/llvm-lit build/test/Transforms/WidthOpt/
+```
+
+To validate a transformation, save the optimized output to a file and
+compare against the original:
+```
+./build/bin/opt -passes=width-opt -S input.ll -o /tmp/after.ll
+alive-tv --disable-undef-input input.ll /tmp/after.ll
+```
+
+A correct transformation will print `Transformation seems to be
+correct!`.
