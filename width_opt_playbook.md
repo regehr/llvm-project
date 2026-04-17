@@ -1,7 +1,13 @@
 # Improving WidthOpt.cpp
 
+First, familiarize yourself with our new LLVM width optimization pass,
+you can find the implementation in `llvm/lib/Transforms/Scalar/WidthOpt.cpp`.
+    
 You will be given a file containing one or more functions in LLVM
-IR. You are to inspect the file, and see if you are able to optimize it. The optimization that you are looking for:
+IR. These can be found in width-opt-tests. You are to optimize the
+given file using `./build/bin/opt -passes=width-opt` and then closely
+inspect the resulting IR. Your goal is to see if you are able to
+optimize it further. The optimization that you are looking for:
 
 - Must result in the function becoming a total of at least one
   instruction smaller. But larger improvements are better.
@@ -52,4 +58,5 @@ conditions that you believe are impossible, place an assertion on that
 condition.
 
 After you have implemented the optimization, then you should add a new
-unit test, that is based upon the original file you were given.
+unit test to the existing collection in llvm/test/Transforms/WidthOpt,
+that is based upon the original file you were given.

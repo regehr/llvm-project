@@ -1,0 +1,46 @@
+
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+@g_6   = external global i8
+@g_94  = external global i32
+@g_108 = external global i64
+@g_ptr_0 = external global ptr
+@g_ptr_1 = external global ptr
+
+
+define noundef i16 @func_1() {
+entry:
+  %.b = load i1, ptr @g_6, align 1
+  %not..b = xor i1 %.b, true
+  %conv27.i = zext i1 %not..b to i64
+  %or.i = or disjoint i64 %conv27.i, 74
+  %conv47.i = zext i1 %not..b to i32
+  br i1 %.b, label %exit, label %preheader
+
+preheader:
+  %or.i.tr = trunc nuw nsw i64 %or.i to i32
+  %v0 = shl nuw nsw i32 %or.i.tr, 1
+  store i32 %v0, ptr @g_94, align 4
+  %p0 = load ptr, ptr @g_ptr_0, align 8
+  %l0 = load i32, ptr %p0, align 4
+  %x0 = xor i32 %l0, %conv47.i
+  store i32 %x0, ptr %p0, align 4
+  store i64 0, ptr @g_108, align 8
+  br label %loop
+
+loop:
+  %or.i.tr4 = trunc nuw nsw i64 %or.i to i32
+  %v1 = shl nuw nsw i32 %or.i.tr4, 1
+  store i32 %v1, ptr @g_94, align 4
+  %p1 = load ptr, ptr @g_ptr_1, align 8
+  %l1 = load i32, ptr %p1, align 4
+  %x1 = xor i32 %l1, %conv47.i
+  store i32 %x1, ptr %p1, align 4
+  store i64 0, ptr @g_108, align 8
+  store i32 0, ptr @g_94, align 4
+  br label %loop
+
+exit:
+  ret i16 0
+}

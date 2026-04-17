@@ -1,0 +1,8 @@
+
+define <2 x i1> @lt_signed_to_large_unsigned_vec(<2 x i8> %sb) {
+entry:
+  %y = sext <2 x i8> %sb to <2 x i32>
+  %c = icmp ult <2 x i32> %y, <i32 1024, i32 2>
+  ret <2 x i1> %c
+}
+
