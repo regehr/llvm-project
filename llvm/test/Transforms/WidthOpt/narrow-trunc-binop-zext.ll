@@ -22,7 +22,7 @@ define i8 @trunc_and_ctpop_zext_rhs(i32 %x, i8 %a) {
 ; CHECK-LABEL: @trunc_and_ctpop_zext_lhs(
 ; CHECK-NEXT:    %cp = call i32 @llvm.ctpop.i32(i32 %x)
 ; CHECK-NEXT:    %[[T:.+]] = trunc i32 %cp to i8
-; CHECK-NEXT:    %[[R:.+]] = and i8 %[[T]], %a
+; CHECK-NEXT:    %[[R:.+]] = and i8 %a, %[[T]]
 ; CHECK-NEXT:    ret i8 %[[R]]
 define i8 @trunc_and_ctpop_zext_lhs(i32 %x, i8 %a) {
   %cp = call i32 @llvm.ctpop.i32(i32 %x)
@@ -42,6 +42,18 @@ define i8 @trunc_or_ctpop_zext(i32 %x, i8 %a) {
   %za = zext i8 %a to i32
   %or = or i32 %cp, %za
   %t = trunc i32 %or to i8
+  ret i8 %t
+}
+
+; Preserve operand order for non-commutative binops.
+; CHECK-LABEL: @trunc_sub_zext_lhs(
+; CHECK-NEXT:    %[[T:.+]] = trunc i32 %x to i8
+; CHECK-NEXT:    %[[R:.+]] = sub i8 %a, %[[T]]
+; CHECK-NEXT:    ret i8 %[[R]]
+define i8 @trunc_sub_zext_lhs(i32 %x, i8 %a) {
+  %za = zext i8 %a to i32
+  %sub = sub i32 %za, %x
+  %t = trunc i32 %sub to i8
   ret i8 %t
 }
 

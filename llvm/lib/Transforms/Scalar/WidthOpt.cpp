@@ -244,11 +244,13 @@ static bool tryNarrowTruncBinopZext(TruncInst *Trunc) {
     return false;
 
   Value *ZextSrc = nullptr, *Other = nullptr;
+  int ZextOpIdx = -1;
   for (int I = 0; I < 2; ++I) {
     auto *Z = dyn_cast<ZExtInst>(BO->getOperand(I));
     if (Z && Z->getOperand(0)->getType() == NarrowTy && Z->hasOneUse()) {
       ZextSrc = Z->getOperand(0);
       Other = BO->getOperand(1 - I);
+      ZextOpIdx = I;
       break;
     }
   }
@@ -257,7 +259,9 @@ static bool tryNarrowTruncBinopZext(TruncInst *Trunc) {
 
   IRBuilder<> Builder(Trunc);
   Value *NarrowOther = Builder.CreateTrunc(Other, NarrowTy);
-  Value *Result = Builder.CreateBinOp(BO->getOpcode(), NarrowOther, ZextSrc);
+  Value *NarrowLHS = ZextOpIdx == 0 ? ZextSrc : NarrowOther;
+  Value *NarrowRHS = ZextOpIdx == 0 ? NarrowOther : ZextSrc;
+  Value *Result = Builder.CreateBinOp(BO->getOpcode(), NarrowLHS, NarrowRHS);
 
   Trunc->replaceAllUsesWith(Result);
   Trunc->eraseFromParent();
