@@ -2,7 +2,11 @@
 
 First, familiarize yourself with our new LLVM width optimization pass,
 you can find the implementation in `llvm/lib/Transforms/Scalar/WidthOpt.cpp`.
-    
+
+You don't need to read it right now (the file is large) but if you
+have any questions about LLVM semantics, you may consult
+`./llvm/docs/LangRef.rst`.
+        
 You will be given a file containing one or more functions in LLVM
 IR. These can be found in width-opt-tests. You are to optimize the
 given file using `./build/bin/opt -passes=width-opt` and then closely
@@ -15,7 +19,8 @@ optimize it further. The optimization that you are looking for:
   instructions: sext, zext, and trunc. Other instructions may be
   modified as necessary. You may even add new instructions but,
   again, your optimization must end up making the function
-  smaller by at least one instruction.
+  smaller by at least one instruction, considering *all* instructions
+  in the function, not just the instructions for width changes.
 - Must be validated by `alive-tv --disable-undef-input`. This
   tool is in the path.
 - *Must not* make unnecessary changes, such as changing a
