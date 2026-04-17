@@ -266,6 +266,58 @@ static bool tryNarrowTruncBinopZext(TruncInst *Trunc) {
   return true;
 }
 
+// Optimize: trunc (trunc X from WiderTy to MidTy) to NarrowTy
+//        -> trunc X to NarrowTy
+//
+// Requires the inner trunc to have one use so it becomes dead.
+// Net: -1 instruction.  Works for scalar and vector types.
+static bool tryFoldTruncTrunc(TruncInst *Outer) {
+  auto *Inner = dyn_cast<TruncInst>(Outer->getOperand(0));
+  if (!Inner || !Inner->hasOneUse())
+    return false;
+
+  IRBuilder<> Builder(Outer);
+  Value *Result = Builder.CreateTrunc(Inner->getOperand(0), Outer->getType());
+
+  Outer->replaceAllUsesWith(Result);
+  Outer->eraseFromParent();
+  RecursivelyDeleteTriviallyDeadInstructions(Inner);
+
+  return true;
+}
+
+// Optimize: trunc (call llvm.ctpop (zext X from NarrowTy)) to NarrowTy
+//        -> call llvm.ctpop.NarrowTy (X)
+//
+// ctpop counts set bits; the upper bits of zext(X) are zero, so they
+// contribute nothing.  Requires the ctpop call and the zext each have one
+// use.  Eliminates zext + wide-ctpop + trunc = net -2 instructions.
+// Works for scalar and vector types.
+static bool tryNarrowCtpop(TruncInst *Trunc) {
+  Type *NarrowTy = Trunc->getType();
+
+  auto *Call = dyn_cast<IntrinsicInst>(Trunc->getOperand(0));
+  if (!Call || !Call->hasOneUse())
+    return false;
+  if (Call->getIntrinsicID() != Intrinsic::ctpop)
+    return false;
+
+  auto *Z = dyn_cast<ZExtInst>(Call->getArgOperand(0));
+  if (!Z || !Z->hasOneUse() || Z->getOperand(0)->getType() != NarrowTy)
+    return false;
+
+  IRBuilder<> Builder(Trunc);
+  Function *NarrowFn = Intrinsic::getOrInsertDeclaration(
+      Call->getModule(), Intrinsic::ctpop, {NarrowTy});
+  Value *Result = Builder.CreateCall(NarrowFn, {Z->getOperand(0)});
+
+  Trunc->replaceAllUsesWith(Result);
+  Trunc->eraseFromParent();
+  RecursivelyDeleteTriviallyDeadInstructions(Call);
+
+  return true;
+}
+
 PreservedAnalyses WidthOptPass::run(Function &F, FunctionAnalysisManager &AM) {
   bool EverChanged = false, Changed;
 
@@ -276,7 +328,8 @@ PreservedAnalyses WidthOptPass::run(Function &F, FunctionAnalysisManager &AM) {
         if (auto *Cmp = dyn_cast<ICmpInst>(&I))
           Changed |= tryNarrowExpectOverZextI1(Cmp);
         else if (auto *Trunc = dyn_cast<TruncInst>(&I))
-          Changed |= tryNarrowTrunc(Trunc) || tryNarrowTruncBinopZext(Trunc);
+          Changed |= tryNarrowTrunc(Trunc) || tryNarrowTruncBinopZext(Trunc) ||
+                     tryFoldTruncTrunc(Trunc) || tryNarrowCtpop(Trunc);
     EverChanged |= Changed;
   } while (Changed);
 
