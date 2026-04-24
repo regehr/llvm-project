@@ -9,9 +9,9 @@ you can find the implementation in `llvm/lib/Transforms/Scalar/WidthOpt.cpp`.
     
 You will be given a file containing one or more functions in LLVM
 IR. These can be found in width-opt-tests. You are to optimize the
-given file using `./build/bin/opt -passes=width-opt` and then closely
-inspect the resulting IR. Your goal is to see if you are able to
-optimize it further. The optimization that you are looking for:
+given file using `./build/bin/opt -O2` and then closely inspect the
+resulting IR. Your goal is to see if you are able to optimize it
+further. The optimization that you are looking for:
 
 - Must result in the function becoming a total of at least one
   instruction smaller. But larger improvements are better.
