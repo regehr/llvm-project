@@ -1188,8 +1188,7 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
   // post link pipeline after ICP. This is to enable usage of the type
   // tests in ICP sequences.
   if (Phase == ThinOrFullLTOPhase::ThinLTOPostLink)
-    MPM.addPass(LowerTypeTestsPass(nullptr, nullptr,
-                                   lowertypetests::DropTestKind::Assume));
+    MPM.addPass(DropTypeTestsPass());
 
   invokePipelineEarlySimplificationEPCallbacks(MPM, Level, Phase);
 
@@ -1694,8 +1693,7 @@ PassBuilder::buildModuleOptimizationPipeline(OptimizationLevel Level,
         /*ExportSummary*/ nullptr,
         /*ImportSummary*/ nullptr,
         /*DevirtSpeculatively*/ PTO.DevirtualizeSpeculatively));
-    MPM.addPass(LowerTypeTestsPass(nullptr, nullptr,
-                                   lowertypetests::DropTestKind::Assume));
+    MPM.addPass(DropTypeTestsPass());
     // Given that the devirtualization creates more opportunities for inlining,
     // we run the Inliner again here to maximize the optimization gain we
     // get from devirtualization.
@@ -1783,7 +1781,7 @@ PassBuilder::buildFatLTODefaultPipeline(OptimizationLevel Level, bool ThinLTO,
 
   // Perform any cleanups to the IR that aren't suitable for per TU compilation,
   // like removing CFI/WPD related instructions. Note, we reuse
-  // LowerTypeTestsPass to clean up type tests rather than duplicate that logic
+  // DropTypeTestsPass to clean up type tests rather than duplicate that logic
   // in FatLtoCleanup.
   MPM.addPass(FatLtoCleanup());
 
@@ -1791,8 +1789,7 @@ PassBuilder::buildFatLTODefaultPipeline(OptimizationLevel Level, bool ThinLTO,
   // object code, only in the bitcode section, so drop it before we run
   // module optimization and generate machine code. If llvm.type.test() isn't in
   // the IR, this won't do anything.
-  MPM.addPass(
-      LowerTypeTestsPass(nullptr, nullptr, lowertypetests::DropTestKind::All));
+  MPM.addPass(DropTypeTestsPass(lowertypetests::DropTestKind::All));
 
   // Use the ThinLTO post-link pipeline with sample profiling
   if (ThinLTO && PGOOpt && PGOOpt->Action == PGOOptions::SampleUse)
@@ -1930,8 +1927,7 @@ ModulePassManager PassBuilder::buildThinLTODefaultPipeline(
   if (Level == OptimizationLevel::O0) {
     // Run a second time to clean up any type tests left behind by WPD for use
     // in ICP.
-    MPM.addPass(LowerTypeTestsPass(nullptr, nullptr,
-                                   lowertypetests::DropTestKind::Assume));
+    MPM.addPass(DropTypeTestsPass());
     MPM.addPass(buildCoroWrapper(ThinOrFullLTOPhase::ThinLTOPostLink));
 
     // AllocToken transforms heap allocation calls; this needs to run late after
@@ -2000,8 +1996,7 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
     MPM.addPass(LowerTypeTestsPass(ExportSummary, nullptr));
     // Run a second time to clean up any type tests left behind by WPD for use
     // in ICP.
-    MPM.addPass(LowerTypeTestsPass(nullptr, nullptr,
-                                   lowertypetests::DropTestKind::Assume));
+    MPM.addPass(DropTypeTestsPass());
 
     MPM.addPass(buildCoroWrapper(ThinOrFullLTOPhase::FullLTOPostLink));
 
@@ -2089,8 +2084,7 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
     // Run a second time to clean up any type tests left behind by WPD for use
     // in ICP (which is performed earlier than this in the regular LTO
     // pipeline).
-    MPM.addPass(LowerTypeTestsPass(nullptr, nullptr,
-                                   lowertypetests::DropTestKind::Assume));
+    MPM.addPass(DropTypeTestsPass());
 
     MPM.addPass(buildCoroWrapper(ThinOrFullLTOPhase::FullLTOPostLink));
 
@@ -2287,8 +2281,7 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
   MPM.addPass(LowerTypeTestsPass(ExportSummary, nullptr));
   // Run a second time to clean up any type tests left behind by WPD for use
   // in ICP (which is performed earlier than this in the regular LTO pipeline).
-  MPM.addPass(LowerTypeTestsPass(nullptr, nullptr,
-                                 lowertypetests::DropTestKind::Assume));
+  MPM.addPass(DropTypeTestsPass());
 
   // Enable splitting late in the FullLTO post-link pipeline.
   if (EnableHotColdSplit)
