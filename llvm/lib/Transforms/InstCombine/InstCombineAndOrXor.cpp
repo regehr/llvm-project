@@ -706,6 +706,7 @@ static Value *foldLogOpOfMaskedICmps(Value *LHS, Value *RHS, bool IsAnd,
   if (Mask & Mask_NotAllZeros &&
       isKnownToBeAPowerOfTwo(B, /*OrZero=*/false, Q) &&
       isKnownToBeAPowerOfTwo(D, /*OrZero=*/false, Q)) {
+    logKnownBitsOpt("kb0015");
     // If this is a logical and/or, then we must prevent propagation of a
     // poison value from the RHS by inserting freeze.
     if (IsLogical)
@@ -773,6 +774,7 @@ Value *InstCombinerImpl::simplifyRangeCheck(ICmpInst *Cmp0, ICmpInst *Cmp1,
   if (Inverted)
     NewPred = ICmpInst::getInversePredicate(NewPred);
 
+  logKnownBitsOpt("kb0016");
   return Builder.CreateICmp(NewPred, Input, RangeEnd);
 }
 
@@ -810,6 +812,7 @@ foldAndOrOfICmpsWithPow2AndWithZero(InstCombiner::BuilderTy &Builder,
       !isKnownToBeAPowerOfTwo(Pow2, Q.DL, /*OrZero=*/true, Q.AC, Q.CxtI, Q.DT))
     return nullptr;
 
+  logKnownBitsOpt("kb0017");
   Value *And = Builder.CreateAnd(Op, Pow2);
   return Builder.CreateICmp(Pred, And, Op);
 }
@@ -1139,11 +1142,15 @@ static Value *foldUnsignedUnderflowCheck(ICmpInst *ZeroICmp,
     //     with X being the value (A/B) that is known to be non-zero,
     //     and Y being remaining value.
     if (UnsignedPred == ICmpInst::ICMP_ULT && EqPred == ICmpInst::ICMP_NE &&
-        IsAnd && GetKnownNonZeroAndOther(B, A))
+        IsAnd && GetKnownNonZeroAndOther(B, A)) {
+      logKnownBitsOpt("kb0018");
       return Builder.CreateICmpULT(Builder.CreateNeg(B), A);
+    }
     if (UnsignedPred == ICmpInst::ICMP_UGE && EqPred == ICmpInst::ICMP_EQ &&
-        !IsAnd && GetKnownNonZeroAndOther(B, A))
+        !IsAnd && GetKnownNonZeroAndOther(B, A)) {
+      logKnownBitsOpt("kb0018");
       return Builder.CreateICmpUGE(Builder.CreateNeg(B), A);
+    }
   }
 
   return nullptr;
@@ -2476,8 +2483,10 @@ Instruction *InstCombinerImpl::visitAnd(BinaryOperator &I) {
   if (match(&I, m_c_And(m_Value(Y), m_OneUse(m_CombineOr(
                                         m_c_Add(m_Value(X), m_Deferred(Y)),
                                         m_Sub(m_Value(X), m_Deferred(Y)))))) &&
-      isKnownToBeAPowerOfTwo(Y, /*OrZero*/ true, &I))
+      isKnownToBeAPowerOfTwo(Y, /*OrZero*/ true, &I)) {
+    logKnownBitsOpt("kb0019");
     return BinaryOperator::CreateAnd(Builder.CreateNot(X), Y);
+  }
 
   if (match(Op1, m_APInt(C))) {
     const APInt *XorC;
@@ -2602,12 +2611,14 @@ Instruction *InstCombinerImpl::visitAnd(BinaryOperator &I) {
       APInt NotAndMask(~(*C));
       BinaryOperator::BinaryOps BinOp = cast<BinaryOperator>(Op0)->getOpcode();
       if (MaskedValueIsZero(X, NotAndMask, &I)) {
+        logKnownBitsOpt("kb0020");
         // Not masking anything out for the LHS, move mask to RHS.
         // and ({x}or X, Y), C --> {x}or X, (and Y, C)
         Value *NewRHS = Builder.CreateAnd(Y, Op1, Y->getName() + ".masked");
         return BinaryOperator::Create(BinOp, X, NewRHS);
       }
       if (!isa<Constant>(Y) && MaskedValueIsZero(Y, NotAndMask, &I)) {
+        logKnownBitsOpt("kb0021");
         // Not masking anything out for the RHS, move mask to LHS.
         // and ({x}or X, Y), C --> {x}or (and X, C), Y
         Value *NewLHS = Builder.CreateAnd(X, Op1, X->getName() + ".masked");
@@ -2644,6 +2655,7 @@ Instruction *InstCombinerImpl::visitAnd(BinaryOperator &I) {
         Constant *LshrC = ConstantExpr::getAdd(C2, Log2C3);
         KnownBits KnownLShrc = computeKnownBits(LshrC, nullptr);
         if (KnownLShrc.getMaxValue().ult(Width)) {
+          logKnownBitsOpt("kb0022");
           // iff C1,C3 is pow2 and C2 + cttz(C3) < BitWidth:
           // ((C1 << X) >> C2) & C3 -> X == (cttz(C3)+C2-cttz(C1)) ? C3 : 0
           Constant *CmpC = ConstantExpr::getSub(LshrC, Log2C1);
@@ -2846,6 +2858,7 @@ Instruction *InstCombinerImpl::visitAnd(BinaryOperator &I) {
       return createSelectInstWithUnknownProfile(A, Constant::getNullValue(Ty),
                                                 B);
     if (computeKnownBits(A, &I).countMaxActiveBits() <= 1) {
+      logKnownBitsOpt("kb0000");
       return createSelectInstWithUnknownProfile(
           Builder.CreateICmpEQ(A, Constant::getNullValue(A->getType())), B,
           Constant::getNullValue(Ty));
@@ -2988,7 +3001,11 @@ InstCombinerImpl::convertOrOfShiftsToFunnelShift(Instruction &Or) {
       // final codegen will match this original pattern.
       if (match(R, m_OneUse(m_Sub(m_SpecificInt(Width), m_Specific(L))))) {
         KnownBits KnownL = computeKnownBits(L, &Or);
-        return KnownL.getMaxValue().ult(Width) ? L : nullptr;
+        if (KnownL.getMaxValue().ult(Width)) {
+          logKnownBitsOpt("kb0023");
+          return L;
+        }
+        return nullptr;
       }
 
       // For non-constant cases, the following patterns currently only work for
@@ -4122,6 +4139,7 @@ Instruction *InstCombinerImpl::visitOr(BinaryOperator &I) {
   const APInt *CV;
   if (match(&I, m_c_Or(m_OneUse(m_Xor(m_Value(X), m_APInt(CV))), m_Value(Y))) &&
       !CV->isAllOnes() && MaskedValueIsZero(Y, *CV, &I)) {
+    logKnownBitsOpt("kb0025");
     // (X ^ C) | Y -> (X | Y) ^ C iff Y & C == 0
     // The check for a 'not' op is for efficiency (if Y is known zero --> ~X).
     Value *Or = Builder.CreateOr(X, Y);
@@ -4166,6 +4184,7 @@ Instruction *InstCombinerImpl::visitOr(BinaryOperator &I) {
         // iff (C0 & C1) == 0 and (X & ~C0) == 0
         if (match(A, m_c_Or(m_Value(X), m_Specific(B))) &&
             MaskedValueIsZero(X, ~*C0, &I)) {
+          logKnownBitsOpt("kb0026");
           Constant *C01 = ConstantInt::get(Ty, *C0 | *C1);
           return BinaryOperator::CreateAnd(A, C01);
         }
@@ -4173,6 +4192,7 @@ Instruction *InstCombinerImpl::visitOr(BinaryOperator &I) {
         // iff (C0 & C1) == 0 and (X & ~C1) == 0
         if (match(B, m_c_Or(m_Value(X), m_Specific(A))) &&
             MaskedValueIsZero(X, ~*C1, &I)) {
+          logKnownBitsOpt("kb0027");
           Constant *C01 = ConstantInt::get(Ty, *C0 | *C1);
           return BinaryOperator::CreateAnd(B, C01);
         }
@@ -4555,8 +4575,10 @@ Instruction *InstCombinerImpl::visitOr(BinaryOperator &I) {
   if (match(Op0, m_OneUse(m_And(m_Value(X), m_APInt(C1)))) &&
       match(Op1, m_APInt(C2))) {
     KnownBits KnownX = computeKnownBits(X, &I);
-    if ((KnownX.One & *C2) == *C2)
+    if ((KnownX.One & *C2) == *C2) {
+      logKnownBitsOpt("kb0028");
       return BinaryOperator::CreateAnd(X, ConstantInt::get(Ty, *C1 | *C2));
+    }
   }
 
   if (Instruction *Res = foldBitwiseLogicWithIntrinsics(I, Builder))
@@ -4712,6 +4734,7 @@ Value *InstCombinerImpl::foldXorOfICmps(ICmpInst *LHS, ICmpInst *RHS,
         match(LHS0, m_And(m_Value(X), m_Value(Pow2))) &&
         match(RHS0, m_And(m_Value(Y), m_Specific(Pow2))) &&
         isKnownToBeAPowerOfTwo(Pow2, /*OrZero=*/true, &I)) {
+      logKnownBitsOpt("kb0029");
       Value *Xor = Builder.CreateXor(X, Y);
       Value *And = Builder.CreateAnd(Xor, Pow2);
       return Builder.CreateICmp(PredL == PredR ? ICmpInst::ICMP_NE
@@ -5051,8 +5074,10 @@ Instruction *InstCombinerImpl::foldNot(BinaryOperator &I) {
     // Treat lshr with non-negative operand as ashr.
     // ~(~X >>u Y) --> (X >>s Y) iff X is known negative
     if (match(NotVal, m_LShr(m_Not(m_Value(X)), m_Value(Y))) &&
-        isKnownNegative(X, SQ.getWithInstruction(NotVal)))
+        isKnownNegative(X, SQ.getWithInstruction(NotVal))) {
+      logKnownBitsOpt("kb0030");
       return BinaryOperator::CreateAShr(X, Y);
+    }
 
     // Bit-hack form of a signbit test for iN type:
     // ~(X >>s (N - 1)) --> sext i1 (X > -1) to iN
@@ -5311,8 +5336,10 @@ Instruction *InstCombinerImpl::visitXor(BinaryOperator &I) {
 
       // (X | C) ^ RHSC --> X ^ (C ^ RHSC) iff X & C == 0
       if (match(Op0, m_Or(m_Value(X), m_APInt(C))) &&
-          MaskedValueIsZero(X, *C, &I))
+          MaskedValueIsZero(X, *C, &I)) {
+        logKnownBitsOpt("kb0031");
         return BinaryOperator::CreateXor(X, ConstantInt::get(Ty, *C ^ *RHSC));
+      }
 
       // When X is a power-of-two or zero and zero input is poison:
       // ctlz(i32 X) ^ 31 --> cttz(X)
@@ -5323,6 +5350,7 @@ Instruction *InstCombinerImpl::visitXor(BinaryOperator &I) {
         if ((IID == Intrinsic::ctlz || IID == Intrinsic::cttz) &&
             match(II->getArgOperand(1), m_One()) &&
             isKnownToBeAPowerOfTwo(II->getArgOperand(0), /*OrZero */ true)) {
+          logKnownBitsOpt("kb0032");
           IID = (IID == Intrinsic::ctlz) ? Intrinsic::cttz : Intrinsic::ctlz;
           Function *F =
               Intrinsic::getOrInsertDeclaration(II->getModule(), IID, Ty);

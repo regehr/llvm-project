@@ -989,8 +989,12 @@ static bool canReplaceGEPIdxWithZero(InstCombinerImpl &IC,
 
   // Note that isObjectSizeLessThanOrEq will return true only if the pointer is
   // also known to be dereferenceable.
-  return isObjectSizeLessThanOrEq(GEPI->getOperand(0), TyAllocSize, DL) &&
-         IsAllNonNegative();
+  if (isObjectSizeLessThanOrEq(GEPI->getOperand(0), TyAllocSize, DL) &&
+      IsAllNonNegative()) {
+    logKnownBitsOpt("kb0119");
+    return true;
+  }
+  return false;
 }
 
 // If we're indexing into an object with a variable index for the memory

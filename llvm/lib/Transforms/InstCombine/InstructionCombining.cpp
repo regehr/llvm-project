@@ -93,6 +93,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/DebugCounter.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/KnownFPClass.h"
 #include "llvm/Support/raw_ostream.h"
@@ -144,8 +145,25 @@ static cl::opt<unsigned>
 MaxArraySize("instcombine-maxarray-size", cl::init(1024),
              cl::desc("Maximum array size considered when doing a combine"));
 
+static cl::opt<std::string> KnownBitsLogFile(
+    "instcombine-knownbits-log", cl::init(""),
+    cl::desc("Path to a file in which to log known-bits-driven InstCombine "
+             "optimization firings (one tag per line). Empty disables "
+             "logging."));
+
 namespace llvm {
 extern cl::opt<bool> ProfcheckDisableMetadataFixes;
+
+void logKnownBitsOpt(StringRef Tag) {
+  if (KnownBitsLogFile.empty())
+    return;
+  std::error_code EC;
+  raw_fd_ostream OS(KnownBitsLogFile, EC,
+                    sys::fs::OF_Append | sys::fs::OF_Text);
+  if (EC)
+    return;
+  OS << Tag << '\n';
+}
 } // end namespace llvm
 
 // FIXME: Remove this flag when it is no longer necessary to convert
@@ -1674,6 +1692,8 @@ Instruction *InstCombinerImpl::foldFBinOpOfIntCastsFromSign(
       !willNotOverflow(IntOpc, IntOps[0], IntOps[1], BO, OutputSigned))
     return nullptr;
 
+  if (NeedsOverflowCheck)
+    logKnownBitsOpt("kb0230");
   Value *IntBinOp = Builder.CreateBinOp(IntOpc, IntOps[0], IntOps[1]);
   if (auto *IntBO = dyn_cast<BinaryOperator>(IntBinOp)) {
     IntBO->setHasNoSignedWrap(OutputSigned);
@@ -2683,6 +2703,7 @@ Instruction *InstCombinerImpl::narrowMathIfNoOverflow(BinaryOperator &BO) {
   if (!willNotOverflow(BO.getOpcode(), X, Y, BO, IsSext))
     return nullptr;
 
+  logKnownBitsOpt("kb0231");
   // bo (ext X), (ext Y) --> ext (bo X, Y)
   // bo (ext X), C       --> ext (bo X, C')
   Value *NarrowBO = Builder.CreateBinOp(BO.getOpcode(), X, Y, "narrow");
@@ -3510,6 +3531,7 @@ Instruction *InstCombinerImpl::visitGetElementPtrInst(GetElementPtrInst &GEP) {
       all_of(GEP.indices(), [&](Value *Idx) {
         return isKnownNonNegative(Idx, SQ.getWithInstruction(&GEP));
       })) {
+    logKnownBitsOpt("kb0232");
     GEP.setNoWrapFlags(GEP.getNoWrapFlags() | GEPNoWrapFlags::noUnsignedWrap());
     return &GEP;
   }
@@ -4433,6 +4455,7 @@ Instruction *InstCombinerImpl::visitSwitchInst(SwitchInst &SI) {
   // TODO: We can make it aggressive again after fixing PR39569.
   if (NewWidth > 0 && NewWidth < Known.getBitWidth() &&
       shouldChangeType(Known.getBitWidth(), NewWidth)) {
+    logKnownBitsOpt("kb0233");
     IntegerType *Ty = IntegerType::get(SI.getContext(), NewWidth);
     Builder.SetInsertPoint(&SI);
     Value *NewCond = Builder.CreateTrunc(Cond, Ty, "trunc");

@@ -67,6 +67,7 @@ static Value *simplifyValueKnownNonZero(Value *V, InstCombinerImpl &IC,
   BinaryOperator *I = dyn_cast<BinaryOperator>(V);
   if (I && I->isLogicalShift() &&
       IC.isKnownToBeAPowerOfTwo(I->getOperand(0), false, &CxtI)) {
+    logKnownBitsOpt("kb0120");
     // We know that this is an exact/nuw shift and that the input is a
     // non-zero context as well.
     {
@@ -564,12 +565,14 @@ Instruction *InstCombinerImpl::visitMul(BinaryOperator &I) {
   //    if Log2(Op1) folds away ->
   //        (shl Op0, Log2(Op1))
   if (Value *Res = tryGetLog2(Op0, /*AssumeNonZero=*/false)) {
+    logKnownBitsOpt("kb0121");
     BinaryOperator *Shl = BinaryOperator::CreateShl(Op1, Res);
     // We can only propegate nuw flag.
     Shl->setHasNoUnsignedWrap(HasNUW);
     return Shl;
   }
   if (Value *Res = tryGetLog2(Op1, /*AssumeNonZero=*/false)) {
+    logKnownBitsOpt("kb0122");
     BinaryOperator *Shl = BinaryOperator::CreateShl(Op0, Res);
     // We can only propegate nuw flag.
     Shl->setHasNoUnsignedWrap(HasNUW);
@@ -578,11 +581,13 @@ Instruction *InstCombinerImpl::visitMul(BinaryOperator &I) {
 
   bool Changed = false;
   if (!HasNSW && willNotOverflowSignedMul(Op0, Op1, I)) {
+    logKnownBitsOpt("kb0123");
     Changed = true;
     I.setHasNoSignedWrap(true);
   }
 
   if (!HasNUW && willNotOverflowUnsignedMul(Op0, Op1, I, I.hasNoSignedWrap())) {
+    logKnownBitsOpt("kb0124");
     Changed = true;
     I.setHasNoUnsignedWrap(true);
   }
@@ -644,6 +649,7 @@ Instruction *InstCombinerImpl::foldPowiReassoc(BinaryOperator &I) {
                          m_Deferred(X)))) {
     Constant *One = ConstantInt::get(Y->getType(), 1);
     if (willNotOverflowSignedAdd(Y, One, I)) {
+      logKnownBitsOpt("kb0125");
       Instruction *NewPow = createPowiExpr(I, *this, X, Y, One);
       return replaceInstUsesWith(I, NewPow);
     }
@@ -670,6 +676,7 @@ Instruction *InstCombinerImpl::foldPowiReassoc(BinaryOperator &I) {
     if (match(Op0, m_OneUse(m_AllowReassoc(m_Intrinsic<Intrinsic::powi>(
                        m_Specific(Op1), m_Value(Y))))) &&
         willNotOverflowSignedSub(Y, ConstantInt::get(Y->getType(), 1), I)) {
+      logKnownBitsOpt("kb0126");
       Constant *NegOne = ConstantInt::getAllOnesValue(Y->getType());
       Instruction *NewPow = createPowiExpr(I, *this, Op1, Y, NegOne);
       return replaceInstUsesWith(I, NewPow);
@@ -683,6 +690,7 @@ Instruction *InstCombinerImpl::foldPowiReassoc(BinaryOperator &I) {
                        m_Value(X), m_Value(Y))))) &&
         match(Op1, m_AllowReassoc(m_c_FMul(m_Specific(X), m_Value(Z)))) &&
         willNotOverflowSignedSub(Y, ConstantInt::get(Y->getType(), 1), I)) {
+      logKnownBitsOpt("kb0127");
       Constant *NegOne = ConstantInt::getAllOnesValue(Y->getType());
       auto *NewPow = createPowiExpr(I, *this, X, Y, NegOne);
       return BinaryOperator::CreateFDivFMF(NewPow, Z, &I);
@@ -1296,8 +1304,10 @@ Instruction *InstCombinerImpl::commonIDivRemTransforms(BinaryOperator &I) {
     return Phi;
 
   // The RHS is known non-zero.
-  if (Value *V = simplifyValueKnownNonZero(I.getOperand(1), *this, I))
+  if (Value *V = simplifyValueKnownNonZero(I.getOperand(1), *this, I)) {
+    logKnownBitsOpt("kb0128");
     return replaceOperand(I, 1, V);
+  }
 
   // Handle cases involving: div/rem X, (select Cond, Y, Z)
   if (simplifyDivRemOfSelectWithZeroOp(I))
@@ -1735,16 +1745,20 @@ Instruction *InstCombinerImpl::visitUDiv(BinaryOperator &I) {
 
   auto GetShiftableDenom = [&](Value *Denom) -> Value * {
     // Op0 udiv Op1 -> Op0 lshr log2(Op1), if log2() folds away.
-    if (Value *Log2 = tryGetLog2(Op1, /*AssumeNonZero=*/true))
+    if (Value *Log2 = tryGetLog2(Op1, /*AssumeNonZero=*/true)) {
+      logKnownBitsOpt("kb0129");
       return Log2;
+    }
 
     // Op0 udiv Op1 -> Op0 lshr cttz(Op1), if Op1 is a power of 2.
-    if (isKnownToBeAPowerOfTwo(Denom, /*OrZero=*/true, &I))
+    if (isKnownToBeAPowerOfTwo(Denom, /*OrZero=*/true, &I)) {
+      logKnownBitsOpt("kb0130");
       // This will increase instruction count but it's okay
       // since bitwise operations are substantially faster than
       // division.
       return Builder.CreateBinaryIntrinsic(Intrinsic::cttz, Denom,
                                            Builder.getTrue());
+    }
 
     return nullptr;
   };
@@ -1853,6 +1867,7 @@ Instruction *InstCombinerImpl::visitSDiv(BinaryOperator &I) {
   if (!I.isExact() &&
       (match(Op1, m_Power2(Op1C)) || match(Op1, m_NegatedPower2(Op1C))) &&
       KnownDividend.countMinTrailingZeros() >= Op1C->countr_zero()) {
+    logKnownBitsOpt("kb0131");
     I.setIsExact();
     return &I;
   }
@@ -1860,6 +1875,7 @@ Instruction *InstCombinerImpl::visitSDiv(BinaryOperator &I) {
   if (KnownDividend.isNonNegative()) {
     // If both operands are unsigned, turn this into a udiv.
     if (isKnownNonNegative(Op1, SQ.getWithInstruction(&I))) {
+      logKnownBitsOpt("kb0132");
       auto *BO = BinaryOperator::CreateUDiv(Op0, Op1, I.getName());
       BO->setIsExact(I.isExact());
       return BO;
@@ -1875,6 +1891,7 @@ Instruction *InstCombinerImpl::visitSDiv(BinaryOperator &I) {
     }
 
     if (isKnownToBeAPowerOfTwo(Op1, /*OrZero*/ true, &I)) {
+      logKnownBitsOpt("kb0133");
       // X sdiv (1 << Y) -> X udiv (1 << Y) ( -> X u>> Y)
       // Safe because the only negative value (1 << Y) can take on is
       // INT_MIN, and X sdiv INT_MIN == X udiv INT_MIN == 0 if X doesn't have
@@ -2429,6 +2446,7 @@ Instruction *InstCombinerImpl::visitURem(BinaryOperator &I) {
   Value *Op0 = I.getOperand(0), *Op1 = I.getOperand(1);
   Type *Ty = I.getType();
   if (isKnownToBeAPowerOfTwo(Op1, /*OrZero*/ true, &I)) {
+    logKnownBitsOpt("kb0134");
     // This may increase instruction count, we don't enforce that Y is a
     // constant.
     Constant *N1 = Constant::getAllOnesValue(Ty);
@@ -2512,6 +2530,7 @@ Instruction *InstCombinerImpl::visitSRem(BinaryOperator &I) {
   // unsigned inputs), turn this into a urem.
   APInt Mask(APInt::getSignMask(I.getType()->getScalarSizeInBits()));
   if (MaskedValueIsZero(Op1, Mask, &I) && MaskedValueIsZero(Op0, Mask, &I)) {
+    logKnownBitsOpt("kb0135");
     // X srem Y -> X urem Y, iff X and Y don't have sign bit set
     return BinaryOperator::CreateURem(Op0, Op1, I.getName());
   }

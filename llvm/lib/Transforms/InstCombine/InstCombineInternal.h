@@ -58,6 +58,12 @@ class ProfileSummaryInfo;
 class TargetLibraryInfo;
 class User;
 
+/// Append \p Tag followed by a newline to the file specified by the
+/// -instcombine-knownbits-log command-line option. Does nothing if the
+/// option was not set. Used to record firings of known-bits-driven
+/// InstCombine transforms for analysis.
+void logKnownBitsOpt(StringRef Tag);
+
 class LLVM_LIBRARY_VISIBILITY InstCombinerImpl final
     : public InstCombiner,
       public InstVisitor<InstCombinerImpl, Instruction *> {

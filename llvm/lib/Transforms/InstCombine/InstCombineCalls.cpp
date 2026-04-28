@@ -119,6 +119,7 @@ Instruction *InstCombinerImpl::SimplifyAnyMemTransfer(AnyMemTransferInst *MI) {
   Align DstAlign = getKnownAlignment(MI->getRawDest(), DL, MI, &AC, &DT);
   MaybeAlign CopyDstAlign = MI->getDestAlign();
   if (!CopyDstAlign || *CopyDstAlign < DstAlign) {
+    logKnownBitsOpt("kb0033");
     MI->setDestAlignment(DstAlign);
     return MI;
   }
@@ -126,6 +127,7 @@ Instruction *InstCombinerImpl::SimplifyAnyMemTransfer(AnyMemTransferInst *MI) {
   Align SrcAlign = getKnownAlignment(MI->getRawSource(), DL, MI, &AC, &DT);
   MaybeAlign CopySrcAlign = MI->getSourceAlign();
   if (!CopySrcAlign || *CopySrcAlign < SrcAlign) {
+    logKnownBitsOpt("kb0034");
     MI->setSourceAlignment(SrcAlign);
     return MI;
   }
@@ -222,6 +224,7 @@ Instruction *InstCombinerImpl::SimplifyAnyMemSet(AnyMemSetInst *MI) {
       getKnownAlignment(MI->getDest(), DL, MI, &AC, &DT);
   MaybeAlign MemSetAlign = MI->getDestAlign();
   if (!MemSetAlign || *MemSetAlign < KnownAlignment) {
+    logKnownBitsOpt("kb0035");
     MI->setDestAlignment(KnownAlignment);
     return MI;
   }
@@ -623,6 +626,7 @@ static Instruction *foldCttzCtlz(IntrinsicInst &II, InstCombinerImpl &IC) {
   // FIXME: This should be in InstSimplify because we're replacing an
   // instruction with a constant.
   if (PossibleZeros == DefiniteZeros) {
+    logKnownBitsOpt("kb0036");
     auto *C = ConstantInt::get(Op0->getType(), DefiniteZeros);
     return IC.replaceInstUsesWith(II, C);
   }
@@ -632,14 +636,17 @@ static Instruction *foldCttzCtlz(IntrinsicInst &II, InstCombinerImpl &IC) {
   // because we know the zero behavior can't affect the result.
   if (!Known.One.isZero() ||
       isKnownNonZero(Op0, IC.getSimplifyQuery().getWithInstruction(&II))) {
-    if (!match(II.getArgOperand(1), m_One()))
+    if (!match(II.getArgOperand(1), m_One())) {
+      logKnownBitsOpt("kb0037");
       return IC.replaceOperand(II, 1, IC.Builder.getTrue());
+    }
   }
 
   // Add range attribute since known bits can't completely reflect what we know.
   unsigned BitWidth = Op0->getType()->getScalarSizeInBits();
   if (BitWidth != 1 && !II.hasRetAttr(Attribute::Range) &&
       !II.getMetadata(LLVMContext::MD_range)) {
+    logKnownBitsOpt("kb0038");
     ConstantRange Range(APInt(BitWidth, DefiniteZeros),
                         APInt(BitWidth, PossibleZeros + 1));
     II.addRangeRetAttr(Range);
@@ -700,18 +707,22 @@ static Instruction *foldCtpop(IntrinsicInst &II, InstCombinerImpl &IC) {
   // ctpop (X & 32) --> (X & 32) >> 5
   // TODO: Investigate removing this as its likely unnecessary given the below
   // `isKnownToBeAPowerOfTwo` check.
-  if ((~Known.Zero).isPowerOf2())
+  if ((~Known.Zero).isPowerOf2()) {
+    logKnownBitsOpt("kb0039");
     return BinaryOperator::CreateLShr(
         Op0, ConstantInt::get(Ty, (~Known.Zero).exactLogBase2()));
+  }
 
   // More generally we can also handle non-constant power of 2 patterns such as
   // shl/shr(Pow2, X), (X & -X), etc... by transforming:
   // ctpop(Pow2OrZero) --> icmp ne X, 0
-  if (IC.isKnownToBeAPowerOfTwo(Op0, /* OrZero */ true))
+  if (IC.isKnownToBeAPowerOfTwo(Op0, /* OrZero */ true)) {
+    logKnownBitsOpt("kb0040");
     return CastInst::Create(Instruction::ZExt,
                             IC.Builder.CreateICmp(ICmpInst::ICMP_NE, Op0,
                                                   Constant::getNullValue(Ty)),
                             Ty);
+  }
 
   // Add range attribute since known bits can't completely reflect what we know.
   if (BitWidth != 1) {
@@ -729,6 +740,7 @@ static Instruction *foldCtpop(IntrinsicInst &II, InstCombinerImpl &IC) {
     Range = Range.intersectWith(OldRange, ConstantRange::Unsigned);
 
     if (Range != OldRange) {
+      logKnownBitsOpt("kb0041");
       II.addRangeRetAttr(Range);
       return &II;
     }
@@ -939,8 +951,11 @@ InstCombinerImpl::foldIntrinsicWithOverflowCommon(IntrinsicInst *II) {
   Value *OperationResult = nullptr;
   Constant *OverflowResult = nullptr;
   if (OptimizeOverflowCheck(WO->getBinaryOp(), WO->isSigned(), WO->getLHS(),
-                            WO->getRHS(), *WO, OperationResult, OverflowResult))
+                            WO->getRHS(), *WO, OperationResult,
+                            OverflowResult)) {
+    logKnownBitsOpt("kb0042");
     return createOverflowTuple(WO, OperationResult, OverflowResult);
+  }
 
   // See whether we can optimize the overflow check with assumption information.
   for (User *U : WO->users()) {
@@ -1312,6 +1327,7 @@ Instruction *InstCombinerImpl::matchSAddSubSat(IntrinsicInst &MinMax1) {
       ComputeMaxSignificantBits(AddSub->getOperand(1), AddSub) > NewBitWidth)
     return nullptr;
 
+  logKnownBitsOpt("kb0043");
   // Finally create and return the sat intrinsic, truncated to the new type
   Value *AT = Builder.CreateTrunc(AddSub->getOperand(0), NewTy);
   Value *BT = Builder.CreateTrunc(AddSub->getOperand(1), NewTy);
@@ -1387,6 +1403,8 @@ static Value *reassociateMinMaxWithConstants(IntrinsicInst *II,
         isKnownNonNegative(C0, SQ) && isKnownNonNegative(C1, SQ)))
     return nullptr;
 
+  if (InnerMinMaxID != MinMaxID)
+    logKnownBitsOpt("kb0047");
   ICmpInst::Predicate Pred = MinMaxIntrinsic::getPredicate(MinMaxID);
   Value *CondC = Builder.CreateICmp(Pred, C0, C1);
   Value *NewC = Builder.CreateSelect(CondC, C0, C1);
@@ -2034,6 +2052,7 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
 
     if (std::optional<bool> Known =
             getKnownSignOrZero(IIOperand, SQ.getWithInstruction(II))) {
+      logKnownBitsOpt("kb0044");
       // abs(x) -> x if x >= 0 (include abs(x-y) --> x - y where x >= y)
       // abs(x) -> x if x > 0 (include abs(x-y) --> x - y where x > y)
       if (!*Known)
@@ -2239,6 +2258,7 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
           UseOr = false;
           UseAndN = false;
         } else if (*KnownSign /* true is Signed. */) {
+          logKnownBitsOpt("kb0046");
           UseOr ^= true;
           UseAndN ^= true;
           Type *Ty = I0->getType();
@@ -2249,10 +2269,13 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
               Ty, APInt::getSignedMinValue(Ty->getScalarSizeInBits()));
         }
       }
-      if (UseOr)
+      if (UseOr) {
+        logKnownBitsOpt("kb0045");
         return BinaryOperator::CreateOr(I0, X);
-      else if (UseAndN)
+      } else if (UseAndN) {
+        logKnownBitsOpt("kb0045");
         return BinaryOperator::CreateAnd(I0, Builder.CreateNot(X));
+      }
     }
 
     // If we can eliminate ~A and Y is free to invert:
@@ -2389,6 +2412,7 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
     if (match(IIOperand, m_OneUse(m_LogicalShift(m_Value(X), m_Value(Y))))) {
       unsigned BitWidth = IIOperand->getType()->getScalarSizeInBits();
       if (MaskedValueIsZero(Y, APInt::getLowBitsSet(BitWidth, 3))) {
+        logKnownBitsOpt("kb0048");
         Value *NewSwap = Builder.CreateUnaryIntrinsic(Intrinsic::bswap, X);
         BinaryOperator::BinaryOps InverseShift =
             cast<BinaryOperator>(IIOperand)->getOpcode() == Instruction::Shl
@@ -2405,6 +2429,7 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
 
     // bswap(x) -> shift(x) if x has exactly one "active byte"
     if (BW - LZ - TZ == 8) {
+      logKnownBitsOpt("kb0049");
       assert(LZ != TZ && "active byte cannot be in the middle");
       if (LZ > TZ)  // -> shl(x) if the "active byte" is in the low part of x
         return BinaryOperator::CreateNUWShl(
@@ -2515,6 +2540,7 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
         if (!isKnownNonZero(ShAmtC, SQ.getWithInstruction(II)))
           return nullptr;
 
+        logKnownBitsOpt("kb0050");
         Constant *LeftShiftC = ConstantExpr::getSub(WidthC, ShAmtC);
         Module *Mod = II->getModule();
         Function *Fshl =
@@ -2628,6 +2654,7 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
     if (!CI.hasRetAttr(Attribute::NonNull) &&
         (Known.isNonZero() ||
          isKnownNonZero(II, getSimplifyQuery().getWithInstruction(II)))) {
+      logKnownBitsOpt("kb0051");
       CI.addRetAttr(Attribute::NonNull);
       Changed = true;
     }
@@ -2638,6 +2665,7 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
     // Known bits will capture if we had alignment information associated with
     // the pointer argument.
     if (NewAlignmentLog > Log2(CI.getRetAlign().valueOrOne())) {
+      logKnownBitsOpt("kb0052");
       CI.addRetAttr(Attribute::getWithAlignment(
           CI.getContext(), Align(uint64_t(1) << NewAlignmentLog)));
       Changed = true;
@@ -2720,16 +2748,19 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
       case OverflowResult::MayOverflow:
         break;
       case OverflowResult::NeverOverflows:
+        logKnownBitsOpt("kb0053");
         if (SI->isSigned())
           return BinaryOperator::CreateNSW(SI->getBinaryOp(), Arg0, Arg1);
         else
           return BinaryOperator::CreateNUW(SI->getBinaryOp(), Arg0, Arg1);
       case OverflowResult::AlwaysOverflowsLow: {
+        logKnownBitsOpt("kb0053");
         unsigned BitWidth = Ty->getScalarSizeInBits();
         APInt Min = APSInt::getMinValue(BitWidth, !SI->isSigned());
         return replaceInstUsesWith(*SI, ConstantInt::get(Ty, Min));
       }
       case OverflowResult::AlwaysOverflowsHigh: {
+        logKnownBitsOpt("kb0053");
         unsigned BitWidth = Ty->getScalarSizeInBits();
         APInt Max = APSInt::getMaxValue(BitWidth, !SI->isSigned());
         return replaceInstUsesWith(*SI, ConstantInt::get(Ty, Max));
@@ -3172,8 +3203,11 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
       FastMathFlags FMF = II->getFastMathFlags();
       FastMathFlags InnerFlags = cast<FPMathOperator>(Src)->getFastMathFlags();
 
-      if ((FMF.allowReassoc() && InnerFlags.allowReassoc()) ||
+      bool ReassocPath = FMF.allowReassoc() && InnerFlags.allowReassoc();
+      if (ReassocPath ||
           signBitMustBeTheSame(Exp, InnerExp, SQ.getWithInstruction(II))) {
+        if (!ReassocPath)
+          logKnownBitsOpt("kb0054");
         // TODO: Add nsw/nuw probably safe if integer type exceeds exponent
         // width.
         Value *NewExp = Builder.CreateAdd(InnerExp, Exp);
@@ -3415,8 +3449,10 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
       uint64_t Mask1 = computeKnownBits(Mask, II).One.getZExtValue();
       // Check if every byte has common bits in Bytes and Mask.
       uint64_t C = Bytes1 & Mask1;
-      if ((C & 0xFF) && (C & 0xFF00) && (C & 0xFF0000) && (C & 0xFF000000))
+      if ((C & 0xFF) && (C & 0xFF00) && (C & 0xFF0000) && (C & 0xFF000000)) {
+        logKnownBitsOpt("kb0055");
         return replaceInstUsesWith(*II, Op0->getArgOperand(0));
+      }
     }
     break;
   }
@@ -3639,6 +3675,7 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
                                Value::MaxAlignmentExponent);
         if ((1ULL << TZ) < RK.ArgValue)
           continue;
+        logKnownBitsOpt("kb0056");
         return CallBase::removeOperandBundle(II, OBU.getTagID());
       }
     }
@@ -3735,8 +3772,10 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
     // then this one is redundant, and should be removed.
     KnownBits Known(1);
     computeKnownBits(IIOperand, Known, II);
-    if (Known.isAllOnes() && isAssumeWithEmptyBundle(cast<AssumeInst>(*II)))
+    if (Known.isAllOnes() && isAssumeWithEmptyBundle(cast<AssumeInst>(*II))) {
+      logKnownBitsOpt("kb0057");
       return eraseInstFromFunction(*II);
+    }
 
     // assume(false) is unreachable.
     if (match(IIOperand, m_CombineOr(m_Zero(), m_Undef()))) {
@@ -4155,6 +4194,7 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
     Align MinAlign = getKnownAlignment(II->getArgOperand(0), DL, II, &AC, &DT);
     MaybeAlign Align = II->getRetAlign();
     if (MinAlign > Align.valueOrOne()) {
+      logKnownBitsOpt("kb0058");
       II->addRetAttr(Attribute::getWithAlignment(II->getContext(), MinAlign));
       return II;
     }
@@ -4643,6 +4683,7 @@ Instruction *InstCombinerImpl::visitCallBase(CallBase &Call) {
         }
       } else if (isKnownNonZero(V,
                                 getSimplifyQuery().getWithInstruction(&Call))) {
+        logKnownBitsOpt("kb0059");
         ArgNos.push_back(ArgNo);
       }
     }
@@ -4841,6 +4882,7 @@ Instruction *InstCombinerImpl::visitCallBase(CallBase &Call) {
         if (!GCR.hasRetAttr(Attribute::NonNull) &&
             isKnownNonZero(DerivedPtr,
                            getSimplifyQuery().getWithInstruction(&Call))) {
+          logKnownBitsOpt("kb0060");
           GCR.addRetAttr(Attribute::NonNull);
           // We discovered new fact, re-check users.
           Worklist.pushUsersToWorkList(GCR);

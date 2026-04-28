@@ -1092,6 +1092,7 @@ static Instruction *processUGT_ADDCST_ADD(ICmpInst &I, Value *A, Value *B,
   if (IC.ComputeMaxSignificantBits(A, &I) > NewWidth ||
       IC.ComputeMaxSignificantBits(B, &I) > NewWidth)
     return nullptr;
+  logKnownBitsOpt("kb0083");
 
   // In order to replace the original add with a narrower
   // llvm.sadd.with.overflow, the only uses allowed are the add-with-constant
@@ -1155,6 +1156,7 @@ Instruction *InstCombinerImpl::foldIRemByPowerOfTwoToBitTest(ICmpInst &I) {
     return nullptr;
   if (!isKnownToBeAPowerOfTwo(Y, /*OrZero*/ true, &I))
     return nullptr;
+  logKnownBitsOpt("kb0084");
   // This may increase instruction count, we don't enforce that Y is a constant.
   Value *Mask = Builder.CreateAdd(Y, Constant::getAllOnesValue(Y->getType()));
   Value *Masked = Builder.CreateAnd(X, Mask);
@@ -1203,10 +1205,14 @@ Instruction *InstCombinerImpl::foldICmpWithZero(ICmpInst &Cmp) {
   if (Pred == ICmpInst::ICMP_SGT) {
     Value *A, *B;
     if (match(Cmp.getOperand(0), m_SMin(m_Value(A), m_Value(B)))) {
-      if (isKnownPositive(A, SQ.getWithInstruction(&Cmp)))
+      if (isKnownPositive(A, SQ.getWithInstruction(&Cmp))) {
+        logKnownBitsOpt("kb0085");
         return new ICmpInst(Pred, B, Cmp.getOperand(1));
-      if (isKnownPositive(B, SQ.getWithInstruction(&Cmp)))
+      }
+      if (isKnownPositive(B, SQ.getWithInstruction(&Cmp))) {
+        logKnownBitsOpt("kb0085");
         return new ICmpInst(Pred, A, Cmp.getOperand(1));
+      }
     }
   }
 
@@ -1222,8 +1228,10 @@ Instruction *InstCombinerImpl::foldICmpWithZero(ICmpInst &Cmp) {
       ICmpInst::isEquality(Pred)) {
     KnownBits XKnown = computeKnownBits(X, &Cmp);
     KnownBits YKnown = computeKnownBits(Y, &Cmp);
-    if (XKnown.countMaxPopulation() == 1 && YKnown.countMinPopulation() >= 2)
+    if (XKnown.countMaxPopulation() == 1 && YKnown.countMinPopulation() >= 2) {
+      logKnownBitsOpt("kb0086");
       return new ICmpInst(Pred, X, Cmp.getOperand(1));
+    }
   }
 
   // (icmp eq/ne (mul X Y)) -> (icmp eq/ne X/Y) if we know about whether X/Y are
@@ -1234,14 +1242,18 @@ Instruction *InstCombinerImpl::foldICmpWithZero(ICmpInst &Cmp) {
     KnownBits XKnown = computeKnownBits(X, &Cmp);
     // if X % 2 != 0
     //    (icmp eq/ne Y)
-    if (XKnown.countMaxTrailingZeros() == 0)
+    if (XKnown.countMaxTrailingZeros() == 0) {
+      logKnownBitsOpt("kb0087");
       return new ICmpInst(Pred, Y, Cmp.getOperand(1));
+    }
 
     KnownBits YKnown = computeKnownBits(Y, &Cmp);
     // if Y % 2 != 0
     //    (icmp eq/ne X)
-    if (YKnown.countMaxTrailingZeros() == 0)
+    if (YKnown.countMaxTrailingZeros() == 0) {
+      logKnownBitsOpt("kb0088");
       return new ICmpInst(Pred, X, Cmp.getOperand(1));
+    }
 
     auto *BO0 = cast<OverflowingBinaryOperator>(Cmp.getOperand(0));
     if (BO0->hasNoUnsignedWrap() || BO0->hasNoSignedWrap()) {
@@ -1251,13 +1263,17 @@ Instruction *InstCombinerImpl::foldICmpWithZero(ICmpInst &Cmp) {
 
       // if X non-zero and NoOverflow(X * Y)
       //    (icmp eq/ne Y)
-      if (!XKnown.One.isZero() || isKnownNonZero(X, Q))
+      if (!XKnown.One.isZero() || isKnownNonZero(X, Q)) {
+        logKnownBitsOpt("kb0089");
         return new ICmpInst(Pred, Y, Cmp.getOperand(1));
+      }
 
       // if Y non-zero and NoOverflow(X * Y)
       //    (icmp eq/ne X)
-      if (!YKnown.One.isZero() || isKnownNonZero(Y, Q))
+      if (!YKnown.One.isZero() || isKnownNonZero(Y, Q)) {
+        logKnownBitsOpt("kb0090");
         return new ICmpInst(Pred, X, Cmp.getOperand(1));
+      }
     }
     // Note, we are skipping cases:
     //      if Y % 2 != 0 AND X % 2 != 0
@@ -1502,6 +1518,7 @@ Instruction *InstCombinerImpl::foldICmpTruncConstant(ICmpInst &Cmp,
 
     // If all the high bits are known, we can do this xform.
     if ((Known.Zero | Known.One).countl_one() >= SrcBits - DstBits) {
+      logKnownBitsOpt("kb0091");
       // Pull in the high bits from known-ones set.
       APInt NewRHS = C.zext(SrcBits);
       NewRHS |= Known.One & APInt::getHighBitsSet(SrcBits, SrcBits - DstBits);
@@ -1827,6 +1844,8 @@ Instruction *InstCombinerImpl::foldICmpAndConstConst(ICmpInst &Cmp,
     // Restrict this fold only for single-use 'and' (PR10267).
     // ((%x & C) == 0) --> %x u< (-C)  iff (-C) is power of two.
     if (NewC2.isNegatedPowerOf2()) {
+      if (NewC2 != *C2)
+        logKnownBitsOpt("kb0092");
       Constant *NegBOC = ConstantInt::get(And->getType(), -NewC2);
       auto NewPred = isICMP_NE ? ICmpInst::ICMP_UGE : ICmpInst::ICMP_ULT;
       return new ICmpInst(NewPred, X, NegBOC);
@@ -3236,8 +3255,10 @@ Instruction *InstCombinerImpl::foldICmpAddConstant(ICmpInst &Cmp,
   // (X + -1) <u C --> X <=u C (if X is never null)
   if (Pred == CmpInst::ICMP_ULT && C2->isAllOnes()) {
     const SimplifyQuery Q = SQ.getWithInstruction(&Cmp);
-    if (llvm::isKnownNonZero(X, Q))
+    if (llvm::isKnownNonZero(X, Q)) {
+      logKnownBitsOpt("kb0093");
       return new ICmpInst(ICmpInst::ICMP_ULE, X, ConstantInt::get(Ty, C));
+    }
   }
 
   if (!Add->hasOneUse())
@@ -3686,6 +3707,7 @@ Instruction *InstCombinerImpl::foldICmpBinOpEqualityWithConstant(
       if (Pred == ICmpInst::ICMP_EQ
               ? (match(TV, m_Zero()) && isKnownNonZero(FV, Q))
               : (match(FV, m_Zero()) && isKnownNonZero(TV, Q))) {
+        logKnownBitsOpt("kb0094");
         Value *Cmp = Builder.CreateICmp(
             Pred, Other, Constant::getNullValue(Other->getType()));
         return BinaryOperator::Create(
@@ -3708,6 +3730,7 @@ Instruction *InstCombinerImpl::foldICmpBinOpEqualityWithConstant(
           (Pred == ICmpInst::ICMP_EQ
                ? (match(FV, m_Zero()) && isKnownNonZero(TV, Q))
                : (match(TV, m_Zero()) && isKnownNonZero(FV, Q)))) {
+        logKnownBitsOpt("kb0094");
         Value *NotCond = Builder.CreateNot(Cond);
         Value *Cmp = Builder.CreateICmp(
             Pred, Other, Constant::getNullValue(Other->getType()));
@@ -3735,6 +3758,7 @@ Instruction *InstCombinerImpl::foldICmpBinOpEqualityWithConstant(
             Instruction::Mul, BO->getOpcode() == Instruction::SDiv, BOp1,
             Cmp.getOperand(1), BO);
         if (OR == OverflowResult::NeverOverflows) {
+          logKnownBitsOpt("kb0095");
           Value *YC =
               Builder.CreateMul(BOp1, ConstantInt::get(BO->getType(), C));
           return new ICmpInst(Pred, YC, BOp0);
@@ -3777,6 +3801,7 @@ static Instruction *foldCtpopPow2Test(ICmpInst &I, IntrinsicInst *CtpopLhs,
     KnownBits OpKnown = computeKnownBits(Op, Q.DL, Q.AC, Q.CxtI, Q.DT);
     // No need to check for count > 1, that should be already constant folded.
     if (OpKnown.countMinPopulation() == 1) {
+      logKnownBitsOpt("kb0096");
       Value *And = Builder.CreateAnd(
           Op, Constant::getIntegerValue(Op->getType(), ~(OpKnown.One)));
       return new ICmpInst(
@@ -4443,15 +4468,23 @@ static bool isMaskOrZero(const Value *V, bool Not, const SimplifyQuery &Q,
     return isMaskOrZero(I->getOperand(0), Not, Q, Depth);
   case Instruction::Add:
     // Pow2 - 1 is a Mask.
-    if (!Not && match(I->getOperand(1), m_AllOnes()))
-      return isKnownToBeAPowerOfTwo(I->getOperand(0), Q.DL, /*OrZero*/ true,
-                                    Q.AC, Q.CxtI, Q.DT, Depth);
+    if (!Not && match(I->getOperand(1), m_AllOnes())) {
+      bool R = isKnownToBeAPowerOfTwo(I->getOperand(0), Q.DL, /*OrZero*/ true,
+                                      Q.AC, Q.CxtI, Q.DT, Depth);
+      if (R)
+        logKnownBitsOpt("kb0097");
+      return R;
+    }
     break;
   case Instruction::Sub:
     // -Pow2 is a ~Mask.
-    if (Not && match(I->getOperand(0), m_Zero()))
-      return isKnownToBeAPowerOfTwo(I->getOperand(1), Q.DL, /*OrZero*/ true,
-                                    Q.AC, Q.CxtI, Q.DT, Depth);
+    if (Not && match(I->getOperand(0), m_Zero())) {
+      bool R = isKnownToBeAPowerOfTwo(I->getOperand(1), Q.DL, /*OrZero*/ true,
+                                      Q.AC, Q.CxtI, Q.DT, Depth);
+      if (R)
+        logKnownBitsOpt("kb0098");
+      return R;
+    }
     break;
   case Instruction::Call: {
     if (auto *II = dyn_cast<IntrinsicInst>(I)) {
@@ -4561,13 +4594,24 @@ static Value *foldICmpWithLowBitMaskedVal(CmpPredicate Pred, Value *Op0,
       X = Op1;
       // Look for: x & Mask pred x
       if (isMaskOrZero(M, /*Not=*/false, Q)) {
-        return !ICmpInst::isSigned(Pred) ||
-               (match(M, m_NonNegative()) || isKnownNonNegative(M, Q));
+        if (!ICmpInst::isSigned(Pred))
+          return true;
+        if (match(M, m_NonNegative()) || isKnownNonNegative(M, Q)) {
+          logKnownBitsOpt("kb0099");
+          return true;
+        }
+        return false;
       }
 
       // Look for: x & ~Mask pred ~Mask
       if (isMaskOrZero(X, /*Not=*/true, Q)) {
-        return !ICmpInst::isSigned(Pred) || isKnownNonZero(X, Q);
+        if (!ICmpInst::isSigned(Pred))
+          return true;
+        if (isKnownNonZero(X, Q)) {
+          logKnownBitsOpt("kb0100");
+          return true;
+        }
+        return false;
       }
       return false;
     }
@@ -4827,25 +4871,34 @@ foldShiftIntoShiftInAnotherHandOfAndInICmp(ICmpInst &I, const SimplifyQuery SQ,
         unsigned MinLeadZero = Known.countMinLeadingZeros();
         // If the value being shifted has at most lowest bit set we can fold.
         unsigned MaxActiveBits = Known.getBitWidth() - MinLeadZero;
-        if (MaxActiveBits <= 1)
+        if (MaxActiveBits <= 1) {
+          logKnownBitsOpt("kb0101");
           return true;
+        }
         // Precondition:  NewShAmt u<= countLeadingZeros(C)
-        if (NewShAmtSplat && NewShAmtSplat->getUniqueInteger().ule(MinLeadZero))
+        if (NewShAmtSplat &&
+            NewShAmtSplat->getUniqueInteger().ule(MinLeadZero)) {
+          logKnownBitsOpt("kb0101");
           return true;
+        }
       }
       if (auto *C = dyn_cast<Constant>(WidestShift->getOperand(0))) {
         KnownBits Known = computeKnownBits(C, SQ.DL);
         unsigned MinLeadZero = Known.countMinLeadingZeros();
         // If the value being shifted has at most lowest bit set we can fold.
         unsigned MaxActiveBits = Known.getBitWidth() - MinLeadZero;
-        if (MaxActiveBits <= 1)
+        if (MaxActiveBits <= 1) {
+          logKnownBitsOpt("kb0101");
           return true;
+        }
         // Precondition:  ((WidestBitWidth-1)-NewShAmt) u<= countLeadingZeros(C)
         if (NewShAmtSplat) {
           APInt AdjNewShAmt =
               (WidestBitWidth - 1) - NewShAmtSplat->getUniqueInteger();
-          if (AdjNewShAmt.ule(MinLeadZero))
+          if (AdjNewShAmt.ule(MinLeadZero)) {
+            logKnownBitsOpt("kb0101");
             return true;
+          }
         }
       }
       return false; // Can't tell if it's ok.
@@ -5014,23 +5067,29 @@ static Instruction *foldICmpAndXX(ICmpInst &I, const SimplifyQuery &Q,
 
   KnownBits KnownY = IC.computeKnownBits(A, &I);
   // (X & NegY) spred X --> (X & NegY) upred X
-  if (KnownY.isNegative())
+  if (KnownY.isNegative()) {
+    logKnownBitsOpt("kb0102");
     return new ICmpInst(ICmpInst::getUnsignedPredicate(Pred), Op0, Op1);
+  }
 
   if (Pred != ICmpInst::ICMP_SLE && Pred != ICmpInst::ICMP_SGT)
     return nullptr;
 
-  if (KnownY.isNonNegative())
+  if (KnownY.isNonNegative()) {
+    logKnownBitsOpt("kb0103");
     // (X & PosY) s<= X --> X s>= 0
     // (X & PosY) s> X --> X s< 0
     return new ICmpInst(ICmpInst::getSwappedPredicate(Pred), Op1,
                         Constant::getNullValue(Op1->getType()));
+  }
 
-  if (isKnownNegative(Op1, IC.getSimplifyQuery().getWithInstruction(&I)))
+  if (isKnownNegative(Op1, IC.getSimplifyQuery().getWithInstruction(&I))) {
+    logKnownBitsOpt("kb0104");
     // (NegX & Y) s<= NegX --> Y s< 0
     // (NegX & Y) s> NegX --> Y s>= 0
     return new ICmpInst(ICmpInst::getFlippedStrictnessPredicate(Pred), A,
                         Constant::getNullValue(A->getType()));
+  }
 
   return nullptr;
 }
@@ -5087,8 +5146,10 @@ static Instruction *foldICmpXorXX(ICmpInst &I, const SimplifyQuery &Q,
   // icmp (X ^ Y_NonZero) s>= X --> icmp (X ^ Y_NonZero) s> X
   // icmp (X ^ Y_NonZero) s<= X --> icmp (X ^ Y_NonZero) s< X
   CmpInst::Predicate PredOut = CmpInst::getStrictPredicate(Pred);
-  if (PredOut != Pred && isKnownNonZero(A, Q))
+  if (PredOut != Pred && isKnownNonZero(A, Q)) {
+    logKnownBitsOpt("kb0105");
     return new ICmpInst(PredOut, Op0, Op1);
+  }
 
   // These transform work when A is negative.
   // X s< X^A, X s<= X^A, X u> X^A, X u>= X^A  --> X s< 0
@@ -5123,7 +5184,10 @@ static bool isMultipleOf(Value *X, const APInt &C, const SimplifyQuery &Q) {
   if (!C.isPowerOf2())
     return false;
 
-  return MaskedValueIsZero(X, C - 1, Q);
+  bool R = MaskedValueIsZero(X, C - 1, Q);
+  if (R)
+    logKnownBitsOpt("kb0106");
+  return R;
 }
 
 /// Try to fold icmp (binop), X or icmp X, (binop).
@@ -5412,12 +5476,16 @@ Instruction *InstCombinerImpl::foldICmpBinOp(ICmpInst &I,
     return new ICmpInst(Pred, C, D);
   // (A - B) u>=/u< A --> B u>/u<= A  iff B != 0
   if (A == Op1 && (Pred == ICmpInst::ICMP_UGE || Pred == ICmpInst::ICMP_ULT) &&
-      isKnownNonZero(B, Q))
+      isKnownNonZero(B, Q)) {
+    logKnownBitsOpt("kb0107");
     return new ICmpInst(CmpInst::getFlippedStrictnessPredicate(Pred), B, A);
+  }
   // C u<=/u> (C - D) --> C u</u>= D  iff B != 0
   if (C == Op0 && (Pred == ICmpInst::ICMP_ULE || Pred == ICmpInst::ICMP_UGT) &&
-      isKnownNonZero(D, Q))
+      isKnownNonZero(D, Q)) {
+    logKnownBitsOpt("kb0107");
     return new ICmpInst(CmpInst::getFlippedStrictnessPredicate(Pred), C, D);
+  }
 
   // icmp (A-B), (C-B) -> icmp A, C for equalities or if there is no overflow.
   if (B && D && B == D && NoOp0WrapProblem && NoOp1WrapProblem)
@@ -5453,10 +5521,14 @@ Instruction *InstCombinerImpl::foldICmpBinOp(ICmpInst &I,
       if (ICmpInst::isSigned(Pred)) {
         if (Op0HasNSW && Op1HasNSW) {
           KnownBits ZKnown = computeKnownBits(Z, &I);
-          if (ZKnown.isStrictlyPositive())
+          if (ZKnown.isStrictlyPositive()) {
+            logKnownBitsOpt("kb0108");
             return new ICmpInst(Pred, X, Y);
-          if (ZKnown.isNegative())
+          }
+          if (ZKnown.isNegative()) {
+            logKnownBitsOpt("kb0108");
             return new ICmpInst(ICmpInst::getSwappedPredicate(Pred), X, Y);
+          }
           Value *LessThan = simplifyICmpInst(ICmpInst::ICMP_SLT, X, Y,
                                              SQ.getWithInstruction(&I));
           if (LessThan && match(LessThan, m_One()))
@@ -5472,26 +5544,34 @@ Instruction *InstCombinerImpl::foldICmpBinOp(ICmpInst &I,
         if (ICmpInst::isEquality(Pred)) {
           // If X != Y, fold (X *nw Z) eq/ne (Y *nw Z) -> Z eq/ne 0
           if (((Op0HasNSW && Op1HasNSW) || (Op0HasNUW && Op1HasNUW)) &&
-              isKnownNonEqual(X, Y, SQ))
+              isKnownNonEqual(X, Y, SQ)) {
+            logKnownBitsOpt("kb0109");
             return new ICmpInst(Pred, Z, Constant::getNullValue(Z->getType()));
+          }
 
           KnownBits ZKnown = computeKnownBits(Z, &I);
           // if Z % 2 != 0
           //    X * Z eq/ne Y * Z -> X eq/ne Y
-          if (ZKnown.countMaxTrailingZeros() == 0)
+          if (ZKnown.countMaxTrailingZeros() == 0) {
+            logKnownBitsOpt("kb0110");
             return new ICmpInst(Pred, X, Y);
+          }
           NonZero = !ZKnown.One.isZero() || isKnownNonZero(Z, Q);
           // if Z != 0 and nsw(X * Z) and nsw(Y * Z)
           //    X * Z eq/ne Y * Z -> X eq/ne Y
-          if (NonZero && BO0 && BO1 && Op0HasNSW && Op1HasNSW)
+          if (NonZero && BO0 && BO1 && Op0HasNSW && Op1HasNSW) {
+            logKnownBitsOpt("kb0111");
             return new ICmpInst(Pred, X, Y);
+          }
         } else
           NonZero = isKnownNonZero(Z, Q);
 
         // If Z != 0 and nuw(X * Z) and nuw(Y * Z)
         //    X * Z u{lt/le/gt/ge}/eq/ne Y * Z -> X u{lt/le/gt/ge}/eq/ne Y
-        if (NonZero && BO0 && BO1 && Op0HasNUW && Op1HasNUW)
+        if (NonZero && BO0 && BO1 && Op0HasNUW && Op1HasNUW) {
+          logKnownBitsOpt("kb0112");
           return new ICmpInst(Pred, X, Y);
+        }
       }
     }
   }
@@ -5655,6 +5735,7 @@ Instruction *InstCombinerImpl::foldICmpWithMinMax(Instruction &I,
     // are negative.
     if (isKnownNonNegative(Z, SQ.getWithInstruction(&I)) &&
         isKnownNonNegative(MinMax, SQ.getWithInstruction(&I))) {
+      logKnownBitsOpt("kb0113");
       Pred = ICmpInst::getFlippedSignednessPredicate(Pred);
     } else
       return nullptr;
@@ -6223,14 +6304,18 @@ Instruction *InstCombinerImpl::foldICmpEquality(ICmpInst &I) {
   // 1. A & B_Pow2 != B_Pow2 -> A & B_Pow2 == 0
   // 2. A & B_Pow2 == B_Pow2 -> A & B_Pow2 != 0
   if (match(Op0, m_c_And(m_Specific(Op1), m_Value())) &&
-      isKnownToBeAPowerOfTwo(Op1, /* OrZero */ false, &I))
+      isKnownToBeAPowerOfTwo(Op1, /* OrZero */ false, &I)) {
+    logKnownBitsOpt("kb0114");
     return new ICmpInst(CmpInst::getInversePredicate(Pred), Op0,
                         ConstantInt::getNullValue(Op0->getType()));
+  }
 
   if (match(Op1, m_c_And(m_Specific(Op0), m_Value())) &&
-      isKnownToBeAPowerOfTwo(Op0, /* OrZero */ false, &I))
+      isKnownToBeAPowerOfTwo(Op0, /* OrZero */ false, &I)) {
+    logKnownBitsOpt("kb0115");
     return new ICmpInst(CmpInst::getInversePredicate(Pred), Op1,
                         ConstantInt::getNullValue(Op1->getType()));
+  }
 
   // Canonicalize:
   // icmp eq/ne X, OneUse(rotate-right(X))
@@ -6266,7 +6351,8 @@ Instruction *InstCombinerImpl::foldICmpEquality(ICmpInst &I) {
                    m_ICmp(m_OneUse(m_c_And(m_Value(A), m_Matcher)), m_Zero())))
       IsZero = true;
 
-    if (IsZero && isKnownToBeAPowerOfTwo(A, /* OrZero */ true, &I))
+    if (IsZero && isKnownToBeAPowerOfTwo(A, /* OrZero */ true, &I)) {
+      logKnownBitsOpt("kb0116");
       // (icmp eq/ne (and (add/sub/xor X, P2), P2), P2)
       //    -> (icmp eq/ne (and X, P2), 0)
       // (icmp eq/ne (and (add/sub/xor X, P2), P2), 0)
@@ -6274,6 +6360,7 @@ Instruction *InstCombinerImpl::foldICmpEquality(ICmpInst &I) {
       return new ICmpInst(Pred, Builder.CreateAnd(B, A),
                           *IsZero ? A
                                   : ConstantInt::getNullValue(A->getType()));
+    }
   }
 
   if (auto *Res = foldICmpEqualityWithOffset(
@@ -7872,9 +7959,11 @@ Instruction *InstCombinerImpl::visitICmpInst(ICmpInst &I) {
     // if A is a power of 2.
     if (match(Op0, m_And(m_Value(X), m_Not(m_Value(Y)))) &&
         match(Op1, m_Zero()) && isKnownToBeAPowerOfTwo(X, false, &I) &&
-        I.isEquality())
+        I.isEquality()) {
+      logKnownBitsOpt("kb0117");
       return new ICmpInst(I.getInversePredicate(), Builder.CreateAnd(X, Y),
                           Op1);
+    }
 
     // Op0 pred Op1 -> ~Op1 pred ~Op0, if this allows us to drop an instruction.
     if (Op0->getType()->isIntOrIntVectorTy()) {
@@ -7901,6 +7990,7 @@ Instruction *InstCombinerImpl::visitICmpInst(ICmpInst &I) {
       if (AddI->getOpcode() == Instruction::Add &&
           OptimizeOverflowCheck(Instruction::Add, /*Signed*/ false, X, Y, *AddI,
                                 Result, Overflow)) {
+        logKnownBitsOpt("kb0118");
         replaceInstUsesWith(*AddI, Result);
         eraseInstFromFunction(*AddI);
         return replaceInstUsesWith(I, Overflow);

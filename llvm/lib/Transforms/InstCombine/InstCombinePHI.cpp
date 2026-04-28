@@ -1531,6 +1531,7 @@ Instruction *InstCombinerImpl::visitPHINode(PHINode &PN) {
           if (!NonZeroConst)
             NonZeroConst = getAnyNonZeroConstInt(PN);
           if (NonZeroConst != VA) {
+            logKnownBitsOpt("kb0136");
             replaceOperand(PN, I, NonZeroConst);
             // The "disjoint" flag may no longer hold after the transform.
             for (Instruction *I : DropPoisonFlags)

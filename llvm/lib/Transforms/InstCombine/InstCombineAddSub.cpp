@@ -898,7 +898,10 @@ Instruction *InstCombinerImpl::foldAddWithConstant(BinaryOperator &Add) {
     bool WillNotSOV = willNotOverflowSignedSub(Op1C, COne, Add);
     BinaryOperator *Res =
         BinaryOperator::CreateSub(ConstantExpr::getSub(Op1C, COne), X);
-    Res->setHasNoSignedWrap(Add.hasNoSignedWrap() && WillNotSOV);
+    bool NewNSW = Add.hasNoSignedWrap() && WillNotSOV;
+    Res->setHasNoSignedWrap(NewNSW);
+    if (NewNSW)
+      logKnownBitsOpt("kb0001");
     return Res;
   }
 
@@ -918,9 +921,12 @@ Instruction *InstCombinerImpl::foldAddWithConstant(BinaryOperator &Add) {
   if (match(Op0, m_DisjointOr(m_Value(X), m_ImmConstant(Op01C)))) {
     BinaryOperator *NewAdd =
         BinaryOperator::CreateAdd(X, ConstantExpr::getAdd(Op01C, Op1C));
-    NewAdd->setHasNoSignedWrap(Add.hasNoSignedWrap() &&
-                               willNotOverflowSignedAdd(Op01C, Op1C, Add));
+    bool NewNSW =
+        Add.hasNoSignedWrap() && willNotOverflowSignedAdd(Op01C, Op1C, Add);
+    NewAdd->setHasNoSignedWrap(NewNSW);
     NewAdd->setHasNoUnsignedWrap(Add.hasNoUnsignedWrap());
+    if (NewNSW)
+      logKnownBitsOpt("kb0002");
     return NewAdd;
   }
 
@@ -955,8 +961,10 @@ Instruction *InstCombinerImpl::foldAddWithConstant(BinaryOperator &Add) {
     // add (xor X, LowMaskC), C --> sub (LowMaskC + C), X
     if (C2->isMask()) {
       KnownBits LHSKnown = computeKnownBits(X, &Add);
-      if ((*C2 | LHSKnown.Zero).isAllOnes())
+      if ((*C2 | LHSKnown.Zero).isAllOnes()) {
+        logKnownBitsOpt("kb0003");
         return BinaryOperator::CreateSub(ConstantInt::get(Ty, *C2 + *C), X);
+      }
     }
 
     // Look for a math+logic pattern that corresponds to sext-in-register of a
@@ -972,6 +980,7 @@ Instruction *InstCombinerImpl::foldAddWithConstant(BinaryOperator &Add) {
         ShAmt = BitWidth - C2->logBase2() - 1;
       if (ShAmt &&
           MaskedValueIsZero(X, APInt::getHighBitsSet(BitWidth, ShAmt), &Add)) {
+        logKnownBitsOpt("kb0004");
         Constant *ShAmtC = ConstantInt::get(Ty, ShAmt);
         Value *NewShl = Builder.CreateShl(X, ShAmtC, "sext");
         return BinaryOperator::CreateAShr(NewShl, ShAmtC);
@@ -1010,8 +1019,10 @@ Instruction *InstCombinerImpl::foldAddWithConstant(BinaryOperator &Add) {
   if (C->isOne()) {
     if (match(Op0, m_ZExt(m_Add(m_Value(X), m_AllOnes())))) {
       const SimplifyQuery Q = SQ.getWithInstruction(&Add);
-      if (llvm::isKnownNonZero(X, Q))
+      if (llvm::isKnownNonZero(X, Q)) {
+        logKnownBitsOpt("kb0005");
         return new ZExtInst(X, Ty);
+      }
     }
   }
 
@@ -1684,8 +1695,10 @@ Instruction *InstCombinerImpl::visitAdd(BinaryOperator &I) {
 
   // A+B --> A|B iff A and B have no bits set in common.
   WithCache<const Value *> LHSCache(LHS), RHSCache(RHS);
-  if (haveNoCommonBitsSet(LHSCache, RHSCache, SQ.getWithInstruction(&I)))
+  if (haveNoCommonBitsSet(LHSCache, RHSCache, SQ.getWithInstruction(&I))) {
+    logKnownBitsOpt("kb0006");
     return BinaryOperator::CreateDisjointOr(LHS, RHS);
+  }
 
   if (Instruction *Ext = narrowMathIfNoOverflow(I))
     return Ext;
@@ -1813,6 +1826,7 @@ Instruction *InstCombinerImpl::visitAdd(BinaryOperator &I) {
       // Check if X + Mask doesn't overflow
       Constant *MaskC = ConstantInt::get(X->getType(), *Mask);
       if (willNotOverflowUnsignedAdd(X, MaskC, I)) {
+        logKnownBitsOpt("kb0007");
         // (X + Mask) >> ShiftAmt
         Value *Add = Builder.CreateNUWAdd(X, MaskC);
         return BinaryOperator::CreateLShr(
@@ -1846,11 +1860,13 @@ Instruction *InstCombinerImpl::visitAdd(BinaryOperator &I) {
   // computeKnownBits.
   bool Changed = false;
   if (!I.hasNoSignedWrap() && willNotOverflowSignedAdd(LHSCache, RHSCache, I)) {
+    logKnownBitsOpt("kb0008");
     Changed = true;
     I.setHasNoSignedWrap(true);
   }
   if (!I.hasNoUnsignedWrap() &&
       willNotOverflowUnsignedAdd(LHSCache, RHSCache, I)) {
+    logKnownBitsOpt("kb0009");
     Changed = true;
     I.setHasNoUnsignedWrap(true);
   }
@@ -1876,10 +1892,12 @@ Instruction *InstCombinerImpl::visitAdd(BinaryOperator &I) {
   // ctpop(A) + ctpop(B) => ctpop(A | B) if A and B have no bits set in common.
   if (match(LHS, m_OneUse(m_Intrinsic<Intrinsic::ctpop>(m_Value(A)))) &&
       match(RHS, m_OneUse(m_Intrinsic<Intrinsic::ctpop>(m_Value(B)))) &&
-      haveNoCommonBitsSet(A, B, SQ.getWithInstruction(&I)))
+      haveNoCommonBitsSet(A, B, SQ.getWithInstruction(&I))) {
+    logKnownBitsOpt("kb0010");
     return replaceInstUsesWith(
         I, Builder.CreateIntrinsic(Intrinsic::ctpop, {I.getType()},
                                    {Builder.CreateOr(A, B)}));
+  }
 
   // Fold the log2_ceil idiom:
   // zext(ctpop(A) >u/!= 1) + (ctlz(A, true) ^ (BW - 1))
@@ -2330,10 +2348,13 @@ Instruction *InstCombinerImpl::visitSub(BinaryOperator &I) {
       BinaryOperator *Res =
           BinaryOperator::CreateSub(ConstantExpr::getSub(C, C2), X);
       auto *OBO1 = cast<OverflowingBinaryOperator>(Op1);
-      Res->setHasNoSignedWrap(I.hasNoSignedWrap() && OBO1->hasNoSignedWrap() &&
-                              WillNotSOV);
+      bool NewNSW =
+          I.hasNoSignedWrap() && OBO1->hasNoSignedWrap() && WillNotSOV;
+      Res->setHasNoSignedWrap(NewNSW);
       Res->setHasNoUnsignedWrap(I.hasNoUnsignedWrap() &&
                                 OBO1->hasNoUnsignedWrap());
+      if (NewNSW)
+        logKnownBitsOpt("kb0011");
       return Res;
     }
   }
@@ -2344,10 +2365,12 @@ Instruction *InstCombinerImpl::visitSub(BinaryOperator &I) {
 
     bool Changed = false;
     if (!I.hasNoSignedWrap() && willNotOverflowSignedSub(Op0, Op1, I)) {
+      logKnownBitsOpt("kb0012");
       Changed = true;
       I.setHasNoSignedWrap(true);
     }
     if (!I.hasNoUnsignedWrap() && willNotOverflowUnsignedSub(Op0, Op1, I)) {
+      logKnownBitsOpt("kb0013");
       Changed = true;
       I.setHasNoUnsignedWrap(true);
     }
@@ -2533,8 +2556,10 @@ Instruction *InstCombinerImpl::visitSub(BinaryOperator &I) {
       // transform is easier to reverse if necessary.
       KnownBits RHSKnown = llvm::computeKnownBits(
           Op1, SQ.getWithInstruction(&I).getWithoutDomCondCache());
-      if ((*Op0C | RHSKnown.Zero).isAllOnes())
+      if ((*Op0C | RHSKnown.Zero).isAllOnes()) {
+        logKnownBitsOpt("kb0014");
         return BinaryOperator::CreateXor(Op1, Op0);
+      }
     }
 
     // C - ((C3 -nuw X) & C2) --> (C - (C2 & C3)) + (X & C2) when:

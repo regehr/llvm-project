@@ -510,6 +510,7 @@ bool TypeEvaluationHelper::canEvaluateTruncatedPred(Value *V, Type *Ty,
     // based on later context may introduce a trap.
     if (IC.MaskedValueIsZero(I->getOperand(0), Mask, I) &&
         IC.MaskedValueIsZero(I->getOperand(1), Mask, I)) {
+      logKnownBitsOpt("kb0061");
       return canEvaluateTruncatedImpl(I->getOperand(0), Ty, IC, CxtI) &&
              canEvaluateTruncatedImpl(I->getOperand(1), Ty, IC, CxtI);
     }
@@ -521,9 +522,11 @@ bool TypeEvaluationHelper::canEvaluateTruncatedPred(Value *V, Type *Ty,
     uint32_t BitWidth = Ty->getScalarSizeInBits();
     KnownBits AmtKnownBits =
         llvm::computeKnownBits(I->getOperand(1), IC.getDataLayout());
-    if (AmtKnownBits.getMaxValue().ult(BitWidth))
+    if (AmtKnownBits.getMaxValue().ult(BitWidth)) {
+      logKnownBitsOpt("kb0062");
       return canEvaluateTruncatedImpl(I->getOperand(0), Ty, IC, CxtI) &&
              canEvaluateTruncatedImpl(I->getOperand(1), Ty, IC, CxtI);
+    }
     break;
   }
   case Instruction::LShr: {
@@ -546,9 +549,11 @@ bool TypeEvaluationHelper::canEvaluateTruncatedPred(Value *V, Type *Ty,
           return canEvaluateTruncatedImpl(I->getOperand(0), Ty, IC, CxtI) &&
                  canEvaluateTruncatedImpl(I->getOperand(1), Ty, IC, CxtI);
       }
-      if (IC.MaskedValueIsZero(I->getOperand(0), ShiftedBits, CxtI))
+      if (IC.MaskedValueIsZero(I->getOperand(0), ShiftedBits, CxtI)) {
+        logKnownBitsOpt("kb0063");
         return canEvaluateTruncatedImpl(I->getOperand(0), Ty, IC, CxtI) &&
                canEvaluateTruncatedImpl(I->getOperand(1), Ty, IC, CxtI);
+      }
     }
     break;
   }
@@ -564,9 +569,11 @@ bool TypeEvaluationHelper::canEvaluateTruncatedPred(Value *V, Type *Ty,
         llvm::computeKnownBits(I->getOperand(1), IC.getDataLayout());
     unsigned ShiftedBits = OrigBitWidth - BitWidth;
     if (AmtKnownBits.getMaxValue().ult(BitWidth) &&
-        ShiftedBits < IC.ComputeNumSignBits(I->getOperand(0), CxtI))
+        ShiftedBits < IC.ComputeNumSignBits(I->getOperand(0), CxtI)) {
+      logKnownBitsOpt("kb0064");
       return canEvaluateTruncatedImpl(I->getOperand(0), Ty, IC, CxtI) &&
              canEvaluateTruncatedImpl(I->getOperand(1), Ty, IC, CxtI);
+    }
     break;
   }
   case Instruction::Trunc:
@@ -771,8 +778,11 @@ Instruction *InstCombinerImpl::narrowFunnelShift(TruncInst &Trunc) {
     unsigned MaxShiftAmountWidth = Log2_32(NarrowWidth);
     APInt HiBitMask = ~APInt::getLowBitsSet(WideWidth, MaxShiftAmountWidth);
     if (ShVal0 == ShVal1 || MaskedValueIsZero(L, HiBitMask))
-      if (match(R, m_OneUse(m_Sub(m_SpecificInt(Width), m_Specific(L)))))
+      if (match(R, m_OneUse(m_Sub(m_SpecificInt(Width), m_Specific(L))))) {
+        if (ShVal0 != ShVal1)
+          logKnownBitsOpt("kb0065");
         return L;
+      }
 
     // The following patterns currently only work for rotation patterns.
     // TODO: Add more general funnel-shift compatible patterns.
@@ -810,6 +820,7 @@ Instruction *InstCombinerImpl::narrowFunnelShift(TruncInst &Trunc) {
   APInt HiBitMask = APInt::getHighBitsSet(WideWidth, WideWidth - NarrowWidth);
   if (!MaskedValueIsZero(ShVal1, HiBitMask, &Trunc))
     return nullptr;
+  logKnownBitsOpt("kb0066");
 
   // Adjust the width of ShAmt for narrowed funnel shift operation:
   // - Zero-extend if ShAmt is narrower than the destination type.
@@ -1167,18 +1178,22 @@ Instruction *InstCombinerImpl::visitTrunc(TruncInst &Trunc) {
 
   if (DestWidth == 1 &&
       (Trunc.hasNoUnsignedWrap() || Trunc.hasNoSignedWrap()) &&
-      isKnownNonZero(Src, SQ.getWithInstruction(&Trunc)))
+      isKnownNonZero(Src, SQ.getWithInstruction(&Trunc))) {
+    logKnownBitsOpt("kb0067");
     return replaceInstUsesWith(Trunc, ConstantInt::getTrue(DestTy));
+  }
 
   bool Changed = false;
   if (!Trunc.hasNoSignedWrap() &&
       ComputeMaxSignificantBits(Src, &Trunc) <= DestWidth) {
+    logKnownBitsOpt("kb0068");
     Trunc.setHasNoSignedWrap(true);
     Changed = true;
   }
   if (!Trunc.hasNoUnsignedWrap() &&
       MaskedValueIsZero(Src, APInt::getBitsSetFrom(SrcWidth, DestWidth),
                         &Trunc)) {
+    logKnownBitsOpt("kb0069");
     Trunc.setHasNoUnsignedWrap(true);
     Changed = true;
   }
@@ -1254,6 +1269,7 @@ Instruction *InstCombinerImpl::transformZExtICmp(ICmpInst *Cmp,
       if (IsExpectShAmt &&
           (Cmp->getOperand(0)->getType() == Zext.getType() ||
            Cmp->getPredicate() == ICmpInst::ICMP_NE || ShAmt == 0)) {
+        logKnownBitsOpt("kb0070");
         Value *In = Cmp->getOperand(0);
         if (ShAmt) {
           // Perform a logical shr by shiftamt.
@@ -1367,6 +1383,7 @@ bool TypeEvaluationHelper::canEvaluateZExtdImpl(Value *V, Type *Ty,
       if (IC.MaskedValueIsZero(I->getOperand(1),
                                APInt::getHighBitsSet(VSize, BitsToClear),
                                CxtI)) {
+        logKnownBitsOpt("kb0071");
         // If this is an And instruction and all of the BitsToClear are
         // known to be zero we can reset BitsToClear.
         if (I->getOpcode() == Instruction::And)
@@ -1489,8 +1506,10 @@ Instruction *InstCombinerImpl::visitZExt(ZExtInst &Zext) {
     // cast with the result.
     if (MaskedValueIsZero(
             Res, APInt::getHighBitsSet(DestBitSize, DestBitSize - SrcBitsKept),
-            &Zext))
+            &Zext)) {
+      logKnownBitsOpt("kb0072");
       return replaceInstUsesWith(Zext, Res);
+    }
 
     // We need to emit an AND to clear the high bits.
     Constant *C = ConstantInt::get(Res->getType(),
@@ -1589,6 +1608,7 @@ Instruction *InstCombinerImpl::visitZExt(ZExtInst &Zext) {
     }
 
     if (isKnownNonNegative(Src, SQ.getWithInstruction(&Zext))) {
+      logKnownBitsOpt("kb0073");
       Zext.setNonNeg();
       return &Zext;
     }
@@ -1628,6 +1648,7 @@ Instruction *InstCombinerImpl::transformSExtICmp(ICmpInst *Cmp,
 
       APInt KnownZeroMask(~Known.Zero);
       if (KnownZeroMask.isPowerOf2()) {
+        logKnownBitsOpt("kb0074");
         Value *In = Cmp->getOperand(0);
 
         // If the icmp tests for a known zero bit we can constant fold it.
@@ -1755,6 +1776,7 @@ Instruction *InstCombinerImpl::visitSExt(SExtInst &Sext) {
 
   // If the value being extended is zero or positive, use a zext instead.
   if (isKnownNonNegative(Src, SQ.getWithInstruction(&Sext))) {
+    logKnownBitsOpt("kb0075");
     auto CI = CastInst::Create(Instruction::ZExt, Src, DestTy);
     CI->setNonNeg(true);
     return CI;
@@ -2225,8 +2247,10 @@ Instruction *InstCombinerImpl::visitFPTrunc(FPTruncInst &FPT) {
   Value *Src = FPT.getOperand(0);
   if (isa<SIToFPInst>(Src) || isa<UIToFPInst>(Src)) {
     auto *FPCast = cast<CastInst>(Src);
-    if (isKnownExactCastIntToFP(*FPCast, *this))
+    if (isKnownExactCastIntToFP(*FPCast, *this)) {
+      logKnownBitsOpt("kb0077");
       return CastInst::Create(FPCast->getOpcode(), FPCast->getOperand(0), Ty);
+    }
   }
 
   return nullptr;
@@ -2239,8 +2263,10 @@ Instruction *InstCombinerImpl::visitFPExt(CastInst &FPExt) {
   Value *Src = FPExt.getOperand(0);
   if (isa<SIToFPInst>(Src) || isa<UIToFPInst>(Src)) {
     auto *FPCast = cast<CastInst>(Src);
-    if (isKnownExactCastIntToFP(*FPCast, *this))
+    if (isKnownExactCastIntToFP(*FPCast, *this)) {
+      logKnownBitsOpt("kb0078");
       return CastInst::Create(FPCast->getOpcode(), FPCast->getOperand(0), Ty);
+    }
   }
 
   return commonCastTransforms(FPExt);
@@ -2275,6 +2301,8 @@ Instruction *InstCombinerImpl::foldItoFPtoI(CastInst &FI) {
     int OutputSize = (int)DestType->getScalarSizeInBits();
     if (OutputSize > OpI->getType()->getFPMantissaWidth())
       return nullptr;
+  } else {
+    logKnownBitsOpt("kb0079");
   }
 
   if (DestType->getScalarSizeInBits() > XType->getScalarSizeInBits()) {
@@ -2326,6 +2354,7 @@ Instruction *InstCombinerImpl::visitUIToFP(CastInst &CI) {
   if (Instruction *R = commonCastTransforms(CI))
     return R;
   if (!CI.hasNonNeg() && isKnownNonNegative(CI.getOperand(0), SQ)) {
+    logKnownBitsOpt("kb0080");
     CI.setNonNeg();
     return &CI;
   }
@@ -2336,6 +2365,7 @@ Instruction *InstCombinerImpl::visitSIToFP(CastInst &CI) {
   if (Instruction *R = commonCastTransforms(CI))
     return R;
   if (isKnownNonNegative(CI.getOperand(0), SQ)) {
+    logKnownBitsOpt("kb0081");
     auto *UI =
         CastInst::Create(Instruction::UIToFP, CI.getOperand(0), CI.getType());
     UI->setNonNeg(true);
@@ -3080,6 +3110,7 @@ static Value *foldCopySignIdioms(BitCastInst &CI,
   if (!isKnownNonNegative(Y, SQ))
     return nullptr;
 
+  logKnownBitsOpt("kb0082");
   return Builder.CreateCopySign(Builder.CreateBitCast(Y, FTy), X);
 }
 

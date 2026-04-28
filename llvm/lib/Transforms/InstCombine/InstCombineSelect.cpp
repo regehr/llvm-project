@@ -638,6 +638,7 @@ static Value *foldSelectICmpMinMax(const ICmpInst *Cmp, Value *TVal,
   if (Pred == CmpInst::ICMP_ULT &&
       match(FVal, m_Add(m_Specific(CmpRHS), m_AllOnes())) &&
       isKnownNonZero(CmpRHS, SQ)) {
+    logKnownBitsOpt("kb0137");
     cast<Instruction>(FVal)->setHasNoSignedWrap(false);
     cast<Instruction>(FVal)->setHasNoUnsignedWrap(false);
     return Builder.CreateBinaryIntrinsic(Intrinsic::umin, TVal, FVal);
@@ -2136,11 +2137,15 @@ Value *InstCombinerImpl::foldSelectWithConstOpToBinOp(ICmpInst *Cmp,
         BinOpc == Instruction::Mul) {
       Instruction *OldBinOp = cast<BinaryOperator>(TrueVal);
       if (OldBinOp->hasNoSignedWrap() &&
-          willNotOverflow(BinOpc, RHS, C2, *BinOpInst, /*IsSigned=*/true))
+          willNotOverflow(BinOpc, RHS, C2, *BinOpInst, /*IsSigned=*/true)) {
+        logKnownBitsOpt("kb0138");
         BinOpInst->setHasNoSignedWrap();
+      }
       if (OldBinOp->hasNoUnsignedWrap() &&
-          willNotOverflow(BinOpc, RHS, C2, *BinOpInst, /*IsSigned=*/false))
+          willNotOverflow(BinOpc, RHS, C2, *BinOpInst, /*IsSigned=*/false)) {
+        logKnownBitsOpt("kb0138");
         BinOpInst->setHasNoUnsignedWrap();
+      }
     }
   }
   return BinOp;
@@ -3040,8 +3045,10 @@ static Instruction *foldSelectWithSRem(SelectInst &SI, InstCombinerImpl &IC,
   if (match(TrueVal, m_c_Add(m_Specific(RemRes), m_Value(Remainder))) &&
       match(RemRes, m_SRem(m_Value(Op), m_Specific(Remainder))) &&
       IC.isKnownToBeAPowerOfTwo(Remainder, /*OrZero=*/true) &&
-      FalseVal == RemRes)
+      FalseVal == RemRes) {
+    logKnownBitsOpt("kb0139");
     return FoldToBitwiseAnd(Remainder);
+  }
 
   // Match the case where the one arm has been replaced by constant 1:
   // %rem = srem i32 %n, 2
@@ -4189,6 +4196,7 @@ static Value *foldSelectBitTest(SelectInst &Sel, Value *CondVal, Value *TrueVal,
       AndMask &= Known.getMaxValue();
       if (!AndMask.isPowerOf2())
         return nullptr;
+      logKnownBitsOpt("kb0140");
 
       Pred = Res->Pred;
       CreateAnd = true;
@@ -4613,10 +4621,14 @@ Instruction *InstCombinerImpl::visitSelectInst(SelectInst &SI) {
   if (!CondVal->getType()->isVectorTy() && !AC.assumptions().empty()) {
     KnownBits Known(1);
     computeKnownBits(CondVal, Known, &SI);
-    if (Known.One.isOne())
+    if (Known.One.isOne()) {
+      logKnownBitsOpt("kb0141");
       return replaceInstUsesWith(SI, TrueVal);
-    if (Known.Zero.isOne())
+    }
+    if (Known.Zero.isOne()) {
+      logKnownBitsOpt("kb0141");
       return replaceInstUsesWith(SI, FalseVal);
+    }
   }
 
   if (Instruction *BitCastSel = foldSelectCmpBitcasts(SI, Builder))
@@ -4778,18 +4790,22 @@ Instruction *InstCombinerImpl::visitSelectInst(SelectInst &SI) {
       if (!isa<Constant>(TrueVal) &&
           hasAffectedValue(TrueVal, CC.AffectedValues, /*Depth=*/0)) {
         KnownBits Known = llvm::computeKnownBits(TrueVal, Q);
-        if (Known.isConstant())
+        if (Known.isConstant()) {
+          logKnownBitsOpt("kb0142");
           return replaceOperand(SI, 1,
                                 ConstantInt::get(SelType, Known.getConstant()));
+        }
       }
 
       CC.Invert = true;
       if (!isa<Constant>(FalseVal) &&
           hasAffectedValue(FalseVal, CC.AffectedValues, /*Depth=*/0)) {
         KnownBits Known = llvm::computeKnownBits(FalseVal, Q);
-        if (Known.isConstant())
+        if (Known.isConstant()) {
+          logKnownBitsOpt("kb0143");
           return replaceOperand(SI, 2,
                                 ConstantInt::get(SelType, Known.getConstant()));
+        }
       }
     }
   }
