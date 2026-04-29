@@ -18,6 +18,7 @@
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/InstructionSimplify.h"
+#include "llvm/Analysis/KnownBitsOptLogger.h"
 #include "llvm/Analysis/TargetFolder.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/IRBuilder.h"
@@ -57,12 +58,6 @@ class OptimizationRemarkEmitter;
 class ProfileSummaryInfo;
 class TargetLibraryInfo;
 class User;
-
-/// Append \p Tag followed by a newline to the file specified by the
-/// -instcombine-knownbits-log command-line option. Does nothing if the
-/// option was not set. Used to record firings of known-bits-driven
-/// InstCombine transforms for analysis.
-void logKnownBitsOpt(StringRef Tag);
 
 class LLVM_LIBRARY_VISIBILITY InstCombinerImpl final
     : public InstCombiner,
