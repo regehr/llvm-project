@@ -212,6 +212,7 @@ add_llvm_component_library(LLVMSupport
   Jobserver.cpp
   JSON.cpp
   KnownBits.cpp
+  KnownBitsOptLog.cpp
   KnownFPClass.cpp
   LEB128.cpp
   LineIterator.cpp

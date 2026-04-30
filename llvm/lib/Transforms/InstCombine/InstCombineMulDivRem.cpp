@@ -31,6 +31,7 @@
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/KnownBitsOptLog.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
 #include "llvm/Transforms/Utils/BuildLibCalls.h"
 #include <cassert>
@@ -1853,6 +1854,7 @@ Instruction *InstCombinerImpl::visitSDiv(BinaryOperator &I) {
   if (!I.isExact() &&
       (match(Op1, m_Power2(Op1C)) || match(Op1, m_NegatedPower2(Op1C))) &&
       KnownDividend.countMinTrailingZeros() >= Op1C->countr_zero()) {
+    LOG_KB_OPTZN();
     I.setIsExact();
     return &I;
   }
