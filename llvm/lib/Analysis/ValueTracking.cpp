@@ -71,12 +71,14 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/KnownFPClass.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/TargetParser/RISCVTargetParser.h"
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cstdint>
 #include <optional>
@@ -1387,6 +1389,148 @@ static void unionWithMinMaxIntrinsicClamp(const IntrinsicInst *II,
         ConstantRange::getNonEmpty(*CLow, *CHigh + 1).toKnownBits());
 }
 
+static std::array<APInt, 2> knownBitsToArray(const KnownBits &KB) {
+  return {KB.Zero, KB.One};
+}
+
+static KnownBits arrayToKnownBits(const std::array<APInt, 2> &A) {
+  KnownBits KB(A[0].getBitWidth());
+  KB.Zero = A[0];
+  KB.One = A[1];
+  return KB;
+}
+
+enum class KBPatternRoot : uint8_t {
+  Add,
+  AddNsw,
+  AddNuw,
+  AddNswNuw,
+  And,
+  Ashr,
+  AshrExact,
+  Lshr,
+  LshrExact,
+  Mul,
+  MulNsw,
+  MulNuw,
+  MulNswNuw,
+  Or,
+  OrDisjoint,
+  Sdiv,
+  SdivExact,
+  Shl,
+  ShlNsw,
+  ShlNuw,
+  ShlNswNuw,
+  Srem,
+  Sub,
+  SubNsw,
+  SubNuw,
+  SubNswNuw,
+  Udiv,
+  UdivExact,
+  Urem,
+  Xor,
+  Other
+};
+
+static KBPatternRoot getKBPatternRoot(const Operator *I,
+                                                    const SimplifyQuery &Q) {
+  switch (I->getOpcode()) {
+  case Instruction::Add: {
+    auto *OBO = cast<OverflowingBinaryOperator>(I);
+    bool NUW = Q.IIQ.hasNoUnsignedWrap(OBO);
+    bool NSW = Q.IIQ.hasNoSignedWrap(OBO);
+    if (NUW && NSW)
+      return KBPatternRoot::AddNswNuw;
+    if (NSW)
+      return KBPatternRoot::AddNsw;
+    if (NUW)
+      return KBPatternRoot::AddNuw;
+    return KBPatternRoot::Add;
+  }
+  case Instruction::And:
+    return KBPatternRoot::And;
+  case Instruction::AShr:
+    return Q.IIQ.isExact(cast<BinaryOperator>(I))
+               ? KBPatternRoot::AshrExact
+               : KBPatternRoot::Ashr;
+  case Instruction::LShr:
+    return Q.IIQ.isExact(cast<BinaryOperator>(I))
+               ? KBPatternRoot::LshrExact
+               : KBPatternRoot::Lshr;
+  case Instruction::Mul: {
+    auto *OBO = cast<OverflowingBinaryOperator>(I);
+    bool NUW = Q.IIQ.hasNoUnsignedWrap(OBO);
+    bool NSW = Q.IIQ.hasNoSignedWrap(OBO);
+    if (NUW && NSW)
+      return KBPatternRoot::MulNswNuw;
+    if (NSW)
+      return KBPatternRoot::MulNsw;
+    if (NUW)
+      return KBPatternRoot::MulNuw;
+    return KBPatternRoot::Mul;
+  }
+  case Instruction::Or:
+    return cast<PossiblyDisjointInst>(I)->isDisjoint()
+               ? KBPatternRoot::OrDisjoint
+               : KBPatternRoot::Or;
+  case Instruction::SDiv:
+    return Q.IIQ.isExact(cast<BinaryOperator>(I))
+               ? KBPatternRoot::SdivExact
+               : KBPatternRoot::Sdiv;
+  case Instruction::Shl: {
+    auto *OBO = cast<OverflowingBinaryOperator>(I);
+    bool NUW = Q.IIQ.hasNoUnsignedWrap(OBO);
+    bool NSW = Q.IIQ.hasNoSignedWrap(OBO);
+    if (NUW && NSW)
+      return KBPatternRoot::ShlNswNuw;
+    if (NSW)
+      return KBPatternRoot::ShlNsw;
+    if (NUW)
+      return KBPatternRoot::ShlNuw;
+    return KBPatternRoot::Shl;
+  }
+  case Instruction::SRem:
+    return KBPatternRoot::Srem;
+  case Instruction::Sub: {
+    auto *OBO = cast<OverflowingBinaryOperator>(I);
+    bool NUW = Q.IIQ.hasNoUnsignedWrap(OBO);
+    bool NSW = Q.IIQ.hasNoSignedWrap(OBO);
+    if (NUW && NSW)
+      return KBPatternRoot::SubNswNuw;
+    if (NSW)
+      return KBPatternRoot::SubNsw;
+    if (NUW)
+      return KBPatternRoot::SubNuw;
+    return KBPatternRoot::Sub;
+  }
+  case Instruction::UDiv:
+    return Q.IIQ.isExact(cast<BinaryOperator>(I))
+               ? KBPatternRoot::UdivExact
+               : KBPatternRoot::Udiv;
+  case Instruction::URem:
+    return KBPatternRoot::Urem;
+  case Instruction::Xor:
+    return KBPatternRoot::Xor;
+  default:
+    return KBPatternRoot::Other;
+  }
+}
+
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-parameter"
+#pragma clang diagnostic ignored "-Wunused-variable"
+#pragma clang diagnostic ignored "-Wunused-function"
+#endif
+#define DEBUG_TYPE "value-tracking"
+#include "Generated/KnownBitsPatternDispatch.inc"
+#undef DEBUG_TYPE
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
+
 static void computeKnownBitsFromOperator(const Operator *I,
                                          const APInt &DemandedElts,
                                          KnownBits &Known,
@@ -2521,6 +2665,12 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
   if (Depth == MaxAnalysisRecursionDepth)
     return;
 
+  // Top-level DAG-pattern hook: all public computeKnownBits() overloads
+  // eventually flow through this internal entry point.
+  std::optional<KnownBits> PatternKB;
+  if (const auto *I = dyn_cast<Operator>(V))
+    PatternKB = computePatternKB(I, Q, Depth);
+
   // A weak GlobalAlias is totally unknown. A non-weak GlobalAlias has
   // the bits of its aliasee.
   if (const GlobalAlias *GA = dyn_cast<GlobalAlias>(V)) {
@@ -2535,6 +2685,10 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
     if (std::optional<ConstantRange> CR = GV->getAbsoluteSymbolRange())
       Known = CR->toKnownBits();
   }
+
+  // Intersect pattern-derived facts with the baseline known-bits result.
+  if (PatternKB)
+    Known = Known.intersectWith(*PatternKB);
 
   // Aligned pointers have trailing zeros - refine Known.Zero set
   if (isa<PointerType>(V->getType())) {
