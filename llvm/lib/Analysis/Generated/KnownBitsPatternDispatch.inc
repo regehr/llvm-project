@@ -23,18 +23,11 @@
 
 static std::optional<KnownBits> match003(const Operator *I, const SimplifyQuery &Q, unsigned Depth) {
   const Value *Arg0 = nullptr, *Arg1 = nullptr, *Arg2 = nullptr;
-  const Value *RootL = I->getOperand(0), *RootR = I->getOperand(1);
-  auto matchRootOrder = [&](const Value *A, const Value *B) -> bool {
-    const Value *N0L = nullptr, *N0R = nullptr;
-    if (!matchPatternNode(B, Q, PatternOp::Add, N0L, N0R)) return false;
-    if (!bindPatternPairCommutative(N0L, N0R, Arg1, Arg2)) return false;
-    if (!bindPatternArg(Arg0, A))                          return false;
-    return true;
-  };
-  const bool CanMatchFwd = hasPatternOp(RootR, Q, PatternOp::Add);
-  const bool CanMatchRev = hasPatternOp(RootL, Q, PatternOp::Add);
-  const bool Matched = matchEitherRootOrder(CanMatchFwd, CanMatchRev, RootL, RootR, matchRootOrder, Arg0, Arg1, Arg2);
-  if (!Matched) return std::nullopt;
+  if (!match(I, m_c_ExactWrapAdd<0>(
+                  m_Value(Arg0),
+                  m_c_ExactWrapAdd<0>(m_Value(Arg1), m_Value(Arg2))
+                )))
+    return std::nullopt;
   LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 003 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
@@ -44,12 +37,8 @@ static std::optional<KnownBits> match003(const Operator *I, const SimplifyQuery 
 
 static std::optional<KnownBits> match004(const Operator *I, const SimplifyQuery &Q, unsigned Depth) {
   const Value *Arg0 = nullptr, *Arg1 = nullptr, *Arg2 = nullptr;
-  const Value *RootL = I->getOperand(0), *RootR = I->getOperand(1);
-  const Value *N0L = nullptr, *N0R = nullptr;
-  if (!matchPatternNode(RootL, Q, PatternOp::Sub, N0L, N0R)) return std::nullopt;
-  if (!bindPatternArg(Arg2, N0L))                            return std::nullopt;
-  if (!bindPatternArg(Arg1, N0R))                            return std::nullopt;
-  if (!bindPatternArg(Arg0, RootR))                          return std::nullopt;
+  if (!match(I, m_Exact(m_AShr(m_ExactWrapSub<0>(m_Value(Arg2), m_Value(Arg1)), m_Value(Arg0)))))
+    return std::nullopt;
   LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 004 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
@@ -59,22 +48,11 @@ static std::optional<KnownBits> match004(const Operator *I, const SimplifyQuery 
 
 static std::optional<KnownBits> match008(const Operator *I, const SimplifyQuery &Q, unsigned Depth) {
   const Value *Arg0 = nullptr, *Arg1 = nullptr, *Arg2 = nullptr, *Arg3 = nullptr;
-  const Value *RootL = I->getOperand(0), *RootR = I->getOperand(1);
-  auto matchRootOrder = [&](const Value *A, const Value *B) -> bool {
-    const Value *N0L = nullptr, *N0R = nullptr;
-    if (!matchPatternNode(B, Q, PatternOp::AshrExact, N0L, N0R)) return false;
-    const Value *N1L = nullptr, *N1R = nullptr;
-    if (!matchPatternNode(N0L, Q, PatternOp::Sub, N1L, N1R)) return false;
-    if (!bindPatternArg(Arg3, N1L))                          return false;
-    if (!bindPatternArg(Arg2, N1R))                          return false;
-    if (!bindPatternArg(Arg1, N0R))                          return false;
-    if (!bindPatternArg(Arg0, A))                            return false;
-    return true;
-  };
-  const bool CanMatchFwd = hasPatternOp(RootR, Q, PatternOp::AshrExact);
-  const bool CanMatchRev = hasPatternOp(RootL, Q, PatternOp::AshrExact);
-  const bool Matched = matchEitherRootOrder(CanMatchFwd, CanMatchRev, RootL, RootR, matchRootOrder, Arg0, Arg1, Arg2, Arg3);
-  if (!Matched) return std::nullopt;
+  if (!match(I, m_c_ExactWrapAdd<OverflowingBinaryOperator::NoSignedWrap>(
+                  m_Value(Arg0),
+                  m_Exact(m_AShr(m_ExactWrapSub<0>(m_Value(Arg3), m_Value(Arg2)), m_Value(Arg1)))
+                )))
+    return std::nullopt;
   LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 008 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
@@ -85,12 +63,8 @@ static std::optional<KnownBits> match008(const Operator *I, const SimplifyQuery 
 
 static std::optional<KnownBits> match012(const Operator *I, const SimplifyQuery &Q, unsigned Depth) {
   const Value *Arg0 = nullptr, *Arg1 = nullptr, *Arg2 = nullptr;
-  const Value *RootL = I->getOperand(0), *RootR = I->getOperand(1);
-  const Value *N0L = nullptr, *N0R = nullptr;
-  if (!matchPatternNode(RootL, Q, PatternOp::Sub, N0L, N0R)) return std::nullopt;
-  if (!bindPatternArg(Arg2, N0L))                            return std::nullopt;
-  if (!bindPatternArg(Arg1, N0R))                            return std::nullopt;
-  if (!bindPatternArg(Arg0, RootR))                          return std::nullopt;
+  if (!match(I, m_Exact(m_SDiv(m_ExactWrapSub<0>(m_Value(Arg2), m_Value(Arg1)), m_Value(Arg0)))))
+    return std::nullopt;
   LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 012 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
@@ -100,18 +74,8 @@ static std::optional<KnownBits> match012(const Operator *I, const SimplifyQuery 
 
 static std::optional<KnownBits> match013(const Operator *I, const SimplifyQuery &Q, unsigned Depth) {
   const Value *Arg0 = nullptr, *Arg1 = nullptr;
-  const Value *RootL = I->getOperand(0), *RootR = I->getOperand(1);
-  auto matchRootOrder = [&](const Value *A, const Value *B) -> bool {
-    const Value *N0L = nullptr, *N0R = nullptr;
-    if (!matchPatternNode(B, Q, PatternOp::Add, N0L, N0R)) return false;
-    if (!bindPatternPairCommutative(N0L, N0R, Arg0, Arg1)) return false;
-    if (!bindPatternArg(Arg1, A))                          return false;
-    return true;
-  };
-  const bool CanMatchFwd = hasPatternOp(RootR, Q, PatternOp::Add);
-  const bool CanMatchRev = hasPatternOp(RootL, Q, PatternOp::Add);
-  const bool Matched = matchEitherRootOrder(CanMatchFwd, CanMatchRev, RootL, RootR, matchRootOrder, Arg0, Arg1);
-  if (!Matched) return std::nullopt;
+  if (!match(I, m_c_And(m_Value(Arg1), m_c_ExactWrapAdd<0>(m_Value(Arg0), m_Deferred(Arg1)))))
+    return std::nullopt;
   LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 013 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
@@ -120,32 +84,11 @@ static std::optional<KnownBits> match013(const Operator *I, const SimplifyQuery 
 
 static std::optional<KnownBits> match014(const Operator *I, const SimplifyQuery &Q, unsigned Depth) {
   const Value *Arg0 = nullptr, *Arg1 = nullptr, *Arg2 = nullptr;
-  const Value *RootL = I->getOperand(0), *RootR = I->getOperand(1);
-  auto matchRootOrder = [&](const Value *A, const Value *B) -> bool {
-    const Value *N0L = nullptr, *N0R = nullptr;
-    if (!matchPatternNode(B, Q, PatternOp::And, N0L, N0R)) return false;
-    if (hasPatternOp(N0R, Q, PatternOp::Add)) {
-      const Value *K1L = nullptr, *K1R = nullptr;
-      (void)matchPatternNode(N0R, Q, PatternOp::Add, K1L, K1R);
-      if (!bindPatternPairCommutative(K1L, K1R, Arg0, Arg1)) return false;
-      if (!bindPatternArg(Arg0, N0L))                        return false;
-    } else if (hasPatternOp(N0L, Q, PatternOp::Add)) {
-      const Value *K2L = nullptr, *K2R = nullptr;
-      (void)matchPatternNode(N0L, Q, PatternOp::Add, K2L, K2R);
-      if (!bindPatternPairCommutative(K2L, K2R, Arg0, Arg1)) return false;
-      if (!bindPatternArg(Arg0, N0R))                        return false;
-    } else {
-      return false;
-    }
-    const Value *N3L = nullptr, *N3R = nullptr;
-    if (!matchPatternNode(A, Q, PatternOp::And, N3L, N3R)) return false;
-    if (!bindPatternPairCommutative(N3L, N3R, Arg1, Arg2)) return false;
-    return true;
-  };
-  const bool CanMatchFwd = (hasPatternOp(RootL, Q, PatternOp::And)) && (hasPatternOp(RootR, Q, PatternOp::And));
-  const bool CanMatchRev = CanMatchFwd;
-  const bool Matched = matchEitherRootOrder(CanMatchFwd, CanMatchRev, RootL, RootR, matchRootOrder, Arg0, Arg1, Arg2);
-  if (!Matched) return std::nullopt;
+  if (!match(I, m_c_DisjointOr(
+                  m_c_And(m_Value(Arg1), m_Value(Arg2)),
+                  m_c_And(m_Value(Arg0), m_c_ExactWrapAdd<0>(m_Deferred(Arg0), m_Deferred(Arg1)))
+                )))
+    return std::nullopt;
   LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 014 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
@@ -155,30 +98,11 @@ static std::optional<KnownBits> match014(const Operator *I, const SimplifyQuery 
 
 static std::optional<KnownBits> match018(const Operator *I, const SimplifyQuery &Q, unsigned Depth) {
   const Value *Arg0 = nullptr, *Arg1 = nullptr, *Arg2 = nullptr;
-  const Value *RootL = I->getOperand(0), *RootR = I->getOperand(1);
-  auto matchRootOrder = [&](const Value *A, const Value *B) -> bool {
-    const Value *N0L = nullptr, *N0R = nullptr;
-    if (!matchPatternNode(B, Q, PatternOp::And, N0L, N0R)) return false;
-    if (hasPatternOp(N0R, Q, PatternOp::Add)) {
-      const Value *K1L = nullptr, *K1R = nullptr;
-      (void)matchPatternNode(N0R, Q, PatternOp::Add, K1L, K1R);
-      if (!bindPatternPairCommutative(K1L, K1R, Arg1, Arg2)) return false;
-      if (!bindPatternArg(Arg2, N0L))                        return false;
-    } else if (hasPatternOp(N0L, Q, PatternOp::Add)) {
-      const Value *K2L = nullptr, *K2R = nullptr;
-      (void)matchPatternNode(N0L, Q, PatternOp::Add, K2L, K2R);
-      if (!bindPatternPairCommutative(K2L, K2R, Arg1, Arg2)) return false;
-      if (!bindPatternArg(Arg2, N0R))                        return false;
-    } else {
-      return false;
-    }
-    if (!bindPatternArg(Arg0, A)) return false;
-    return true;
-  };
-  const bool CanMatchFwd = hasPatternOp(RootR, Q, PatternOp::And);
-  const bool CanMatchRev = hasPatternOp(RootL, Q, PatternOp::And);
-  const bool Matched = matchEitherRootOrder(CanMatchFwd, CanMatchRev, RootL, RootR, matchRootOrder, Arg0, Arg1, Arg2);
-  if (!Matched) return std::nullopt;
+  if (!match(I, m_c_DisjointOr(
+                  m_Value(Arg0),
+                  m_c_And(m_Value(Arg2), m_c_ExactWrapAdd<0>(m_Value(Arg1), m_Deferred(Arg2)))
+                )))
+    return std::nullopt;
   LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 018 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
@@ -188,18 +112,14 @@ static std::optional<KnownBits> match018(const Operator *I, const SimplifyQuery 
 
 static std::optional<KnownBits> match019(const Operator *I, const SimplifyQuery &Q, unsigned Depth) {
   const Value *Arg0 = nullptr, *Arg1 = nullptr, *Arg2 = nullptr;
-  const Value *RootL = I->getOperand(0), *RootR = I->getOperand(1);
-  auto matchRootOrder = [&](const Value *A, const Value *B) -> bool {
-    const Value *N0L = nullptr, *N0R = nullptr;
-    if (!matchPatternNode(B, Q, PatternOp::AddNsw, N0L, N0R)) return false;
-    if (!bindPatternPairCommutative(N0L, N0R, Arg1, Arg2))    return false;
-    if (!bindPatternArg(Arg0, A))                             return false;
-    return true;
-  };
-  const bool CanMatchFwd = hasPatternOp(RootR, Q, PatternOp::AddNsw);
-  const bool CanMatchRev = hasPatternOp(RootL, Q, PatternOp::AddNsw);
-  const bool Matched = matchEitherRootOrder(CanMatchFwd, CanMatchRev, RootL, RootR, matchRootOrder, Arg0, Arg1, Arg2);
-  if (!Matched) return std::nullopt;
+  if (!match(I, m_c_ExactWrapAdd<OverflowingBinaryOperator::NoSignedWrap>(
+                  m_Value(Arg0),
+                  m_c_ExactWrapAdd<OverflowingBinaryOperator::NoSignedWrap>(
+                    m_Value(Arg1),
+                    m_Value(Arg2)
+                  )
+                )))
+    return std::nullopt;
   LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 019 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
@@ -209,19 +129,8 @@ static std::optional<KnownBits> match019(const Operator *I, const SimplifyQuery 
 
 static std::optional<KnownBits> match020(const Operator *I, const SimplifyQuery &Q, unsigned Depth) {
   const Value *Arg0 = nullptr, *Arg1 = nullptr, *Arg2 = nullptr;
-  const Value *RootL = I->getOperand(0), *RootR = I->getOperand(1);
-  auto matchRootOrder = [&](const Value *A, const Value *B) -> bool {
-    const Value *N0L = nullptr, *N0R = nullptr;
-    if (!matchPatternNode(B, Q, PatternOp::Sub, N0L, N0R)) return false;
-    if (!bindPatternArg(Arg2, N0L))                        return false;
-    if (!bindPatternArg(Arg1, N0R))                        return false;
-    if (!bindPatternArg(Arg0, A))                          return false;
-    return true;
-  };
-  const bool CanMatchFwd = hasPatternOp(RootR, Q, PatternOp::Sub);
-  const bool CanMatchRev = hasPatternOp(RootL, Q, PatternOp::Sub);
-  const bool Matched = matchEitherRootOrder(CanMatchFwd, CanMatchRev, RootL, RootR, matchRootOrder, Arg0, Arg1, Arg2);
-  if (!Matched) return std::nullopt;
+  if (!match(I, m_c_ExactWrapAdd<0>(m_Value(Arg0), m_ExactWrapSub<0>(m_Value(Arg2), m_Value(Arg1)))))
+    return std::nullopt;
   LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 020 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
@@ -231,19 +140,8 @@ static std::optional<KnownBits> match020(const Operator *I, const SimplifyQuery 
 
 static std::optional<KnownBits> match022(const Operator *I, const SimplifyQuery &Q, unsigned Depth) {
   const Value *Arg0 = nullptr, *Arg1 = nullptr, *Arg2 = nullptr;
-  const Value *RootL = I->getOperand(0), *RootR = I->getOperand(1);
-  auto matchRootOrder = [&](const Value *A, const Value *B) -> bool {
-    const Value *N0L = nullptr, *N0R = nullptr;
-    if (!matchPatternNode(B, Q, PatternOp::Shl, N0L, N0R)) return false;
-    if (!bindPatternArg(Arg2, N0L))                        return false;
-    if (!bindPatternArg(Arg1, N0R))                        return false;
-    if (!bindPatternArg(Arg0, A))                          return false;
-    return true;
-  };
-  const bool CanMatchFwd = hasPatternOp(RootR, Q, PatternOp::Shl);
-  const bool CanMatchRev = hasPatternOp(RootL, Q, PatternOp::Shl);
-  const bool Matched = matchEitherRootOrder(CanMatchFwd, CanMatchRev, RootL, RootR, matchRootOrder, Arg0, Arg1, Arg2);
-  if (!Matched) return std::nullopt;
+  if (!match(I, m_c_ExactWrapAdd<0>(m_Value(Arg0), m_ExactWrapShl<0>(m_Value(Arg2), m_Value(Arg1)))))
+    return std::nullopt;
   LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 022 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
@@ -253,30 +151,14 @@ static std::optional<KnownBits> match022(const Operator *I, const SimplifyQuery 
 
 static std::optional<KnownBits> match025(const Operator *I, const SimplifyQuery &Q, unsigned Depth) {
   const Value *Arg0 = nullptr, *Arg1 = nullptr, *Arg2 = nullptr, *Arg3 = nullptr;
-  const Value *RootL = I->getOperand(0), *RootR = I->getOperand(1);
-  auto matchRootOrder = [&](const Value *A, const Value *B) -> bool {
-    const Value *N0L = nullptr, *N0R = nullptr;
-    if (!matchPatternNode(B, Q, PatternOp::Add, N0L, N0R)) return false;
-    if (hasPatternOp(N0R, Q, PatternOp::Add)) {
-      const Value *K1L = nullptr, *K1R = nullptr;
-      (void)matchPatternNode(N0R, Q, PatternOp::Add, K1L, K1R);
-      if (!bindPatternPairCommutative(K1L, K1R, Arg2, Arg3)) return false;
-      if (!bindPatternArg(Arg1, N0L))                        return false;
-    } else if (hasPatternOp(N0L, Q, PatternOp::Add)) {
-      const Value *K2L = nullptr, *K2R = nullptr;
-      (void)matchPatternNode(N0L, Q, PatternOp::Add, K2L, K2R);
-      if (!bindPatternPairCommutative(K2L, K2R, Arg2, Arg3)) return false;
-      if (!bindPatternArg(Arg1, N0R))                        return false;
-    } else {
-      return false;
-    }
-    if (!bindPatternArg(Arg0, A)) return false;
-    return true;
-  };
-  const bool CanMatchFwd = hasPatternOp(RootR, Q, PatternOp::Add);
-  const bool CanMatchRev = hasPatternOp(RootL, Q, PatternOp::Add);
-  const bool Matched = matchEitherRootOrder(CanMatchFwd, CanMatchRev, RootL, RootR, matchRootOrder, Arg0, Arg1, Arg2, Arg3);
-  if (!Matched) return std::nullopt;
+  if (!match(I, m_c_ExactWrapAdd<0>(
+                  m_Value(Arg0),
+                  m_c_ExactWrapAdd<0>(
+                    m_Value(Arg1),
+                    m_c_ExactWrapAdd<0>(m_Value(Arg2), m_Value(Arg3))
+                  )
+                )))
+    return std::nullopt;
   LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 025 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
@@ -287,18 +169,11 @@ static std::optional<KnownBits> match025(const Operator *I, const SimplifyQuery 
 
 static std::optional<KnownBits> match026(const Operator *I, const SimplifyQuery &Q, unsigned Depth) {
   const Value *Arg0 = nullptr, *Arg1 = nullptr, *Arg2 = nullptr;
-  const Value *RootL = I->getOperand(0), *RootR = I->getOperand(1);
-  auto matchRootOrder = [&](const Value *A, const Value *B) -> bool {
-    const Value *N0L = nullptr, *N0R = nullptr;
-    if (!matchPatternNode(B, Q, PatternOp::Mul, N0L, N0R)) return false;
-    if (!bindPatternPairCommutative(N0L, N0R, Arg1, Arg2)) return false;
-    if (!bindPatternArg(Arg0, A))                          return false;
-    return true;
-  };
-  const bool CanMatchFwd = hasPatternOp(RootR, Q, PatternOp::Mul);
-  const bool CanMatchRev = hasPatternOp(RootL, Q, PatternOp::Mul);
-  const bool Matched = matchEitherRootOrder(CanMatchFwd, CanMatchRev, RootL, RootR, matchRootOrder, Arg0, Arg1, Arg2);
-  if (!Matched) return std::nullopt;
+  if (!match(I, m_c_ExactWrapAdd<0>(
+                  m_Value(Arg0),
+                  m_c_ExactWrapMul<0>(m_Value(Arg1), m_Value(Arg2))
+                )))
+    return std::nullopt;
   LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 026 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
@@ -308,11 +183,8 @@ static std::optional<KnownBits> match026(const Operator *I, const SimplifyQuery 
 
 static std::optional<KnownBits> match027(const Operator *I, const SimplifyQuery &Q, unsigned Depth) {
   const Value *Arg0 = nullptr, *Arg1 = nullptr, *Arg2 = nullptr;
-  const Value *RootL = I->getOperand(0), *RootR = I->getOperand(1);
-  const Value *N0L = nullptr, *N0R = nullptr;
-  if (!matchPatternNode(RootL, Q, PatternOp::Add, N0L, N0R)) return std::nullopt;
-  if (!bindPatternPairCommutative(N0L, N0R, Arg1, Arg2))     return std::nullopt;
-  if (!bindPatternArg(Arg0, RootR))                          return std::nullopt;
+  if (!match(I, m_LShr(m_c_ExactWrapAdd<0>(m_Value(Arg1), m_Value(Arg2)), m_Value(Arg0))))
+    return std::nullopt;
   LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 027 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
@@ -322,11 +194,8 @@ static std::optional<KnownBits> match027(const Operator *I, const SimplifyQuery 
 
 static std::optional<KnownBits> match032(const Operator *I, const SimplifyQuery &Q, unsigned Depth) {
   const Value *Arg0 = nullptr, *Arg1 = nullptr, *Arg2 = nullptr;
-  const Value *RootL = I->getOperand(0), *RootR = I->getOperand(1);
-  const Value *N0L = nullptr, *N0R = nullptr;
-  if (!matchPatternNode(RootL, Q, PatternOp::AddNswNuw, N0L, N0R)) return std::nullopt;
-  if (!bindPatternPairCommutative(N0L, N0R, Arg1, Arg2))           return std::nullopt;
-  if (!bindPatternArg(Arg0, RootR))                                return std::nullopt;
+  if (!match(I, m_LShr(m_c_NSWNUWAdd(m_Value(Arg1), m_Value(Arg2)), m_Value(Arg0))))
+    return std::nullopt;
   LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 032 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
@@ -336,18 +205,8 @@ static std::optional<KnownBits> match032(const Operator *I, const SimplifyQuery 
 
 static std::optional<KnownBits> match034(const Operator *I, const SimplifyQuery &Q, unsigned Depth) {
   const Value *Arg0 = nullptr, *Arg1 = nullptr, *Arg2 = nullptr;
-  const Value *RootL = I->getOperand(0), *RootR = I->getOperand(1);
-  auto matchRootOrder = [&](const Value *A, const Value *B) -> bool {
-    const Value *N0L = nullptr, *N0R = nullptr;
-    if (!matchPatternNode(B, Q, PatternOp::AddNswNuw, N0L, N0R)) return false;
-    if (!bindPatternPairCommutative(N0L, N0R, Arg1, Arg2))       return false;
-    if (!bindPatternArg(Arg0, A))                                return false;
-    return true;
-  };
-  const bool CanMatchFwd = hasPatternOp(RootR, Q, PatternOp::AddNswNuw);
-  const bool CanMatchRev = hasPatternOp(RootL, Q, PatternOp::AddNswNuw);
-  const bool Matched = matchEitherRootOrder(CanMatchFwd, CanMatchRev, RootL, RootR, matchRootOrder, Arg0, Arg1, Arg2);
-  if (!Matched) return std::nullopt;
+  if (!match(I, m_c_NSWNUWAdd(m_Value(Arg0), m_c_NSWNUWAdd(m_Value(Arg1), m_Value(Arg2)))))
+    return std::nullopt;
   LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 034 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
@@ -357,19 +216,11 @@ static std::optional<KnownBits> match034(const Operator *I, const SimplifyQuery 
 
 static std::optional<KnownBits> match037(const Operator *I, const SimplifyQuery &Q, unsigned Depth) {
   const Value *Arg0 = nullptr, *Arg1 = nullptr, *Arg2 = nullptr;
-  const Value *RootL = I->getOperand(0), *RootR = I->getOperand(1);
-  auto matchRootOrder = [&](const Value *A, const Value *B) -> bool {
-    const Value *N0L = nullptr, *N0R = nullptr;
-    if (!matchPatternNode(B, Q, PatternOp::AshrExact, N0L, N0R)) return false;
-    if (!bindPatternArg(Arg2, N0L))                              return false;
-    if (!bindPatternArg(Arg0, N0R))                              return false;
-    if (!bindPatternArg(Arg1, A))                                return false;
-    return true;
-  };
-  const bool CanMatchFwd = hasPatternOp(RootR, Q, PatternOp::AshrExact);
-  const bool CanMatchRev = hasPatternOp(RootL, Q, PatternOp::AshrExact);
-  const bool Matched = matchEitherRootOrder(CanMatchFwd, CanMatchRev, RootL, RootR, matchRootOrder, Arg0, Arg1, Arg2);
-  if (!Matched) return std::nullopt;
+  if (!match(I, m_c_ExactWrapAdd<OverflowingBinaryOperator::NoSignedWrap>(
+                  m_Value(Arg1),
+                  m_Exact(m_AShr(m_Value(Arg2), m_Value(Arg0)))
+                )))
+    return std::nullopt;
   LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 037 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
@@ -379,19 +230,11 @@ static std::optional<KnownBits> match037(const Operator *I, const SimplifyQuery 
 
 static std::optional<KnownBits> match038(const Operator *I, const SimplifyQuery &Q, unsigned Depth) {
   const Value *Arg0 = nullptr, *Arg1 = nullptr, *Arg2 = nullptr;
-  const Value *RootL = I->getOperand(0), *RootR = I->getOperand(1);
-  auto matchRootOrder = [&](const Value *A, const Value *B) -> bool {
-    const Value *N0L = nullptr, *N0R = nullptr;
-    if (!matchPatternNode(B, Q, PatternOp::AshrExact, N0L, N0R)) return false;
-    if (!bindPatternArg(Arg2, N0L))                              return false;
-    if (!bindPatternArg(Arg1, N0R))                              return false;
-    if (!bindPatternArg(Arg0, A))                                return false;
-    return true;
-  };
-  const bool CanMatchFwd = hasPatternOp(RootR, Q, PatternOp::AshrExact);
-  const bool CanMatchRev = hasPatternOp(RootL, Q, PatternOp::AshrExact);
-  const bool Matched = matchEitherRootOrder(CanMatchFwd, CanMatchRev, RootL, RootR, matchRootOrder, Arg0, Arg1, Arg2);
-  if (!Matched) return std::nullopt;
+  if (!match(I, m_c_ExactWrapAdd<OverflowingBinaryOperator::NoSignedWrap>(
+                  m_Value(Arg0),
+                  m_Exact(m_AShr(m_Value(Arg2), m_Value(Arg1)))
+                )))
+    return std::nullopt;
   LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 038 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
@@ -401,18 +244,8 @@ static std::optional<KnownBits> match038(const Operator *I, const SimplifyQuery 
 
 static std::optional<KnownBits> match045(const Operator *I, const SimplifyQuery &Q, unsigned Depth) {
   const Value *Arg0 = nullptr, *Arg1 = nullptr;
-  const Value *RootL = I->getOperand(0), *RootR = I->getOperand(1);
-  auto matchRootOrder = [&](const Value *A, const Value *B) -> bool {
-    const Value *N0L = nullptr, *N0R = nullptr;
-    if (!matchPatternNode(B, Q, PatternOp::Add, N0L, N0R)) return false;
-    if (!bindPatternPairCommutative(N0L, N0R, Arg0, Arg1)) return false;
-    if (!bindPatternArg(Arg0, A))                          return false;
-    return true;
-  };
-  const bool CanMatchFwd = hasPatternOp(RootR, Q, PatternOp::Add);
-  const bool CanMatchRev = hasPatternOp(RootL, Q, PatternOp::Add);
-  const bool Matched = matchEitherRootOrder(CanMatchFwd, CanMatchRev, RootL, RootR, matchRootOrder, Arg0, Arg1);
-  if (!Matched) return std::nullopt;
+  if (!match(I, m_c_And(m_Value(Arg0), m_c_ExactWrapAdd<0>(m_Deferred(Arg0), m_Value(Arg1)))))
+    return std::nullopt;
   LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 045 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
@@ -421,18 +254,8 @@ static std::optional<KnownBits> match045(const Operator *I, const SimplifyQuery 
 
 static std::optional<KnownBits> match046(const Operator *I, const SimplifyQuery &Q, unsigned Depth) {
   const Value *Arg0 = nullptr, *Arg1 = nullptr, *Arg2 = nullptr;
-  const Value *RootL = I->getOperand(0), *RootR = I->getOperand(1);
-  auto matchRootOrder = [&](const Value *A, const Value *B) -> bool {
-    const Value *N0L = nullptr, *N0R = nullptr;
-    if (!matchPatternNode(B, Q, PatternOp::MulNswNuw, N0L, N0R)) return false;
-    if (!bindPatternPairCommutative(N0L, N0R, Arg1, Arg2))       return false;
-    if (!bindPatternArg(Arg0, A))                                return false;
-    return true;
-  };
-  const bool CanMatchFwd = hasPatternOp(RootR, Q, PatternOp::MulNswNuw);
-  const bool CanMatchRev = hasPatternOp(RootL, Q, PatternOp::MulNswNuw);
-  const bool Matched = matchEitherRootOrder(CanMatchFwd, CanMatchRev, RootL, RootR, matchRootOrder, Arg0, Arg1, Arg2);
-  if (!Matched) return std::nullopt;
+  if (!match(I, m_c_NSWNUWAdd(m_Value(Arg0), m_c_NSWNUWMul(m_Value(Arg1), m_Value(Arg2)))))
+    return std::nullopt;
   LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 046 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
@@ -442,11 +265,8 @@ static std::optional<KnownBits> match046(const Operator *I, const SimplifyQuery 
 
 static std::optional<KnownBits> match047(const Operator *I, const SimplifyQuery &Q, unsigned Depth) {
   const Value *Arg0 = nullptr, *Arg1 = nullptr, *Arg2 = nullptr;
-  const Value *RootL = I->getOperand(0), *RootR = I->getOperand(1);
-  const Value *N0L = nullptr, *N0R = nullptr;
-  if (!matchPatternNode(RootL, Q, PatternOp::Add, N0L, N0R)) return std::nullopt;
-  if (!bindPatternPairCommutative(N0L, N0R, Arg1, Arg2))     return std::nullopt;
-  if (!bindPatternArg(Arg0, RootR))                          return std::nullopt;
+  if (!match(I, m_ExactWrapSub<0>(m_c_ExactWrapAdd<0>(m_Value(Arg1), m_Value(Arg2)), m_Value(Arg0))))
+    return std::nullopt;
   LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 047 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
@@ -456,19 +276,8 @@ static std::optional<KnownBits> match047(const Operator *I, const SimplifyQuery 
 
 static std::optional<KnownBits> match050(const Operator *I, const SimplifyQuery &Q, unsigned Depth) {
   const Value *Arg0 = nullptr, *Arg1 = nullptr, *Arg2 = nullptr;
-  const Value *RootL = I->getOperand(0), *RootR = I->getOperand(1);
-  auto matchRootOrder = [&](const Value *A, const Value *B) -> bool {
-    const Value *N0L = nullptr, *N0R = nullptr;
-    if (!matchPatternNode(B, Q, PatternOp::Lshr, N0L, N0R)) return false;
-    if (!bindPatternArg(Arg2, N0L))                         return false;
-    if (!bindPatternArg(Arg1, N0R))                         return false;
-    if (!bindPatternArg(Arg0, A))                           return false;
-    return true;
-  };
-  const bool CanMatchFwd = hasPatternOp(RootR, Q, PatternOp::Lshr);
-  const bool CanMatchRev = hasPatternOp(RootL, Q, PatternOp::Lshr);
-  const bool Matched = matchEitherRootOrder(CanMatchFwd, CanMatchRev, RootL, RootR, matchRootOrder, Arg0, Arg1, Arg2);
-  if (!Matched) return std::nullopt;
+  if (!match(I, m_c_NSWNUWAdd(m_Value(Arg0), m_LShr(m_Value(Arg2), m_Value(Arg1)))))
+    return std::nullopt;
   LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 050 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));

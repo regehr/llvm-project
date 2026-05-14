@@ -1420,6 +1420,96 @@ struct OverflowingBinaryOp_match {
   }
 };
 
+template <typename LHS_t, typename RHS_t, unsigned Opcode,
+          unsigned ExactWrapFlags = 0, bool Commutable = false>
+struct ExactOverflowingBinaryOp_match {
+  LHS_t L;
+  RHS_t R;
+
+  ExactOverflowingBinaryOp_match(const LHS_t &LHS, const RHS_t &RHS)
+      : L(LHS), R(RHS) {}
+
+  template <typename OpTy> bool match(OpTy *V) const {
+    if (auto *Op = dyn_cast<OverflowingBinaryOperator>(V)) {
+      if (Op->getOpcode() != Opcode)
+        return false;
+      const bool WantNUW =
+          (ExactWrapFlags & OverflowingBinaryOperator::NoUnsignedWrap) != 0;
+      const bool WantNSW =
+          (ExactWrapFlags & OverflowingBinaryOperator::NoSignedWrap) != 0;
+      if (Op->hasNoUnsignedWrap() != WantNUW ||
+          Op->hasNoSignedWrap() != WantNSW)
+        return false;
+      return (L.match(Op->getOperand(0)) && R.match(Op->getOperand(1))) ||
+             (Commutable && L.match(Op->getOperand(1)) &&
+              R.match(Op->getOperand(0)));
+    }
+    return false;
+  }
+};
+
+template <unsigned ExactWrapFlags, typename LHS, typename RHS>
+inline ExactOverflowingBinaryOp_match<LHS, RHS, Instruction::Add,
+                                      ExactWrapFlags>
+m_ExactWrapAdd(const LHS &L, const RHS &R) {
+  return ExactOverflowingBinaryOp_match<LHS, RHS, Instruction::Add,
+                                        ExactWrapFlags>(L, R);
+}
+
+template <unsigned ExactWrapFlags, typename LHS, typename RHS>
+inline ExactOverflowingBinaryOp_match<LHS, RHS, Instruction::Add,
+                                      ExactWrapFlags, true>
+m_c_ExactWrapAdd(const LHS &L, const RHS &R) {
+  return ExactOverflowingBinaryOp_match<LHS, RHS, Instruction::Add,
+                                        ExactWrapFlags, true>(L, R);
+}
+
+template <unsigned ExactWrapFlags, typename LHS, typename RHS>
+inline ExactOverflowingBinaryOp_match<LHS, RHS, Instruction::Sub,
+                                      ExactWrapFlags>
+m_ExactWrapSub(const LHS &L, const RHS &R) {
+  return ExactOverflowingBinaryOp_match<LHS, RHS, Instruction::Sub,
+                                        ExactWrapFlags>(L, R);
+}
+
+template <unsigned ExactWrapFlags, typename LHS, typename RHS>
+inline ExactOverflowingBinaryOp_match<LHS, RHS, Instruction::Mul,
+                                      ExactWrapFlags>
+m_ExactWrapMul(const LHS &L, const RHS &R) {
+  return ExactOverflowingBinaryOp_match<LHS, RHS, Instruction::Mul,
+                                        ExactWrapFlags>(L, R);
+}
+
+template <unsigned ExactWrapFlags, typename LHS, typename RHS>
+inline ExactOverflowingBinaryOp_match<LHS, RHS, Instruction::Mul,
+                                      ExactWrapFlags, true>
+m_c_ExactWrapMul(const LHS &L, const RHS &R) {
+  return ExactOverflowingBinaryOp_match<LHS, RHS, Instruction::Mul,
+                                        ExactWrapFlags, true>(L, R);
+}
+
+template <unsigned ExactWrapFlags, typename LHS, typename RHS>
+inline ExactOverflowingBinaryOp_match<LHS, RHS, Instruction::Shl,
+                                      ExactWrapFlags>
+m_ExactWrapShl(const LHS &L, const RHS &R) {
+  return ExactOverflowingBinaryOp_match<LHS, RHS, Instruction::Shl,
+                                        ExactWrapFlags>(L, R);
+}
+
+template <typename LHS, typename RHS>
+inline auto m_c_NSWNUWAdd(const LHS &L, const RHS &R) {
+  constexpr unsigned Flags = OverflowingBinaryOperator::NoSignedWrap |
+                             OverflowingBinaryOperator::NoUnsignedWrap;
+  return m_c_ExactWrapAdd<Flags>(L, R);
+}
+
+template <typename LHS, typename RHS>
+inline auto m_c_NSWNUWMul(const LHS &L, const RHS &R) {
+  constexpr unsigned Flags = OverflowingBinaryOperator::NoSignedWrap |
+                             OverflowingBinaryOperator::NoUnsignedWrap;
+  return m_c_ExactWrapMul<Flags>(L, R);
+}
+
 template <typename LHS, typename RHS>
 inline OverflowingBinaryOp_match<LHS, RHS, Instruction::Add,
                                  OverflowingBinaryOperator::NoSignedWrap>
