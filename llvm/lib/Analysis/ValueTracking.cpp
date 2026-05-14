@@ -82,6 +82,7 @@
 #include <cassert>
 #include <cstdint>
 #include <optional>
+#include <tuple>
 #include <utility>
 
 using namespace llvm;
@@ -1389,18 +1390,26 @@ static void unionWithMinMaxIntrinsicClamp(const IntrinsicInst *II,
         ConstantRange::getNonEmpty(*CLow, *CHigh + 1).toKnownBits());
 }
 
-static std::array<APInt, 2> knownBitsToArray(const KnownBits &KB) {
+static std::array<APInt, 2> kbToArr(const KnownBits &KB) {
   return {KB.Zero, KB.One};
 }
 
-static KnownBits arrayToKnownBits(const std::array<APInt, 2> &A) {
+static KnownBits arrToKB(const std::array<APInt, 2> &A) {
   KnownBits KB(A[0].getBitWidth());
   KB.Zero = A[0];
   KB.One = A[1];
   return KB;
 }
 
-enum class KBPatternRoot : uint8_t {
+static bool bindPatternArg(const Value *&Slot, const Value *V) {
+  if (!Slot) {
+    Slot = V;
+    return true;
+  }
+  return Slot == V;
+}
+
+enum class PatternOp : uint8_t {
   Add,
   AddNsw,
   AddNuw,
@@ -1434,88 +1443,144 @@ enum class KBPatternRoot : uint8_t {
   Other
 };
 
-static KBPatternRoot getKBPatternRoot(const Operator *I,
-                                                    const SimplifyQuery &Q) {
+static PatternOp classifyPatternOp(const Operator *I, const SimplifyQuery &Q) {
   switch (I->getOpcode()) {
   case Instruction::Add: {
     auto *OBO = cast<OverflowingBinaryOperator>(I);
     bool NUW = Q.IIQ.hasNoUnsignedWrap(OBO);
     bool NSW = Q.IIQ.hasNoSignedWrap(OBO);
     if (NUW && NSW)
-      return KBPatternRoot::AddNswNuw;
+      return PatternOp::AddNswNuw;
     if (NSW)
-      return KBPatternRoot::AddNsw;
+      return PatternOp::AddNsw;
     if (NUW)
-      return KBPatternRoot::AddNuw;
-    return KBPatternRoot::Add;
+      return PatternOp::AddNuw;
+    return PatternOp::Add;
   }
   case Instruction::And:
-    return KBPatternRoot::And;
+    return PatternOp::And;
   case Instruction::AShr:
     return Q.IIQ.isExact(cast<BinaryOperator>(I))
-               ? KBPatternRoot::AshrExact
-               : KBPatternRoot::Ashr;
+               ? PatternOp::AshrExact
+               : PatternOp::Ashr;
   case Instruction::LShr:
     return Q.IIQ.isExact(cast<BinaryOperator>(I))
-               ? KBPatternRoot::LshrExact
-               : KBPatternRoot::Lshr;
+               ? PatternOp::LshrExact
+               : PatternOp::Lshr;
   case Instruction::Mul: {
     auto *OBO = cast<OverflowingBinaryOperator>(I);
     bool NUW = Q.IIQ.hasNoUnsignedWrap(OBO);
     bool NSW = Q.IIQ.hasNoSignedWrap(OBO);
     if (NUW && NSW)
-      return KBPatternRoot::MulNswNuw;
+      return PatternOp::MulNswNuw;
     if (NSW)
-      return KBPatternRoot::MulNsw;
+      return PatternOp::MulNsw;
     if (NUW)
-      return KBPatternRoot::MulNuw;
-    return KBPatternRoot::Mul;
+      return PatternOp::MulNuw;
+    return PatternOp::Mul;
   }
   case Instruction::Or:
     return cast<PossiblyDisjointInst>(I)->isDisjoint()
-               ? KBPatternRoot::OrDisjoint
-               : KBPatternRoot::Or;
+               ? PatternOp::OrDisjoint
+               : PatternOp::Or;
   case Instruction::SDiv:
     return Q.IIQ.isExact(cast<BinaryOperator>(I))
-               ? KBPatternRoot::SdivExact
-               : KBPatternRoot::Sdiv;
+               ? PatternOp::SdivExact
+               : PatternOp::Sdiv;
   case Instruction::Shl: {
     auto *OBO = cast<OverflowingBinaryOperator>(I);
     bool NUW = Q.IIQ.hasNoUnsignedWrap(OBO);
     bool NSW = Q.IIQ.hasNoSignedWrap(OBO);
     if (NUW && NSW)
-      return KBPatternRoot::ShlNswNuw;
+      return PatternOp::ShlNswNuw;
     if (NSW)
-      return KBPatternRoot::ShlNsw;
+      return PatternOp::ShlNsw;
     if (NUW)
-      return KBPatternRoot::ShlNuw;
-    return KBPatternRoot::Shl;
+      return PatternOp::ShlNuw;
+    return PatternOp::Shl;
   }
   case Instruction::SRem:
-    return KBPatternRoot::Srem;
+    return PatternOp::Srem;
   case Instruction::Sub: {
     auto *OBO = cast<OverflowingBinaryOperator>(I);
     bool NUW = Q.IIQ.hasNoUnsignedWrap(OBO);
     bool NSW = Q.IIQ.hasNoSignedWrap(OBO);
     if (NUW && NSW)
-      return KBPatternRoot::SubNswNuw;
+      return PatternOp::SubNswNuw;
     if (NSW)
-      return KBPatternRoot::SubNsw;
+      return PatternOp::SubNsw;
     if (NUW)
-      return KBPatternRoot::SubNuw;
-    return KBPatternRoot::Sub;
+      return PatternOp::SubNuw;
+    return PatternOp::Sub;
   }
   case Instruction::UDiv:
     return Q.IIQ.isExact(cast<BinaryOperator>(I))
-               ? KBPatternRoot::UdivExact
-               : KBPatternRoot::Udiv;
+               ? PatternOp::UdivExact
+               : PatternOp::Udiv;
   case Instruction::URem:
-    return KBPatternRoot::Urem;
+    return PatternOp::Urem;
   case Instruction::Xor:
-    return KBPatternRoot::Xor;
+    return PatternOp::Xor;
   default:
-    return KBPatternRoot::Other;
+    return PatternOp::Other;
   }
+}
+
+static bool hasPatternOp(const Value *V, const SimplifyQuery &Q,
+                         PatternOp Kind) {
+  const auto *I = dyn_cast<Operator>(V);
+  return I && classifyPatternOp(I, Q) == Kind;
+}
+
+static bool matchPatternNode(const Value *V, const SimplifyQuery &Q,
+                             PatternOp Kind, const Value *&L,
+                             const Value *&R) {
+  const auto *I = dyn_cast<Operator>(V);
+  if (!I || classifyPatternOp(I, Q) != Kind)
+    return false;
+  L = I->getOperand(0);
+  R = I->getOperand(1);
+  return true;
+}
+
+static bool bindPatternPairCommutative(const Value *L, const Value *R,
+                                       const Value *&A, const Value *&B) {
+  const Value *SavedA = A;
+  const Value *SavedB = B;
+  if (bindPatternArg(A, L) && bindPatternArg(B, R))
+    return true;
+  A = SavedA;
+  B = SavedB;
+  return bindPatternArg(A, R) && bindPatternArg(B, L);
+}
+
+static inline void mergePatternKB(std::optional<KnownBits> &Acc,
+                                  const std::optional<KnownBits> &R) {
+  if (!R)
+    return;
+  if (!Acc)
+    Acc = *R;
+  else
+    Acc = Acc->intersectWith(*R);
+}
+
+template <typename TryFn, typename... ArgTs>
+static inline bool matchEitherRootOrder(bool CanMatchFwd, bool CanMatchRev,
+                                        const Value *RootL, const Value *RootR,
+                                        TryFn &&MatchRootOrder,
+                                        ArgTs &...Args) {
+  if (!CanMatchFwd && !CanMatchRev)
+    return false;
+  if (CanMatchFwd && !CanMatchRev)
+    return MatchRootOrder(RootL, RootR);
+  if (!CanMatchFwd && CanMatchRev)
+    return MatchRootOrder(RootR, RootL);
+
+  auto Saved = std::make_tuple(Args...);
+  if (MatchRootOrder(RootL, RootR))
+    return true;
+  std::tie(Args...) = Saved;
+  return MatchRootOrder(RootR, RootL);
 }
 
 #if defined(__clang__)

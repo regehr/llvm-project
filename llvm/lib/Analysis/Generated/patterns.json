@@ -1,6 +1,11 @@
 {
+  "003": "Add(arg0, Add(arg1, arg2))",
+  "004": "AshrExact(Sub(arg2, arg1), arg0)",
   "008": "AddNsw(arg0, AshrExact(Sub(arg3, arg2), arg1))",
+  "012": "SdivExact(Sub(arg2, arg1), arg0)",
+  "013": "And(arg1, Add(arg0, arg1))",
   "014": "OrDisjoint(And(arg1, arg2), And(arg0, Add(arg0, arg1)))",
+  "018": "OrDisjoint(arg0, And(arg2, Add(arg1, arg2)))",
   "019": "AddNsw(arg0, AddNsw(arg1, arg2))",
   "020": "Add(arg0, Sub(arg2, arg1))",
   "022": "Add(arg0, Shl(arg2, arg1))",
@@ -9,7 +14,10 @@
   "027": "Lshr(Add(arg1, arg2), arg0)",
   "032": "Lshr(AddNswNuw(arg1, arg2), arg0)",
   "034": "AddNswNuw(arg0, AddNswNuw(arg1, arg2))",
+  "037": "AddNsw(arg1, AshrExact(arg2, arg0))",
+  "038": "AddNsw(arg0, AshrExact(arg2, arg1))",
   "045": "And(arg0, Add(arg0, arg1))",
   "046": "AddNswNuw(arg0, MulNswNuw(arg1, arg2))",
+  "047": "Sub(Add(arg1, arg2), arg0)",
   "050": "AddNswNuw(arg0, Lshr(arg2, arg1))"
 }
