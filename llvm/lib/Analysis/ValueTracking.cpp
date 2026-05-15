@@ -1533,13 +1533,20 @@ static inline void mergePatternKB(std::optional<KnownBits> &Acc,
 ALWAYS_ENABLED_STATISTIC(NumKBQueries, "Number of computeKnownBits queries");
 ALWAYS_ENABLED_STATISTIC(
     TotalKnownBits, "Total known bits discovered across computeKnownBits queries");
+ALWAYS_ENABLED_STATISTIC(NumKBTopLevelQueries,
+                         "Number of computeKnownBits queries at depth 0");
+ALWAYS_ENABLED_STATISTIC(
+    TotalKnownBitsTopLevel,
+    "Total known bits discovered across computeKnownBits queries at depth 0");
 ALWAYS_ENABLED_STATISTIC(NumPatternMatches,
                          "Number of computePatternKB calls with at least one pattern match");
 ALWAYS_ENABLED_STATISTIC(
     NumPatternKBImprovedQueries,
-    "Number of queries improved by pattern KB intersection");
+    "Number of queries improved by pattern KB meet");
 ALWAYS_ENABLED_STATISTIC(
-    PatternKBBitsAdded, "Total bits added by pattern KB intersection");
+    PatternKBBitsAdded, "Total bits added by pattern KB meet");
+ALWAYS_ENABLED_STATISTIC(NumPatternKBConflicts,
+                         "Number of conflicts introduced by pattern KB union");
 
 #if defined(__clang__)
 #pragma clang diagnostic push
@@ -2579,8 +2586,13 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
                       KnownBits &Known, const SimplifyQuery &Q,
                       unsigned Depth) {
   ++NumKBQueries;
+  if (Depth == 0)
+    ++NumKBTopLevelQueries;
   auto CountKnownBitsOnExit = scope_exit([&] {
-    TotalKnownBits += (Known.Zero | Known.One).popcount();
+    unsigned KnownCount = (Known.Zero | Known.One).popcount();
+    TotalKnownBits += KnownCount;
+    if (Depth == 0)
+      TotalKnownBitsTopLevel += KnownCount;
   });
 
   if (!DemandedElts) {
@@ -2716,10 +2728,22 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
       Known = CR->toKnownBits();
   }
 
-  // Intersect pattern-derived facts with the baseline known-bits result.
+  // meet pattern-derived facts with the baseline known-bits result.
   if (PatternKB) {
     unsigned Before = (Known.Zero | Known.One).popcount();
-    Known = Known.intersectWith(*PatternKB);
+    Known = Known.unionWith(*PatternKB);
+    if (Known.hasConflict()) {
+      ++NumPatternKBConflicts;
+      const auto *Inst = dyn_cast<Instruction>(V);
+      const Module *M = Inst ? Inst->getModule() : nullptr;
+      DEBUG_WITH_TYPE("value-tracking",
+                      dbgs() << "[KnownBits DAG] conflict after pattern meet"
+                             << " module-id=\""
+                             << (M ? M->getModuleIdentifier() : "<unknown>")
+                             << "\" source-file=\""
+                             << (M ? M->getSourceFileName() : "<unknown>")
+                             << "\" value=" << *V << "\n");
+    }
     unsigned After = (Known.Zero | Known.One).popcount();
     if (After > Before) {
       ++NumPatternKBImprovedQueries;

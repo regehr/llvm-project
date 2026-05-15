@@ -51,7 +51,6 @@ static std::optional<KnownBits> match003(const Operator *I, const SimplifyQuery 
                 )))
     return std::nullopt;
   ++NumPattern003Matches;
-  LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 003 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
   auto ArrArg2 = kbToArr(computeKnownBits(Arg2, Q, Depth));
@@ -63,7 +62,6 @@ static std::optional<KnownBits> match004(const Operator *I, const SimplifyQuery 
   if (!match(I, m_Exact(m_AShr(m_ExactWrapSub<0>(m_Value(Arg2), m_Value(Arg1)), m_Value(Arg0)))))
     return std::nullopt;
   ++NumPattern004Matches;
-  LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 004 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
   auto ArrArg2 = kbToArr(computeKnownBits(Arg2, Q, Depth));
@@ -78,7 +76,6 @@ static std::optional<KnownBits> match008(const Operator *I, const SimplifyQuery 
                 )))
     return std::nullopt;
   ++NumPattern008Matches;
-  LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 008 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
   auto ArrArg2 = kbToArr(computeKnownBits(Arg2, Q, Depth));
@@ -91,7 +88,6 @@ static std::optional<KnownBits> match012(const Operator *I, const SimplifyQuery 
   if (!match(I, m_Exact(m_SDiv(m_ExactWrapSub<0>(m_Value(Arg2), m_Value(Arg1)), m_Value(Arg0)))))
     return std::nullopt;
   ++NumPattern012Matches;
-  LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 012 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
   auto ArrArg2 = kbToArr(computeKnownBits(Arg2, Q, Depth));
@@ -103,7 +99,6 @@ static std::optional<KnownBits> match013(const Operator *I, const SimplifyQuery 
   if (!match(I, m_c_And(m_Value(Arg1), m_c_ExactWrapAdd<0>(m_Value(Arg0), m_Deferred(Arg1)))))
     return std::nullopt;
   ++NumPattern013Matches;
-  LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 013 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
   return arrToKB(Pattern013::solution(ArrArg0, ArrArg1));
@@ -117,7 +112,6 @@ static std::optional<KnownBits> match014(const Operator *I, const SimplifyQuery 
                 )))
     return std::nullopt;
   ++NumPattern014Matches;
-  LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 014 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
   auto ArrArg2 = kbToArr(computeKnownBits(Arg2, Q, Depth));
@@ -132,7 +126,6 @@ static std::optional<KnownBits> match018(const Operator *I, const SimplifyQuery 
                 )))
     return std::nullopt;
   ++NumPattern018Matches;
-  LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 018 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
   auto ArrArg2 = kbToArr(computeKnownBits(Arg2, Q, Depth));
@@ -150,7 +143,6 @@ static std::optional<KnownBits> match019(const Operator *I, const SimplifyQuery 
                 )))
     return std::nullopt;
   ++NumPattern019Matches;
-  LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 019 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
   auto ArrArg2 = kbToArr(computeKnownBits(Arg2, Q, Depth));
@@ -162,7 +154,6 @@ static std::optional<KnownBits> match020(const Operator *I, const SimplifyQuery 
   if (!match(I, m_c_ExactWrapAdd<0>(m_Value(Arg0), m_ExactWrapSub<0>(m_Value(Arg2), m_Value(Arg1)))))
     return std::nullopt;
   ++NumPattern020Matches;
-  LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 020 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
   auto ArrArg2 = kbToArr(computeKnownBits(Arg2, Q, Depth));
@@ -174,7 +165,6 @@ static std::optional<KnownBits> match022(const Operator *I, const SimplifyQuery 
   if (!match(I, m_c_ExactWrapAdd<0>(m_Value(Arg0), m_ExactWrapShl<0>(m_Value(Arg2), m_Value(Arg1)))))
     return std::nullopt;
   ++NumPattern022Matches;
-  LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 022 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
   auto ArrArg2 = kbToArr(computeKnownBits(Arg2, Q, Depth));
@@ -192,7 +182,6 @@ static std::optional<KnownBits> match025(const Operator *I, const SimplifyQuery 
                 )))
     return std::nullopt;
   ++NumPattern025Matches;
-  LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 025 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
   auto ArrArg2 = kbToArr(computeKnownBits(Arg2, Q, Depth));
@@ -208,7 +197,6 @@ static std::optional<KnownBits> match026(const Operator *I, const SimplifyQuery 
                 )))
     return std::nullopt;
   ++NumPattern026Matches;
-  LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 026 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
   auto ArrArg2 = kbToArr(computeKnownBits(Arg2, Q, Depth));
@@ -220,7 +208,6 @@ static std::optional<KnownBits> match027(const Operator *I, const SimplifyQuery 
   if (!match(I, m_LShr(m_c_ExactWrapAdd<0>(m_Value(Arg1), m_Value(Arg2)), m_Value(Arg0))))
     return std::nullopt;
   ++NumPattern027Matches;
-  LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 027 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
   auto ArrArg2 = kbToArr(computeKnownBits(Arg2, Q, Depth));
@@ -232,7 +219,6 @@ static std::optional<KnownBits> match032(const Operator *I, const SimplifyQuery 
   if (!match(I, m_LShr(m_c_NSWNUWAdd(m_Value(Arg1), m_Value(Arg2)), m_Value(Arg0))))
     return std::nullopt;
   ++NumPattern032Matches;
-  LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 032 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
   auto ArrArg2 = kbToArr(computeKnownBits(Arg2, Q, Depth));
@@ -244,7 +230,6 @@ static std::optional<KnownBits> match034(const Operator *I, const SimplifyQuery 
   if (!match(I, m_c_NSWNUWAdd(m_Value(Arg0), m_c_NSWNUWAdd(m_Value(Arg1), m_Value(Arg2)))))
     return std::nullopt;
   ++NumPattern034Matches;
-  LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 034 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
   auto ArrArg2 = kbToArr(computeKnownBits(Arg2, Q, Depth));
@@ -259,7 +244,6 @@ static std::optional<KnownBits> match037(const Operator *I, const SimplifyQuery 
                 )))
     return std::nullopt;
   ++NumPattern037Matches;
-  LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 037 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
   auto ArrArg2 = kbToArr(computeKnownBits(Arg2, Q, Depth));
@@ -274,7 +258,6 @@ static std::optional<KnownBits> match038(const Operator *I, const SimplifyQuery 
                 )))
     return std::nullopt;
   ++NumPattern038Matches;
-  LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 038 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
   auto ArrArg2 = kbToArr(computeKnownBits(Arg2, Q, Depth));
@@ -286,7 +269,6 @@ static std::optional<KnownBits> match045(const Operator *I, const SimplifyQuery 
   if (!match(I, m_c_And(m_Value(Arg0), m_c_ExactWrapAdd<0>(m_Deferred(Arg0), m_Value(Arg1)))))
     return std::nullopt;
   ++NumPattern045Matches;
-  LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 045 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
   return arrToKB(Pattern045::solution(ArrArg0, ArrArg1));
@@ -297,7 +279,6 @@ static std::optional<KnownBits> match046(const Operator *I, const SimplifyQuery 
   if (!match(I, m_c_NSWNUWAdd(m_Value(Arg0), m_c_NSWNUWMul(m_Value(Arg1), m_Value(Arg2)))))
     return std::nullopt;
   ++NumPattern046Matches;
-  LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 046 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
   auto ArrArg2 = kbToArr(computeKnownBits(Arg2, Q, Depth));
@@ -309,7 +290,6 @@ static std::optional<KnownBits> match047(const Operator *I, const SimplifyQuery 
   if (!match(I, m_ExactWrapSub<0>(m_c_ExactWrapAdd<0>(m_Value(Arg1), m_Value(Arg2)), m_Value(Arg0))))
     return std::nullopt;
   ++NumPattern047Matches;
-  LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 047 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
   auto ArrArg2 = kbToArr(computeKnownBits(Arg2, Q, Depth));
@@ -321,7 +301,6 @@ static std::optional<KnownBits> match050(const Operator *I, const SimplifyQuery 
   if (!match(I, m_c_NSWNUWAdd(m_Value(Arg0), m_LShr(m_Value(Arg2), m_Value(Arg1)))))
     return std::nullopt;
   ++NumPattern050Matches;
-  LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern 050 on: " << *I << "\n");
   auto ArrArg0 = kbToArr(computeKnownBits(Arg0, Q, Depth));
   auto ArrArg1 = kbToArr(computeKnownBits(Arg1, Q, Depth));
   auto ArrArg2 = kbToArr(computeKnownBits(Arg2, Q, Depth));

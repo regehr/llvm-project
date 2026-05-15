@@ -223,9 +223,6 @@ def emit_pattern_function(spec: PatternSpec) -> str:
     out.append(f"  {arg_decl}\n")
     out.append(emit_guard(matcher))
     out.append(f"  ++NumPattern{spec.id}Matches;\n")
-    out.append(
-        f'  LLVM_DEBUG(dbgs() << "[KnownBits DAG] matched pattern {spec.id} on: " << *I << "\\n");\n'
-    )
     for i in r:
         out.append(f"  auto ArrArg{i} = kbToArr(computeKnownBits(Arg{i}, Q, Depth));\n")
     arg_list = ", ".join(f"ArrArg{i}" for i in r)
