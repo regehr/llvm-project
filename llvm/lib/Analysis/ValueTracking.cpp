@@ -20,6 +20,7 @@
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/Analysis/AliasAnalysis.h"
@@ -1528,13 +1529,24 @@ static inline void mergePatternKB(std::optional<KnownBits> &Acc,
     Acc = Acc->intersectWith(*R);
 }
 
+#define DEBUG_TYPE "value-tracking"
+ALWAYS_ENABLED_STATISTIC(NumKBQueries, "Number of computeKnownBits queries");
+ALWAYS_ENABLED_STATISTIC(
+    TotalKnownBits, "Total known bits discovered across computeKnownBits queries");
+ALWAYS_ENABLED_STATISTIC(NumPatternMatches,
+                         "Number of computePatternKB calls with at least one pattern match");
+ALWAYS_ENABLED_STATISTIC(
+    NumPatternKBImprovedQueries,
+    "Number of queries improved by pattern KB intersection");
+ALWAYS_ENABLED_STATISTIC(
+    PatternKBBitsAdded, "Total bits added by pattern KB intersection");
+
 #if defined(__clang__)
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-parameter"
 #pragma clang diagnostic ignored "-Wunused-variable"
 #pragma clang diagnostic ignored "-Wunused-function"
 #endif
-#define DEBUG_TYPE "value-tracking"
 #include "Generated/KnownBitsPatternDispatch.inc"
 #undef DEBUG_TYPE
 #if defined(__clang__)
@@ -2566,6 +2578,11 @@ KnownBits llvm::computeKnownBits(const Value *V, const SimplifyQuery &Q,
 void computeKnownBits(const Value *V, const APInt &DemandedElts,
                       KnownBits &Known, const SimplifyQuery &Q,
                       unsigned Depth) {
+  ++NumKBQueries;
+  auto CountKnownBitsOnExit = scope_exit([&] {
+    TotalKnownBits += (Known.Zero | Known.One).popcount();
+  });
+
   if (!DemandedElts) {
     // No demanded elts, better to assume we don't know anything.
     Known.resetAll();
@@ -2678,8 +2695,11 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
   // Top-level DAG-pattern hook: all public computeKnownBits() overloads
   // eventually flow through this internal entry point.
   std::optional<KnownBits> PatternKB;
-  if (const auto *I = dyn_cast<Operator>(V))
+  if (const auto *I = dyn_cast<Operator>(V)) {
     PatternKB = computePatternKB(I, Q, Depth);
+    if (PatternKB)
+      ++NumPatternMatches;
+  }
 
   // A weak GlobalAlias is totally unknown. A non-weak GlobalAlias has
   // the bits of its aliasee.
@@ -2697,8 +2717,15 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
   }
 
   // Intersect pattern-derived facts with the baseline known-bits result.
-  if (PatternKB)
+  if (PatternKB) {
+    unsigned Before = (Known.Zero | Known.One).popcount();
     Known = Known.intersectWith(*PatternKB);
+    unsigned After = (Known.Zero | Known.One).popcount();
+    if (After > Before) {
+      ++NumPatternKBImprovedQueries;
+      PatternKBBitsAdded += (After - Before);
+    }
+  }
 
   // Aligned pointers have trailing zeros - refine Known.Zero set
   if (isa<PointerType>(V->getType())) {
