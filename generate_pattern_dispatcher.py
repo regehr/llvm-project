@@ -234,19 +234,44 @@ def emit_pattern_function(spec: PatternSpec) -> str:
 def emit_dispatch(roots: dict[str, list[PatternSpec]]) -> str:
     out: list[str] = []
     out.append(
-        "static std::optional<KnownBits> computePatternKB(const Operator *I, const SimplifyQuery &Q, unsigned Depth) {\n"
+        "static void computePatternKBMatches(const Operator *I, const SimplifyQuery &Q,\n"
     )
-    out.append("  std::optional<KnownBits> Acc;\n")
+    out.append(
+        "                                    unsigned Depth,\n"
+    )
+    out.append(
+        "                                    SmallVectorImpl<PatternMatchKB> &Matches) {\n"
+    )
     out.append("  switch (classifyPatternOp(I, Q)) {\n")
     for root in sorted(roots.keys()):
         out.append(f"  case PatternOp::{root}:\n")
         for spec in roots[root]:
-            out.append(f"    mergePatternKB(Acc, match{spec.id}(I, Q, Depth + 1));\n")
+            out.append(f"    if (auto KB = match{spec.id}(I, Q, Depth + 1))\n")
+            out.append(f"      Matches.push_back(PatternMatchKB{{{int(spec.id)}, *KB}});\n")
         out.append("    break;\n")
     out.append("  default:\n")
     out.append("    break;\n")
     out.append("  }\n")
-    out.append("  return Acc;\n")
+    out.append("}\n")
+    return "".join(out)
+
+
+def emit_pattern_impact_stats(specs: list[PatternSpec]) -> str:
+    out: list[str] = []
+    out.append(
+        "static void recordPatternImpact(unsigned ID, unsigned BitsAdded, bool Conflict) {\n"
+    )
+    out.append("  switch (ID) {\n")
+    for spec in specs:
+        out.append(f"  case {int(spec.id)}:\n")
+        out.append(
+            f"    if (BitsAdded > 0) ++NumPattern{spec.id}ImprovedQueries, Pattern{spec.id}BitsAdded += BitsAdded;\n"
+        )
+        out.append(f"    if (Conflict) ++NumPattern{spec.id}Conflicts;\n")
+        out.append("    return;\n")
+    out.append("  default:\n")
+    out.append("    return;\n")
+    out.append("  }\n")
     out.append("}\n")
     return "".join(out)
 
@@ -284,12 +309,23 @@ def main() -> None:
         out.append(
             f'ALWAYS_ENABLED_STATISTIC(NumPattern{spec.id}Matches, "KnownBits DAG pattern {spec.id} matches");\n'
         )
+        out.append(
+            f'ALWAYS_ENABLED_STATISTIC(NumPattern{spec.id}ImprovedQueries, "KnownBits DAG pattern {spec.id} improved queries against vanilla known bits");\n'
+        )
+        out.append(
+            f'ALWAYS_ENABLED_STATISTIC(Pattern{spec.id}BitsAdded, "KnownBits DAG pattern {spec.id} total bits added against vanilla known bits");\n'
+        )
+        out.append(
+            f'ALWAYS_ENABLED_STATISTIC(NumPattern{spec.id}Conflicts, "KnownBits DAG pattern {spec.id} meet conflicts against vanilla known bits");\n'
+        )
     out.append("\n")
 
     for spec in specs:
         out.append(emit_pattern_function(spec))
         out.append("\n")
 
+    out.append(emit_pattern_impact_stats(specs))
+    out.append("\n")
     out.append(emit_dispatch(roots))
 
     args.output.write_text("".join(out))

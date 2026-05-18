@@ -1519,16 +1519,6 @@ static PatternOp classifyPatternOp(const Operator *I, const SimplifyQuery &Q) {
   }
 }
 
-static inline void mergePatternKB(std::optional<KnownBits> &Acc,
-                                  const std::optional<KnownBits> &R) {
-  if (!R)
-    return;
-  if (!Acc)
-    Acc = *R;
-  else
-    Acc = Acc->intersectWith(*R);
-}
-
 #define DEBUG_TYPE "value-tracking"
 ALWAYS_ENABLED_STATISTIC(NumKBQueries, "Number of computeKnownBits queries");
 ALWAYS_ENABLED_STATISTIC(
@@ -1546,7 +1536,12 @@ ALWAYS_ENABLED_STATISTIC(
 ALWAYS_ENABLED_STATISTIC(
     PatternKBBitsAdded, "Total bits added by pattern KB meet");
 ALWAYS_ENABLED_STATISTIC(NumPatternKBConflicts,
-                         "Number of conflicts introduced by pattern KB union");
+                         "Number of conflicts introduced by pattern KB meet");
+
+struct PatternMatchKB {
+  unsigned ID;
+  KnownBits KB;
+};
 
 #if defined(__clang__)
 #pragma clang diagnostic push
@@ -2706,10 +2701,10 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
 
   // Top-level DAG-pattern hook: all public computeKnownBits() overloads
   // eventually flow through this internal entry point.
-  std::optional<KnownBits> PatternKB;
+  SmallVector<PatternMatchKB, 4> PatternMatches;
   if (const auto *I = dyn_cast<Operator>(V)) {
-    PatternKB = computePatternKB(I, Q, Depth);
-    if (PatternKB)
+    computePatternKBMatches(I, Q, Depth, PatternMatches);
+    if (!PatternMatches.empty())
       ++NumPatternMatches;
   }
 
@@ -2728,27 +2723,45 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
       Known = CR->toKnownBits();
   }
 
-  // meet pattern-derived facts with the baseline known-bits result.
-  if (PatternKB) {
-    unsigned Before = (Known.Zero | Known.One).popcount();
-    Known = Known.unionWith(*PatternKB);
-    if (Known.hasConflict()) {
-      ++NumPatternKBConflicts;
-      const auto *Inst = dyn_cast<Instruction>(V);
-      const Module *M = Inst ? Inst->getModule() : nullptr;
-      DEBUG_WITH_TYPE("value-tracking",
-                      dbgs() << "[KnownBits DAG] conflict after pattern meet"
-                             << " module-id=\""
-                             << (M ? M->getModuleIdentifier() : "<unknown>")
-                             << "\" source-file=\""
-                             << (M ? M->getSourceFileName() : "<unknown>")
-                             << "\" value=" << *V << "\n");
+  // Measure each matched pattern's precision gain against the vanilla Known.
+  // Then meet the combined pattern result into Known for final semantics.
+  if (!PatternMatches.empty()) {
+    const KnownBits VanillaKnown = Known;
+    std::optional<KnownBits> PatternMeet;
+    for (const PatternMatchKB &PM : PatternMatches) {
+      const unsigned Before = (VanillaKnown.Zero | VanillaKnown.One).popcount();
+      KnownBits Candidate = VanillaKnown.unionWith(PM.KB);
+      const bool Conflict = Candidate.hasConflict();
+      const unsigned After = (Candidate.Zero | Candidate.One).popcount();
+      const unsigned BitsAdded = After > Before ? (After - Before) : 0;
+      recordPatternImpact(PM.ID, BitsAdded, Conflict);
+
+      if (Conflict) {
+        ++NumPatternKBConflicts;
+        const auto *Inst = dyn_cast<Instruction>(V);
+        const Module *M = Inst ? Inst->getModule() : nullptr;
+        DEBUG_WITH_TYPE("value-tracking",
+                        dbgs() << "[KnownBits DAG] conflict after pattern meet"
+                               << " pattern=" << PM.ID
+                               << " module-id=\""
+                               << (M ? M->getModuleIdentifier() : "<unknown>")
+                               << "\" source-file=\""
+                               << (M ? M->getSourceFileName() : "<unknown>")
+                               << "\" value=" << *V << "\n");
+      }
+      if (BitsAdded > 0) {
+        ++NumPatternKBImprovedQueries;
+        PatternKBBitsAdded += BitsAdded;
+      }
+
+      if (!PatternMeet)
+        PatternMeet = PM.KB;
+      else
+        PatternMeet = PatternMeet->intersectWith(PM.KB);
     }
-    unsigned After = (Known.Zero | Known.One).popcount();
-    if (After > Before) {
-      ++NumPatternKBImprovedQueries;
-      PatternKBBitsAdded += (After - Before);
-    }
+
+    if (PatternMeet)
+      Known = Known.unionWith(*PatternMeet);
   }
 
   // Aligned pointers have trailing zeros - refine Known.Zero set
