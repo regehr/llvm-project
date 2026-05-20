@@ -373,57 +373,33 @@ std::optional<PatternTree> makeBoundaryTree(const Value *V) {
   return PatternTree::makeBoundary(V, *Ty, getBitWidth(V->getType()));
 }
 
-int getDAGSize(const Value *Val, DenseMap<const Value *, int> &SizeMap) {
-  auto It = SizeMap.find(Val);
-  if (It != SizeMap.end())
-    return It->second;
+std::vector<PatternTree> enumeratePatternHelper(const Value *Val,
+                                                unsigned Size);
 
-  auto *Inst = dyn_cast<Instruction>(Val);
-  auto Op = Inst ? getPatternOp(Inst) : std::nullopt;
-  int Size = Op ? 1 : 0;
-  if (Op) {
-    for (unsigned OperandIndex : Op->OperandIndices)
-      Size += getDAGSize(Inst->getOperand(OperandIndex), SizeMap);
-  }
-  SizeMap[Val] = Size;
-  return Size;
-}
-
-std::vector<PatternTree>
-enumeratePatternHelper(const Value *Val, int Size,
-                       DenseMap<const Value *, int> &SizeMap);
-
-void enumerateSizePartitions(ArrayRef<int> OperandSizes,
-                             MutableArrayRef<int> SizePartition,
-                             std::size_t OperandNo, int RemainingSize,
-                             function_ref<void(ArrayRef<int>)> Callback) {
-  if (OperandNo == OperandSizes.size()) {
+void enumerateSizePartitions(unsigned NumOperands,
+                             MutableArrayRef<unsigned> SizePartition,
+                             std::size_t OperandNo, unsigned RemainingSize,
+                             function_ref<void(ArrayRef<unsigned>)> Callback) {
+  if (OperandNo == NumOperands) {
     if (RemainingSize == 0)
       Callback(SizePartition);
     return;
   }
 
-  int RemainingCapacity = 0;
-  for (std::size_t I = OperandNo + 1; I < OperandSizes.size(); ++I)
-    RemainingCapacity += OperandSizes[I];
-
-  int UpperBound = std::min(OperandSizes[OperandNo], RemainingSize);
-  int LowerBound = std::max(0, RemainingSize - RemainingCapacity);
-  for (int OperandSize = LowerBound; OperandSize <= UpperBound; ++OperandSize) {
+  for (unsigned OperandSize = 0; OperandSize <= RemainingSize; ++OperandSize) {
     SizePartition[OperandNo] = OperandSize;
-    enumerateSizePartitions(OperandSizes, SizePartition, OperandNo + 1,
+    enumerateSizePartitions(NumOperands, SizePartition, OperandNo + 1,
                             RemainingSize - OperandSize, Callback);
   }
 }
 
 std::optional<SmallVector<std::vector<PatternTree>, 3>>
 getOperandPatternTreesForPartition(const Instruction *Inst, const PatternOp &Op,
-                                   ArrayRef<int> SizePartition,
-                                   DenseMap<const Value *, int> &SizeMap) {
+                                   ArrayRef<unsigned> SizePartition) {
   SmallVector<std::vector<PatternTree>, 3> OperandTrees;
   for (std::size_t I = 0; I < Op.OperandIndices.size(); ++I) {
     OperandTrees.push_back(enumeratePatternHelper(
-        Inst->getOperand(Op.OperandIndices[I]), SizePartition[I], SizeMap));
+        Inst->getOperand(Op.OperandIndices[I]), SizePartition[I]));
     if (OperandTrees.back().empty())
       return std::nullopt;
   }
@@ -448,43 +424,39 @@ void enumerateOperandProducts(const Instruction *Inst, const PatternOp &Op,
   }
 }
 
-std::vector<PatternTree>
-enumeratePatternHelper(const Value *Val, int Size,
-                       DenseMap<const Value *, int> &SizeMap) {
-  auto *Inst = dyn_cast<Instruction>(Val);
-  if (!Inst || Size == 0) {
+std::vector<PatternTree> enumeratePatternHelper(const Value *Val,
+                                                unsigned Size) {
+  if (Size == 0) {
     if (auto Boundary = makeBoundaryTree(Val))
       return {*Boundary};
+    return {};
   }
 
+  auto *Inst = dyn_cast<Instruction>(Val);
   if (!Inst)
     return {};
 
   auto Op = getPatternOp(Inst);
-  if (!Op) {
-    if (auto Boundary = makeBoundaryTree(Val))
-      return {*Boundary};
+  if (!Op)
     return {};
-  }
 
   std::vector<PatternTree> Result;
-  SmallVector<int, 3> OperandSizes;
-  for (unsigned OperandIndex : Op->OperandIndices)
-    OperandSizes.push_back(getDAGSize(Inst->getOperand(OperandIndex), SizeMap));
 
-  SmallVector<int, 3> SizePartition(Op->OperandIndices.size(), 0);
-  enumerateSizePartitions(
-      OperandSizes, SizePartition, 0, Size - 1, [&](ArrayRef<int> Partition) {
-        auto OperandTrees =
-            getOperandPatternTreesForPartition(Inst, *Op, Partition, SizeMap);
-        if (!OperandTrees)
-          return;
+  SmallVector<unsigned, 3> SizePartition(Op->OperandIndices.size(), 0);
+  enumerateSizePartitions(Op->OperandIndices.size(), SizePartition, 0, Size - 1,
+                          [&](ArrayRef<unsigned> Partition) {
+                            auto OperandTrees =
+                                getOperandPatternTreesForPartition(Inst, *Op,
+                                                                   Partition);
+                            if (!OperandTrees)
+                              return;
 
-        SmallVector<PatternTree, 3> ChosenOperands;
-        ChosenOperands.reserve(Op->OperandIndices.size());
-        enumerateOperandProducts(Inst, *Op, *OperandTrees, ChosenOperands,
-                                 Result);
-      });
+                            SmallVector<PatternTree, 3> ChosenOperands;
+                            ChosenOperands.reserve(Op->OperandIndices.size());
+                            enumerateOperandProducts(Inst, *Op, *OperandTrees,
+                                                     ChosenOperands, Result);
+                          });
+
   return Result;
 }
 
@@ -596,14 +568,8 @@ void enumeratePatterns(
   if (!RootOp || RootOp->ResultType != PatternValueType::DataInt)
     return;
 
-  DenseMap<const Value *, int> SizeMap;
-  int RootSize = getDAGSize(Root, SizeMap);
   for (unsigned PatternSize : PatternSizes) {
-    if (static_cast<int>(PatternSize) > RootSize)
-      continue;
-
-    for (const PatternTree &Tree :
-         enumeratePatternHelper(Root, PatternSize, SizeMap)) {
+    for (const PatternTree &Tree : enumeratePatternHelper(Root, PatternSize)) {
       if (auto Pattern = renderPattern(Tree))
         Callback(PatternSize, *Pattern);
     }
