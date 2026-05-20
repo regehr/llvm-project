@@ -37,29 +37,29 @@ llvm::cl::opt<std::string>
                    llvm::cl::init("patterns.tsv"),
                    llvm::cl::cat(SlicerOptions));
 
-llvm::cl::opt<int> SliceDepth("depth", llvm::cl::desc("Backward slice depth"),
-                              llvm::cl::value_desc("N"),
-                              llvm::cl::cat(SlicerOptions), llvm::cl::init(5));
-
-llvm::cl::opt<bool> SymbolizeConstants(
-    "slice-constant",
-    llvm::cl::desc("Treat integer constants as constant placeholders when "
-                   "matching patterns"),
-    llvm::cl::value_desc("bool"), llvm::cl::cat(SlicerOptions),
-    llvm::cl::init(false));
-
-llvm::cl::list<unsigned>
-    PatternSizes("pattern-size",
-                 llvm::cl::desc("Operation counts for enumerated subpatterns "
-                                "(default: every size from 2 through --depth)"),
-                 llvm::cl::value_desc("s1,s2,s3,..."), llvm::cl::CommaSeparated,
-                 llvm::cl::cat(SlicerOptions), llvm::cl::ZeroOrMore);
+// llvm::cl::opt<int> SliceDepth("depth", llvm::cl::desc("Backward slice depth"),
+//                               llvm::cl::value_desc("N"),
+//                               llvm::cl::cat(SlicerOptions), llvm::cl::init(5));
+//
+// llvm::cl::opt<bool> SymbolizeConstants(
+//     "slice-constant",
+//     llvm::cl::desc("Treat integer constants as constant placeholders when "
+//                    "matching patterns"),
+//     llvm::cl::value_desc("bool"), llvm::cl::cat(SlicerOptions),
+//     llvm::cl::init(false));
+//
+// llvm::cl::list<unsigned>
+//     PatternSizes("pattern-size",
+//                  llvm::cl::desc("Operation counts for enumerated subpatterns "
+//                                 "(default: every size from 2 through --depth)"),
+//                  llvm::cl::value_desc("s1,s2,s3,..."), llvm::cl::CommaSeparated,
+//                  llvm::cl::cat(SlicerOptions), llvm::cl::ZeroOrMore);
 
 } // namespace
 
 static llvm::ExitOnError ExitOnErr;
 
-std::unique_ptr<llvm::Module> openInputFile(llvm::LLVMContext &Context,
+static std::unique_ptr<llvm::Module> openInputFile(llvm::LLVMContext &Context,
                                             const std::string &Filename) {
   auto MB = ExitOnErr(errorOrToExpected(llvm::MemoryBuffer::getFile(Filename)));
   llvm::SMDiagnostic Diag;
@@ -73,20 +73,19 @@ std::unique_ptr<llvm::Module> openInputFile(llvm::LLVMContext &Context,
   return M;
 }
 
-std::string getOutputDirectory() {
+static std::string getOutputDirectory() {
   return llvm::sys::path::parent_path(OutputFilename).str();
 }
 
 class PatternSlicer {
 public:
-  PatternSlicer(llvm::Module &Module, llvm::DAGSlicer::Config Config)
-      : Module(Module), Config(std::move(Config)) {}
+  PatternSlicer(llvm::Module &Module) : Module(Module) {}
 
   void run() {
     for (llvm::Function &SourceFunction : Module) {
       for (llvm::Instruction &Inst : llvm::instructions(SourceFunction)) {
         llvm::DAGSlicer::enumeratePatterns(
-            &Inst, Config, [&](unsigned, llvm::StringRef Pattern) {
+            &Inst, [&](unsigned, llvm::StringRef Pattern) {
               ++PatternCounts[Pattern.str()];
               ++PatternOccurrenceCount;
             });
@@ -122,7 +121,6 @@ public:
 
 private:
   llvm::Module &Module;
-  llvm::DAGSlicer::Config Config;
   std::unordered_map<std::string, unsigned> PatternCounts;
   unsigned PatternOccurrenceCount = 0;
 };
@@ -155,14 +153,7 @@ int main(int argc, char **argv) {
     return -1;
   }
 
-  llvm::DAGSlicer::Config Config;
-  Config.MaxPatternSize = SliceDepth;
-  Config.SymbolizeConstants = SymbolizeConstants;
-  for (unsigned PatternSize : PatternSizes)
-    Config.PatternSizes.push_back(PatternSize);
-  llvm::sort(Config.PatternSizes);
-
-  PatternSlicer Slicer(*ModuleOwner, std::move(Config));
+  PatternSlicer Slicer(*ModuleOwner);
   Slicer.run();
   Slicer.writePatternCounts(OutputFilename);
 
