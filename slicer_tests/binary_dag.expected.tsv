@@ -1,0 +1,2 @@
+count	pattern
+1	AshrExact(Add(arg0, arg1), arg2)

@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/ValueTracking.h"
+#include "DAGSlicer.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -2446,6 +2447,9 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
            "V and Known should have same BitWidth");
   }
 #endif
+
+  // if (Depth == 0)
+  DAGSlicer::recordPatterns(V, Depth);
 
   const APInt *C;
   if (match(V, m_APInt(C))) {
