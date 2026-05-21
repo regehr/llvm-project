@@ -2727,7 +2727,7 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
   // Then meet the combined pattern result into Known for final semantics.
   if (!PatternMatches.empty()) {
     const KnownBits VanillaKnown = Known;
-    std::optional<KnownBits> PatternMeet;
+    std::optional<KnownBits> PatternKnown;
     for (const PatternMatchKB &PM : PatternMatches) {
       const unsigned Before = (VanillaKnown.Zero | VanillaKnown.One).popcount();
       KnownBits Candidate = VanillaKnown.unionWith(PM.KB);
@@ -2749,19 +2749,20 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
                                << (M ? M->getSourceFileName() : "<unknown>")
                                << "\" value=" << *V << "\n");
       }
+
       if (BitsAdded > 0) {
         ++NumPatternKBImprovedQueries;
         PatternKBBitsAdded += BitsAdded;
       }
 
-      if (!PatternMeet)
-        PatternMeet = PM.KB;
+      if (!PatternKnown)
+        PatternKnown = PM.KB;
       else
-        PatternMeet = PatternMeet->intersectWith(PM.KB);
+        PatternKnown = PatternKnown->unionWith(PM.KB);
     }
 
-    if (PatternMeet)
-      Known = Known.unionWith(*PatternMeet);
+    if (PatternKnown)
+      Known = Known.unionWith(*PatternKnown);
   }
 
   // Aligned pointers have trailing zeros - refine Known.Zero set
