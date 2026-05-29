@@ -1,9 +1,10 @@
-from argparse import ArgumentParser
+from argparse import ArgumentParser, BooleanOptionalAction
 from dataclasses import dataclass
 from json import loads
 from pathlib import Path
 from collections import defaultdict
 import re
+import shutil
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,7 @@ OP_MATCHER = {
     "ShlNuw": f"m_ExactWrapShl<{NUW}>",
     "ShlNswNuw": f"m_ExactWrapShl<{NSWNUW}>",
     "Srem": "m_SRem",
+    "Mods": "m_SRem",
     "Sub": "m_ExactWrapSub<0>",
     "SubNsw": f"m_ExactWrapSub<{NSW}>",
     "SubNuw": f"m_ExactWrapSub<{NUW}>",
@@ -64,7 +66,16 @@ OP_MATCHER = {
     "Udiv": "m_UDiv",
     "UdivExact": "m_Exact(m_UDiv({L}, {R}))",
     "Urem": "m_URem",
+    "Modu": "m_URem",
     "Xor": "m_c_Xor",
+}
+
+# Some op names in patterns.json are aliases that classifyPatternOp folds into a
+# canonical PatternOp enum member. The dispatch switch must use the canonical
+# name (the enum has no Mods/Modu members).
+PATTERN_OP_CANON = {
+    "Mods": "Srem",
+    "Modu": "Urem",
 }
 
 
@@ -216,17 +227,24 @@ def emit_pattern_function(spec: PatternSpec) -> str:
     arg_decl = "const Value " + ", ".join(f"*Arg{i} = nullptr" for i in r) + ";"
 
     matcher = emit_match_expr(spec.ast, set())
+    pid_int = int(spec.id)
     out: list[str] = []
     out.append(
-        f"static std::optional<KnownBits> match{spec.id}(const Operator *I, const SimplifyQuery &Q, unsigned Depth) {{\n"
+        f"static std::optional<PatternMatchKB> match{spec.id}(const Operator *I, const SimplifyQuery &Q, unsigned Depth) {{\n"
     )
     out.append(f"  {arg_decl}\n")
     out.append(emit_guard(matcher))
     out.append(f"  ++NumPattern{spec.id}Matches;\n")
     for i in r:
-        out.append(f"  auto ArrArg{i} = kbToArr(computeKnownBits(Arg{i}, Q, Depth));\n")
+        out.append(f"  auto KBArg{i} = computeKnownBits(Arg{i}, Q, Depth);\n")
+    for i in r:
+        out.append(f"  auto ArrArg{i} = kbToArr(KBArg{i});\n")
     arg_list = ", ".join(f"ArrArg{i}" for i in r)
-    out.append(f"  return arrToKB(Pattern{spec.id}::solution({arg_list}));\n")
+    out.append(f"  auto Out = arrToKB(Pattern{spec.id}::solution({arg_list}));\n")
+    inputs_init = ", ".join(f"KBArg{i}" for i in r)
+    out.append(
+        f"  return PatternMatchKB{{{pid_int}u, std::move(Out), {{{inputs_init}}}}};\n"
+    )
     out.append("}\n")
     return "".join(out)
 
@@ -246,8 +264,8 @@ def emit_dispatch(roots: dict[str, list[PatternSpec]]) -> str:
     for root in sorted(roots.keys()):
         out.append(f"  case PatternOp::{root}:\n")
         for spec in roots[root]:
-            out.append(f"    if (auto KB = match{spec.id}(I, Q, Depth + 1))\n")
-            out.append(f"      Matches.push_back(PatternMatchKB{{{int(spec.id)}, *KB}});\n")
+            out.append(f"    if (auto M = match{spec.id}(I, Q, Depth + 1))\n")
+            out.append(f"      Matches.push_back(std::move(*M));\n")
         out.append("    break;\n")
     out.append("  default:\n")
     out.append("    break;\n")
@@ -276,13 +294,42 @@ def emit_pattern_impact_stats(specs: list[PatternSpec]) -> str:
     return "".join(out)
 
 
+def find_inc_dir(input_dir: Path) -> Path:
+    """Return the inc/ subdirectory of input_dir holding pattern_*.inc files."""
+    inc_dir = input_dir / "inc"
+    if not inc_dir.is_dir() or not any(inc_dir.glob("pattern_*.inc")):
+        raise ValueError(
+            f"expected {inc_dir} to exist and contain pattern_*.inc files"
+        )
+    return inc_dir
+
+
 def main() -> None:
-    ap = ArgumentParser()
-    ap.add_argument("-i", "--input", type=Path, required=True)
-    ap.add_argument("-o", "--output", type=Path, required=True)
+    ap = ArgumentParser(
+        description="Generate KnownBitsPatternDispatch.inc from a transformer "
+        "folder (patterns.json + a subdir of pattern_*.inc) and copy the .inc "
+        "files into the Generated tree."
+    )
+    ap.add_argument(
+        "input_dir", type=Path,
+        help="Transformer folder laid out as: <input_dir>/patterns.json "
+        "(maps pattern id -> DAG expression) and <input_dir>/inc/ "
+        "(holds one pattern_<id>.inc per id in patterns.json).",
+    )
+    ap.add_argument(
+        "--generated-dir", type=Path,
+        default=Path("llvm/lib/Analysis/Generated"),
+        help="Destination for KnownBitsPatternDispatch.inc and the copied "
+        "patterns/ directory (default: %(default)s)",
+    )
+    ap.add_argument(
+        "--include-helper", action=BooleanOptionalAction, default=False,
+        help='Emit #include "table_helper.inc" in the dispatcher. Needed for '
+        "lookup-table transformers;",
+    )
     args = ap.parse_args()
 
-    data = loads(args.input.read_text())
+    data = loads((args.input_dir / "patterns.json").read_text())
     specs: list[PatternSpec] = []
     for pid, expr in data.items():
         ast = parse_expr(expr)
@@ -298,10 +345,25 @@ def main() -> None:
 
     roots: dict[str, list[PatternSpec]] = defaultdict(list)
     for spec in specs:
-        roots[spec.root].append(spec)
+        roots[PATTERN_OP_CANON.get(spec.root, spec.root)].append(spec)
+
+    # Copy the transformer .inc files into <generated-dir>/patterns, clearing any
+    # stale ones first so a smaller pattern set doesn't leave orphans behind.
+    inc_src = find_inc_dir(args.input_dir)
+    patterns_dst = args.generated_dir / "patterns"
+    patterns_dst.mkdir(parents=True, exist_ok=True)
+    for old in patterns_dst.glob("pattern_*.inc"):
+        old.unlink()
+    for spec in specs:
+        src = inc_src / f"pattern_{spec.id}.inc"
+        if not src.exists():
+            raise ValueError(f"missing {src} for pattern {spec.id} listed in patterns.json")
+        shutil.copyfile(src, patterns_dst / f"pattern_{spec.id}.inc")
 
     out: list[str] = []
     out.append("// Auto-generated by generate_pattern_dispatcher.py. Do not edit.\n")
+    if args.include_helper:
+        out.append('#include "table_helper.inc"\n')
     for spec in specs:
         out.append(f'#include "patterns/pattern_{spec.id}.inc" // {spec.expr}\n')
     out.append("\n")
@@ -328,7 +390,11 @@ def main() -> None:
     out.append("\n")
     out.append(emit_dispatch(roots))
 
-    args.output.write_text("".join(out))
+    dispatch_out = args.generated_dir / "KnownBitsPatternDispatch.inc"
+    dispatch_out.write_text("".join(out))
+
+    print(f"copied {len(specs)} pattern .inc from {inc_src} -> {patterns_dst}")
+    print(f"wrote dispatcher -> {dispatch_out} (include helper: {args.include_helper})")
 
 
 if __name__ == "__main__":

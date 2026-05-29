@@ -74,6 +74,7 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/Format.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/KnownFPClass.h"
 #include "llvm/Support/MathExtras.h"
@@ -1541,6 +1542,7 @@ ALWAYS_ENABLED_STATISTIC(NumPatternKBConflicts,
 struct PatternMatchKB {
   unsigned ID;
   KnownBits KB;
+  SmallVector<KnownBits, 4> Inputs;
 };
 
 #if defined(__clang__)
@@ -2735,6 +2737,15 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
       const unsigned After = (Candidate.Zero | Candidate.One).popcount();
       const unsigned BitsAdded = After > Before ? (After - Before) : 0;
       recordPatternImpact(PM.ID, BitsAdded, Conflict);
+
+      DEBUG_WITH_TYPE("value-tracking-pattern", {
+        dbgs() << format("[p%03u]", PM.ID);
+        for (size_t i = 0; i < PM.Inputs.size(); ++i)
+          dbgs() << " in" << i << "=" << PM.Inputs[i];
+        dbgs() << " vanilla=" << VanillaKnown << " pattern=" << PM.KB
+               << " combined=" << Candidate << " bitsAdded=" << BitsAdded
+               << (Conflict ? " CONFLICT" : "") << "\n";
+      });
 
       if (Conflict) {
         ++NumPatternKBConflicts;
