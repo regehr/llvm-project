@@ -10,11 +10,11 @@ class Value;
 
 namespace DAGSlicer {
 
-void enumeratePatterns(
-    const Value *Root,
-    function_ref<void(unsigned PatternSize, StringRef Pattern)> Callback);
+void enumeratePatterns(const Value *Root, unsigned MinDepth, unsigned MaxDepth,
+                       function_ref<void(StringRef Pattern)> Callback);
 
-void recordPatterns(const Value *Root, unsigned KnownBitsDepth);
+void recordPatterns(const Value *Root, unsigned AnalysisDepth,
+                    unsigned MinDepth, unsigned MaxDepth);
 
 } // namespace DAGSlicer
 } // namespace llvm

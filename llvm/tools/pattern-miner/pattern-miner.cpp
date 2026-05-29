@@ -1,3 +1,5 @@
+#include "DAGSlicer.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstIterator.h"
@@ -13,7 +15,6 @@
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/lib/Analysis/DAGSlicer.h"
 
 #include <algorithm>
 #include <fstream>
@@ -24,43 +25,31 @@
 #include <vector>
 
 namespace {
-llvm::cl::OptionCategory SlicerOptions("Slicer options");
+llvm::cl::OptionCategory PatternMinerOptions("Pattern miner options");
 
 llvm::cl::opt<std::string>
     InputFilename("input", llvm::cl::desc("Input LLVM IR or bitcode file"),
                   llvm::cl::Required, llvm::cl::value_desc("filename"),
-                  llvm::cl::cat(SlicerOptions));
+                  llvm::cl::cat(PatternMinerOptions));
 
 llvm::cl::opt<std::string>
     OutputFilename("output", llvm::cl::desc("TSV file for pattern counts"),
                    llvm::cl::value_desc("filename"),
                    llvm::cl::init("patterns.tsv"),
-                   llvm::cl::cat(SlicerOptions));
+                   llvm::cl::cat(PatternMinerOptions));
 
-// llvm::cl::opt<int> SliceDepth("depth", llvm::cl::desc("Backward slice depth"),
-//                               llvm::cl::value_desc("N"),
-//                               llvm::cl::cat(SlicerOptions), llvm::cl::init(5));
-//
-// llvm::cl::opt<bool> SymbolizeConstants(
-//     "slice-constant",
-//     llvm::cl::desc("Treat integer constants as constant placeholders when "
-//                    "matching patterns"),
-//     llvm::cl::value_desc("bool"), llvm::cl::cat(SlicerOptions),
-//     llvm::cl::init(false));
-//
-// llvm::cl::list<unsigned>
-//     PatternSizes("pattern-size",
-//                  llvm::cl::desc("Operation counts for enumerated subpatterns "
-//                                 "(default: every size from 2 through --depth)"),
-//                  llvm::cl::value_desc("s1,s2,s3,..."), llvm::cl::CommaSeparated,
-//                  llvm::cl::cat(SlicerOptions), llvm::cl::ZeroOrMore);
+llvm::cl::opt<unsigned>
+    PatternDepth("depth", llvm::cl::desc("Maximum pattern depth to mine"),
+                 llvm::cl::value_desc("N"),
+                 llvm::cl::init(llvm::MaxAnalysisRecursionDepth),
+                 llvm::cl::cat(PatternMinerOptions));
 
 } // namespace
 
 static llvm::ExitOnError ExitOnErr;
 
-static std::unique_ptr<llvm::Module> openInputFile(llvm::LLVMContext &Context,
-                                            const std::string &Filename) {
+static std::unique_ptr<llvm::Module>
+openInputFile(llvm::LLVMContext &Context, const std::string &Filename) {
   auto MB = ExitOnErr(errorOrToExpected(llvm::MemoryBuffer::getFile(Filename)));
   llvm::SMDiagnostic Diag;
   auto M = getLazyIRModule(std::move(MB), Diag, Context,
@@ -77,18 +66,18 @@ static std::string getOutputDirectory() {
   return llvm::sys::path::parent_path(OutputFilename).str();
 }
 
-class PatternSlicer {
+class PatternMiner {
 public:
-  PatternSlicer(llvm::Module &Module) : Module(Module) {}
+  PatternMiner(llvm::Module &Module) : Module(Module) {}
 
   void run() {
     for (llvm::Function &SourceFunction : Module) {
       for (llvm::Instruction &Inst : llvm::instructions(SourceFunction)) {
-        llvm::DAGSlicer::enumeratePatterns(
-            &Inst, [&](unsigned, llvm::StringRef Pattern) {
-              ++PatternCounts[Pattern.str()];
-              ++PatternOccurrenceCount;
-            });
+        llvm::DAGSlicer::enumeratePatterns(&Inst, 2, PatternDepth,
+                                           [&](llvm::StringRef Pattern) {
+                                             ++PatternCounts[Pattern.str()];
+                                             ++PatternOccurrenceCount;
+                                           });
       }
     }
   }
@@ -131,10 +120,15 @@ int main(int argc, char **argv) {
   llvm::EnableDebugBuffering = true;
   llvm::LLVMContext Context;
 
-  std::string Usage = "Extract integer DAG patterns from LLVM IR.\n";
+  std::string Usage = "Mine integer DAG patterns from LLVM IR.\n";
 
-  llvm::cl::HideUnrelatedOptions(SlicerOptions);
+  llvm::cl::HideUnrelatedOptions(PatternMinerOptions);
   llvm::cl::ParseCommandLineOptions(argc, argv, Usage);
+
+  if (PatternDepth < 2) {
+    llvm::errs() << "Error: --depth must be at least 2\n";
+    return -1;
+  }
 
   std::string OutputDirectory = getOutputDirectory();
   if (!OutputDirectory.empty()) {
@@ -153,12 +147,12 @@ int main(int argc, char **argv) {
     return -1;
   }
 
-  PatternSlicer Slicer(*ModuleOwner);
-  Slicer.run();
-  Slicer.writePatternCounts(OutputFilename);
+  PatternMiner Miner(*ModuleOwner);
+  Miner.run();
+  Miner.writePatternCounts(OutputFilename);
 
-  llvm::errs() << "Pattern occurrences: " << Slicer.getPatternOccurrenceCount()
+  llvm::errs() << "Pattern occurrences: " << Miner.getPatternOccurrenceCount()
                << "\n";
-  llvm::errs() << "Unique patterns: " << Slicer.getUniquePatternCount() << "\n";
+  llvm::errs() << "Unique patterns: " << Miner.getUniquePatternCount() << "\n";
   return 0;
 }

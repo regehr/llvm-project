@@ -91,6 +91,16 @@ using namespace llvm::PatternMatch;
 static cl::opt<unsigned> DomConditionsMaxUses("dom-conditions-max-uses",
                                               cl::Hidden, cl::init(20));
 
+static cl::opt<bool> EnableKnownBitsPatternMining(
+    "enable-knownbits-pattern-mining", cl::Hidden, cl::init(false),
+    cl::desc("Mine and print DAGSlicer patterns from computeKnownBits. "
+             "Requires -debug-only=dag-slicer output to be enabled."));
+
+static cl::opt<bool> EnableConstantRangePatternMining(
+    "enable-constantrange-pattern-mining", cl::Hidden, cl::init(false),
+    cl::desc("Mine and print DAGSlicer patterns from computeConstantRange. "
+             "Requires -debug-only=dag-slicer output to be enabled."));
+
 /// Maximum number of instructions to check between assume and context
 /// instruction.
 static constexpr unsigned MaxInstrsToCheckForFree = 16;
@@ -2448,8 +2458,8 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
   }
 #endif
 
-  // if (Depth == 0)
-  DAGSlicer::recordPatterns(V, Depth);
+  if (EnableKnownBitsPatternMining)
+    DAGSlicer::recordPatterns(V, Depth, 2, MaxAnalysisRecursionDepth);
 
   const APInt *C;
   if (match(V, m_APInt(C))) {
@@ -10242,6 +10252,9 @@ ConstantRange llvm::computeConstantRange(const Value *V, bool ForSigned,
                                          const DominatorTree *DT,
                                          unsigned Depth) {
   assert(V->getType()->isIntOrIntVectorTy() && "Expected integer instruction");
+
+  if (EnableConstantRangePatternMining)
+    DAGSlicer::recordPatterns(V, Depth, 2, MaxAnalysisRecursionDepth);
 
   if (Depth == MaxAnalysisRecursionDepth)
     return ConstantRange::getFull(V->getType()->getScalarSizeInBits());

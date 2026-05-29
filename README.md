@@ -1,44 +1,84 @@
-# The LLVM Compiler Infrastructure
+# LLVM Pattern Mining Notes
 
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/llvm/llvm-project/badge)](https://securityscorecards.dev/viewer/?uri=github.com/llvm/llvm-project)
-[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/8273/badge)](https://www.bestpractices.dev/projects/8273)
-[![libc++](https://github.com/llvm/llvm-project/actions/workflows/libcxx-build-and-test.yaml/badge.svg?branch=main&event=schedule)](https://github.com/llvm/llvm-project/actions/workflows/libcxx-build-and-test.yaml?query=event%3Aschedule)
+This fork contains pattern mining support for integer expression DAGs seen by LLVM analysis code.
 
-Welcome to the LLVM project!
+## DAGSlicer
 
-This repository contains the source code for LLVM, a toolkit for the
-construction of highly optimized compilers, optimizers, and run-time
-environments.
+The mining implementation lives in `llvm/lib/Analysis/DAGSlicer.cpp`.
+This code is hooked and run from selected analyses in
+`llvm/lib/Analysis/ValueTracking.cpp`.
 
-The LLVM project has multiple components. The core of the project is
-itself called "LLVM". This contains all of the tools, libraries, and header
-files needed to process intermediate representations and convert them into
-object files. Tools include an assembler, disassembler, bitcode analyzer, and
-bitcode optimizer.
+`DAGSlicer` walks backward from an LLVM IR value and renders supported instruction DAGs as canonical pattern strings.
+It supports scalar integer operations such as:
 
-C-like languages use the [Clang](https://clang.llvm.org/) frontend. This
-component compiles C, C++, Objective-C, and Objective-C++ code into LLVM bitcode
--- and from there into object files, using LLVM.
+- integer binary operators, including `nuw`, `nsw`, `exact`, and `disjoint` flags;
+- selected integer intrinsics such as min/max, saturating add/sub/shift, popcount, and ctlz;
+- `icmp`, `select`, and bool/int casts needed to represent `i1` values inside integer DAGs.
+- See `dsl.md` for a full list of supported ops
 
-Other components include:
-the [libc++ C++ standard library](https://libcxx.llvm.org),
-the [LLD linker](https://lld.llvm.org), and more.
+Pattern depth is measured as the maximum number of expanded instruction nodes on any root-to-leaf path.
+Boundary values are rendered as `argN`.
 
-## Getting the Source Code and Building LLVM
+Pattern mining allows `i1` values and one integer type `iN`.
+Patterns that would require multiple distinct integer widths are rejected.
 
-Consult the
-[Getting Started with LLVM](https://llvm.org/docs/GettingStarted.html#getting-the-source-code-and-building-llvm)
-page for information on building and running LLVM.
+## ValueTracking Hooks
 
-For information on how to contribute to the LLVM project, please take a look at
-the [Contributing to LLVM](https://llvm.org/docs/Contributing.html) guide.
+`ValueTracking.cpp` calls the miner from both `computeKnownBits` and
+`computeConstantRange`:
 
-## Getting in touch
+```c++
+DAGSlicer::recordPatterns(V, Depth, 2, MaxAnalysisRecursionDepth);
+```
 
-Join the [LLVM Discourse forums](https://discourse.llvm.org/), [Discord
-chat](https://discord.gg/xS7Z362),
-[LLVM Office Hours](https://llvm.org/docs/GettingInvolved.html#office-hours) or
-[Regular sync-ups](https://llvm.org/docs/GettingInvolved.html#online-sync-ups).
+The effective mining depth is: `MaxAnalysisRecursionDepth - Depth`
+This keeps mined patterns within the recursion budget that the current analysis
+would use from the current query.
+Such that the pattern miner only "sees" the instructions that the analysis
+would during normal execution.
 
-The LLVM project has adopted a [code of conduct](https://llvm.org/docs/CodeOfConduct.html) for
-participants to all modes of communication within the project.
+Both hooks are disabled by default. To enable known-bits mining, pass both the
+known-bits mining flag and LLVM debug output for the slicer:
+
+```bash
+opt -O3 input.ll                     \
+    -enable-knownbits-pattern-mining \
+    -debug-only=dag-slicer           \
+    -disable-output 2> patterns.txt
+```
+
+To enable constant-range mining instead:
+
+```bash
+opt -O3 input.ll                         \
+    -enable-constantrange-pattern-mining \
+    -debug-only=dag-slicer               \
+    -disable-output 2> patterns.txt
+```
+
+Both flags can be used in the same run.
+The debug output prints one pattern string per line.
+
+## `pattern-miner`
+
+`pattern-miner` is a standalone tool for mining patterns from every instruction in an input LLVM IR or bitcode module.
+It aggregates pattern counts into a TSV file.
+This is mostly used for testing the mining code.
+
+Example:
+
+```bash
+pattern-miner --input=input.ll --output=patterns.tsv --depth=6
+```
+
+## Building
+
+The tool is integrated into LLVM's CMake tool tree under `llvm/tools/pattern-miner`.
+
+After configuring LLVM, build it with:
+
+```sh
+ninja -C build pattern-miner
+```
+
+It is also part of the normal LLVM tools build configured from this source tree.

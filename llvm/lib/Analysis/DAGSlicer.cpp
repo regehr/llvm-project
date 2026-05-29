@@ -5,14 +5,13 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
-#include <array>
 #include <cassert>
 #include <optional>
 #include <string>
@@ -25,17 +24,7 @@ using namespace llvm;
 
 namespace {
 
-// config options
-static constexpr unsigned MaxPatternSize = 5;
-static constexpr bool SymbolizeConstants = false;
-constexpr auto makePatternSizes() {
-  std::array<unsigned, MaxPatternSize - 1> Sizes{};
-  for (unsigned I = 0; I < Sizes.size(); ++I)
-    Sizes[I] = I + 2;
-  return Sizes;
-}
-static constexpr auto PatternSizes = makePatternSizes();
-// end config
+static constexpr bool AllowExternalBoolPatternValues = true;
 
 enum class PatternValueType { DataInt, Bool };
 
@@ -57,7 +46,7 @@ struct PatternOp {
   bool IsCommutative;
 };
 
-enum class PatternTreeKind { Node, Boundary, Constant };
+enum class PatternTreeKind { Node, Boundary };
 
 bool isBoolType(Type *Ty) { return Ty->isIntegerTy(1); }
 
@@ -96,14 +85,6 @@ struct PatternTree {
   static PatternTree makeBoundary(const Value *V, PatternValueType ResultType,
                                   unsigned BitWidth) {
     return PatternTree(PatternTreeKind::Boundary, ResultType, BitWidth, V);
-  }
-
-  static PatternTree makeConstant(const ConstantInt *C) {
-    PatternTree Tree(PatternTreeKind::Constant,
-                     isBoolType(C->getType()) ? PatternValueType::Bool
-                                              : PatternValueType::DataInt,
-                     C->getBitWidth(), C);
-    return Tree;
   }
 
   PatternTreeKind Kind;
@@ -268,25 +249,25 @@ std::optional<PatternOp> getIcmpPatternOp(const ICmpInst *Inst) {
 
   switch (Inst->getPredicate()) {
   case ICmpInst::ICMP_EQ:
-    return Cmp("Eq", {0, 1}, true);
+    return Cmp("ICmpEq", {0, 1}, true);
   case ICmpInst::ICMP_NE:
-    return Cmp("Ne", {0, 1}, true);
+    return Cmp("ICmpNe", {0, 1}, true);
   case ICmpInst::ICMP_SLT:
-    return Cmp("Slt", {0, 1}, false);
+    return Cmp("ICmpSlt", {0, 1}, false);
   case ICmpInst::ICMP_SGT:
-    return Cmp("Slt", {1, 0}, false);
+    return Cmp("ICmpSlt", {1, 0}, false);
   case ICmpInst::ICMP_SLE:
-    return Cmp("Sle", {0, 1}, false);
+    return Cmp("ICmpSle", {0, 1}, false);
   case ICmpInst::ICMP_SGE:
-    return Cmp("Sle", {1, 0}, false);
+    return Cmp("ICmpSle", {1, 0}, false);
   case ICmpInst::ICMP_ULT:
-    return Cmp("Ult", {0, 1}, false);
+    return Cmp("ICmpUlt", {0, 1}, false);
   case ICmpInst::ICMP_UGT:
-    return Cmp("Ult", {1, 0}, false);
+    return Cmp("ICmpUlt", {1, 0}, false);
   case ICmpInst::ICMP_ULE:
-    return Cmp("Ule", {0, 1}, false);
+    return Cmp("ICmpUle", {0, 1}, false);
   case ICmpInst::ICMP_UGE:
-    return Cmp("Ule", {1, 0}, false);
+    return Cmp("ICmpUle", {1, 0}, false);
   default:
     return std::nullopt;
   }
@@ -361,11 +342,6 @@ std::optional<PatternOp> getPatternOp(const Instruction *Inst) {
 }
 
 std::optional<PatternTree> makeBoundaryTree(const Value *V) {
-  if constexpr (SymbolizeConstants) {
-    if (auto *C = dyn_cast<ConstantInt>(V))
-      return PatternTree::makeConstant(C);
-  }
-
   auto Ty = getPatternValueType(V->getType());
   if (!Ty)
     return std::nullopt;
@@ -374,32 +350,15 @@ std::optional<PatternTree> makeBoundaryTree(const Value *V) {
 }
 
 std::vector<PatternTree> enumeratePatternHelper(const Value *Val,
-                                                unsigned Size);
-
-void enumerateSizePartitions(unsigned NumOperands,
-                             MutableArrayRef<unsigned> SizePartition,
-                             std::size_t OperandNo, unsigned RemainingSize,
-                             function_ref<void(ArrayRef<unsigned>)> Callback) {
-  if (OperandNo == NumOperands) {
-    if (RemainingSize == 0)
-      Callback(SizePartition);
-    return;
-  }
-
-  for (unsigned OperandSize = 0; OperandSize <= RemainingSize; ++OperandSize) {
-    SizePartition[OperandNo] = OperandSize;
-    enumerateSizePartitions(NumOperands, SizePartition, OperandNo + 1,
-                            RemainingSize - OperandSize, Callback);
-  }
-}
+                                                unsigned RemainingDepth);
 
 std::optional<SmallVector<std::vector<PatternTree>, 3>>
-getOperandPatternTreesForPartition(const Instruction *Inst, const PatternOp &Op,
-                                   ArrayRef<unsigned> SizePartition) {
+getOperandPatternTrees(const Instruction *Inst, const PatternOp &Op,
+                       unsigned RemainingDepth) {
   SmallVector<std::vector<PatternTree>, 3> OperandTrees;
   for (std::size_t I = 0; I < Op.OperandIndices.size(); ++I) {
     OperandTrees.push_back(enumeratePatternHelper(
-        Inst->getOperand(Op.OperandIndices[I]), SizePartition[I]));
+        Inst->getOperand(Op.OperandIndices[I]), RemainingDepth));
     if (OperandTrees.back().empty())
       return std::nullopt;
   }
@@ -425,47 +384,73 @@ void enumerateOperandProducts(const Instruction *Inst, const PatternOp &Op,
 }
 
 std::vector<PatternTree> enumeratePatternHelper(const Value *Val,
-                                                unsigned Size) {
-  if (Size == 0) {
-    if (auto Boundary = makeBoundaryTree(Val))
-      return {*Boundary};
-    return {};
-  }
+                                                unsigned RemainingDepth) {
+  std::vector<PatternTree> Result;
+
+  if (auto Boundary = makeBoundaryTree(Val))
+    Result.push_back(*Boundary);
+
+  if (RemainingDepth == 0)
+    return Result;
 
   auto *Inst = dyn_cast<Instruction>(Val);
   if (!Inst)
-    return {};
+    return Result;
 
   auto Op = getPatternOp(Inst);
   if (!Op)
-    return {};
+    return Result;
 
-  std::vector<PatternTree> Result;
+  auto OperandTrees = getOperandPatternTrees(Inst, *Op, RemainingDepth - 1);
+  if (!OperandTrees)
+    return Result;
 
-  SmallVector<unsigned, 3> SizePartition(Op->OperandIndices.size(), 0);
-  enumerateSizePartitions(Op->OperandIndices.size(), SizePartition, 0, Size - 1,
-                          [&](ArrayRef<unsigned> Partition) {
-                            auto OperandTrees =
-                                getOperandPatternTreesForPartition(Inst, *Op,
-                                                                   Partition);
-                            if (!OperandTrees)
-                              return;
-
-                            SmallVector<PatternTree, 3> ChosenOperands;
-                            ChosenOperands.reserve(Op->OperandIndices.size());
-                            enumerateOperandProducts(Inst, *Op, *OperandTrees,
-                                                     ChosenOperands, Result);
-                          });
+  SmallVector<PatternTree, 3> ChosenOperands;
+  ChosenOperands.reserve(Op->OperandIndices.size());
+  enumerateOperandProducts(Inst, *Op, *OperandTrees, ChosenOperands, Result);
 
   return Result;
 }
 
+unsigned getPatternDepth(const PatternTree &Tree) {
+  if (Tree.Kind != PatternTreeKind::Node)
+    return 0;
+
+  unsigned Depth = 0;
+  for (const PatternTree &Child : Tree.Children)
+    Depth = std::max(Depth, getPatternDepth(Child));
+  return Depth + 1;
+}
+
 struct RenderState {
-  unsigned ResultBitWidth = 0;
+  std::optional<unsigned> DataIntBitWidth;
   DenseMap<const Value *, unsigned> ArgumentNumbers;
-  unsigned NextConstantNumber = 0;
   bool Valid = true;
 };
+
+bool notePatternValue(const PatternTree &Tree, RenderState &State) {
+  if (Tree.ResultType != PatternValueType::DataInt)
+    return true;
+
+  if (!State.DataIntBitWidth) {
+    State.DataIntBitWidth = Tree.BitWidth;
+    return true;
+  }
+
+  return Tree.BitWidth == *State.DataIntBitWidth;
+}
+
+bool isValidExternalPatternValue(const PatternTree &Tree, RenderState &State) {
+  if (!notePatternValue(Tree, State))
+    return false;
+
+  if constexpr (AllowExternalBoolPatternValues) {
+    if (Tree.ResultType == PatternValueType::Bool)
+      return Tree.BitWidth == 1;
+  }
+
+  return Tree.ResultType == PatternValueType::DataInt;
+}
 
 void renderPattern(const PatternTree &Tree, RenderState &State,
                    raw_ostream &OS) {
@@ -473,16 +458,8 @@ void renderPattern(const PatternTree &Tree, RenderState &State,
     return;
 
   switch (Tree.Kind) {
-  case PatternTreeKind::Constant:
-    if constexpr (!SymbolizeConstants) {
-      llvm_unreachable("symbolized constants are off, but found a const node");
-    } else {
-      OS << "C" << State.NextConstantNumber++;
-      return;
-    }
   case PatternTreeKind::Boundary: {
-    if (Tree.ResultType != PatternValueType::DataInt ||
-        Tree.BitWidth != State.ResultBitWidth) {
+    if (!isValidExternalPatternValue(Tree, State)) {
       State.Valid = false;
       return;
     }
@@ -492,6 +469,10 @@ void renderPattern(const PatternTree &Tree, RenderState &State,
     return;
   }
   case PatternTreeKind::Node:
+    if (!notePatternValue(Tree, State)) {
+      State.Valid = false;
+      return;
+    }
     OS << Tree.Name << "(";
     for (std::size_t I = 0; I < Tree.Children.size(); ++I) {
       if (I)
@@ -541,12 +522,20 @@ std::optional<std::string> renderCanonicalPatternTree(PatternTree Tree) {
   canonicalizePatternTree(Tree);
 
   RenderState State;
-  State.ResultBitWidth = Tree.BitWidth;
   return renderPatternWithState(Tree, State);
 }
 
 std::optional<std::string> renderPattern(const PatternTree &Tree) {
-  if (Tree.ResultType != PatternValueType::DataInt)
+  if constexpr (!AllowExternalBoolPatternValues) {
+    if (Tree.ResultType != PatternValueType::DataInt)
+      return std::nullopt;
+  } else {
+    if (Tree.ResultType == PatternValueType::Bool && Tree.BitWidth != 1)
+      return std::nullopt;
+  }
+
+  if (Tree.ResultType != PatternValueType::DataInt &&
+      Tree.ResultType != PatternValueType::Bool)
     return std::nullopt;
 
   return renderCanonicalPatternTree(Tree);
@@ -560,28 +549,34 @@ std::optional<std::string> getCanonicalSortKey(const PatternTree &Tree) {
 
 namespace llvm::DAGSlicer {
 
-void enumeratePatterns(
-    const Value *Root,
-    function_ref<void(unsigned PatternSize, StringRef Pattern)> Callback) {
+void enumeratePatterns(const Value *Root, unsigned MinDepth, unsigned MaxDepth,
+                       function_ref<void(StringRef Pattern)> Callback) {
   auto *Inst = dyn_cast_or_null<Instruction>(Root);
   auto RootOp = Inst ? getPatternOp(Inst) : std::nullopt;
-  if (!RootOp || RootOp->ResultType != PatternValueType::DataInt)
+  if (!RootOp)
     return;
 
-  for (unsigned PatternSize : PatternSizes) {
-    for (const PatternTree &Tree : enumeratePatternHelper(Root, PatternSize)) {
-      if (auto Pattern = renderPattern(Tree))
-        Callback(PatternSize, *Pattern);
-    }
+  for (const PatternTree &Tree : enumeratePatternHelper(Root, MaxDepth)) {
+    unsigned Depth = getPatternDepth(Tree);
+    if (Depth < MinDepth || Depth > MaxDepth)
+      continue;
+
+    if (auto Pattern = renderPattern(Tree))
+      Callback(*Pattern);
   }
 }
 
-void recordPatterns(const Value *Root, unsigned KnownBitsDepth) {
+void recordPatterns(const Value *Root, unsigned AnalysisDepth,
+                    unsigned MinDepth, unsigned MaxDepth) {
+  assert(MinDepth <= MaxDepth);
+  assert(AnalysisDepth <= MaxDepth && "analysis depth exceeds max depth");
+  unsigned RemainingDepth = MaxDepth - AnalysisDepth;
+  if (RemainingDepth < MinDepth)
+    return;
+
   LLVM_DEBUG(
-      enumeratePatterns(Root, [&](unsigned PatternSize, StringRef Pattern) {
-        dbgs() << "DAGSLICER\t" << KnownBitsDepth << '\t' << PatternSize << '\t'
-               << Pattern << '\n';
-      }));
+      enumeratePatterns(Root, MinDepth, RemainingDepth,
+                        [&](StringRef Pattern) { dbgs() << Pattern << '\n'; }));
 }
 
 } // namespace llvm::DAGSlicer
