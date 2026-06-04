@@ -4,12 +4,16 @@ Tooling that turns a set of DAG patterns into the generated KnownBits
 transfer-function dispatcher that `llvm/lib/Analysis/ValueTracking.cpp`
 `#include`s (`Generated/KnownBitsPatternDispatch.inc`).
 
-A *pattern* is an expression like `Add(arg0, And(arg1, arg2))`. Each pattern
-gets a C++ `Pattern<id>::solution()` that, given the known bits of its leaves,
-returns sharper known bits for the whole expression. A **stub** transformer is
-one whose `solution()` just returns top (all bits unknown) — it wires the
-pattern into the dispatcher without improving precision, which is enough to
-measure which patterns fire on real code.
+A *pattern* is an expression like `Add(arg0, And(arg1, arg2))`. Each pattern is
+named after its own expression — the id `Add_arg0_And_arg1_arg2` is a lossless,
+decodable encoding of the (all-binary) tree — and gets a C++ `<id>::solution()`
+that, given the known bits of its leaves, returns sharper known bits for the
+whole expression. Because the filename *is* the expression, there is no
+`patterns.json` index and no marker comment: the dispatcher generator decodes
+the expression straight from each `<id>.inc` name. A **stub** transformer is one
+whose `solution()` just returns top (all bits unknown) — it wires the pattern
+into the dispatcher without improving precision, which is enough to measure
+which patterns fire on real code.
 
 `generate_pattern_dispatcher.py` and `gen_optimized.py` live at the repo root,
 not in this folder; run all commands from the repo root.
@@ -17,7 +21,8 @@ not in this folder; run all commands from the repo root.
 ## Generate stub transformers and compile with them
 
 ```bash
-# 1) pattern list -> transformer folder (patterns.json + inc/pattern_*.inc),
+# 1) pattern list -> transformer folder of expression-named inc/<id>.inc files
+#    (e.g. inc/Add_arg0_And_arg1_arg2.inc; no patterns.json, no marker comment).
 #    every solution() a stub that returns top.
 python3 table_builder/build_stub_xfer.py \
     --tsv table_builder/tests/top_10_pattern.tsv \
@@ -31,7 +36,9 @@ python3 generate_pattern_dispatcher.py /tmp/xfer
 # 3) rebuild opt with the regenerated dispatcher.
 ninja -C build opt
 
-# 4) run -O3 over the benchmark suite; aggregate per-pattern stats.
+# 4) run -O3 over the benchmark suite; aggregate per-pattern stats. Per-pattern
+#    histogram TSVs are named by pattern id, read from the generated
+#    llvm/lib/Analysis/Generated/patterns/ tree (hardcoded).
 python3 gen_optimized.py ~/repos/llvm-opt-benchmark \
     --opt build/bin/opt --stats outputs/stats.json
 ```

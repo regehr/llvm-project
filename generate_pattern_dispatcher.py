@@ -1,10 +1,15 @@
 from argparse import ArgumentParser, BooleanOptionalAction
 from dataclasses import dataclass
-from json import loads
 from pathlib import Path
 from collections import defaultdict
 import re
 import shutil
+import sys
+
+# Share the id<->expression codec with the table_builder tooling. This script
+# lives at the repo root, so put table_builder/ on the path to import it.
+sys.path.insert(0, str(Path(__file__).resolve().parent / "table_builder"))
+from util import decode_id_to_expr  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -30,8 +35,8 @@ class PatternSpec:
     root: str
     max_arg: int
     # Numeric routing id stored into PatternMatchKB.ID and switched on by
-    # recordPatternImpact. Decoupled from `id` so the patterns.json key can be a
-    # non-numeric name (e.g. "Add"): C++ identifiers use `id`, dispatch uses this.
+    # recordPatternImpact. Decoupled from `id` because `id` is the (textual)
+    # expression-derived name: C++ identifiers use `id`, dispatch uses `index`.
     index: int
 
 
@@ -74,7 +79,7 @@ OP_MATCHER = {
     "Xor": "m_c_Xor",
 }
 
-# Some op names in patterns.json are aliases that classifyPatternOp folds into a
+# Some op names in patterns are aliases that classifyPatternOp folds into a
 # canonical PatternOp enum member. The dispatch switch must use the canonical
 # name (the enum has no Mods/Modu members).
 PATTERN_OP_CANON = {
@@ -282,7 +287,7 @@ def emit_pattern_function(spec: PatternSpec) -> str:
         )
     out.append(f"  {arg_decl}\n")
     out.append(emit_guard(matcher))
-    out.append(f"  ++NumPattern{spec.id}Matches;\n")
+    out.append(f"  ++Num{spec.id}Matches;\n")
     for i in r:
         # Effective depth: charge each leaf its true nesting level so a nested
         # operand (e.g. b/c in add(a, add(b, c))) recurses with the same budget
@@ -295,7 +300,7 @@ def emit_pattern_function(spec: PatternSpec) -> str:
     for i in r:
         out.append(f"  auto ArrArg{i} = kbToArr(KBArg{i});\n")
     arg_list = ", ".join(f"ArrArg{i}" for i in r)
-    out.append(f"  auto Out = arrToKB(Pattern{spec.id}::solution({arg_list}));\n")
+    out.append(f"  auto Out = arrToKB({spec.id}::solution({arg_list}));\n")
     inputs_init = ", ".join(f"KBArg{i}" for i in r)
     out.append(
         f"  return PatternMatchKB{{{pid_int}u, std::move(Out), {{{inputs_init}}}}};\n"
@@ -338,9 +343,9 @@ def emit_pattern_impact_stats(specs: list[PatternSpec]) -> str:
     for spec in specs:
         out.append(f"  case {spec.index}:\n")
         out.append(
-            f"    if (BitsAdded > 0) ++NumPattern{spec.id}ImprovedQueries, Pattern{spec.id}BitsAdded += BitsAdded;\n"
+            f"    if (BitsAdded > 0) ++Num{spec.id}ImprovedQueries, {spec.id}BitsAdded += BitsAdded;\n"
         )
-        out.append(f"    if (Conflict) ++NumPattern{spec.id}Conflicts;\n")
+        out.append(f"    if (Conflict) ++Num{spec.id}Conflicts;\n")
         out.append("    return;\n")
     out.append("  default:\n")
     out.append("    return;\n")
@@ -350,26 +355,39 @@ def emit_pattern_impact_stats(specs: list[PatternSpec]) -> str:
 
 
 def find_inc_dir(input_dir: Path) -> Path:
-    """Return the inc/ subdirectory of input_dir holding pattern_*.inc files."""
+    """Return the inc/ subdirectory of input_dir holding the <id>.inc files."""
     inc_dir = input_dir / "inc"
-    if not inc_dir.is_dir() or not any(inc_dir.glob("pattern_*.inc")):
+    if not inc_dir.is_dir() or not any(inc_dir.glob("*.inc")):
         raise ValueError(
-            f"expected {inc_dir} to exist and contain pattern_*.inc files"
+            f"expected {inc_dir} to exist and contain <id>.inc files"
         )
     return inc_dir
+
+
+def load_patterns(input_dir: Path) -> dict[str, str]:
+    """Return an {id -> expression} map for a transformer folder.
+
+    The id is each inc/<id>.inc filename stem, and the expression is decoded
+    straight from that id (validated against the supported-op set) -- the .inc
+    set is the sole source of truth, with no marker comment and no patterns.json.
+    """
+    inc_dir = input_dir / "inc"
+    inc_files = sorted(inc_dir.glob("*.inc")) if inc_dir.is_dir() else []
+    return {f.stem: decode_id_to_expr(f.stem, OP_MATCHER) for f in inc_files}
 
 
 def main() -> None:
     ap = ArgumentParser(
         description="Generate KnownBitsPatternDispatch.inc from a transformer "
-        "folder (patterns.json + a subdir of pattern_*.inc) and copy the .inc "
-        "files into the Generated tree."
+        "folder (a subdir of expression-named <id>.inc files) and copy the "
+        ".inc files into the Generated tree."
     )
     ap.add_argument(
         "input_dir", type=Path,
-        help="Transformer folder laid out as: <input_dir>/patterns.json "
-        "(maps pattern id -> DAG expression) and <input_dir>/inc/ "
-        "(holds one pattern_<id>.inc per id in patterns.json).",
+        help="Transformer folder laid out as <input_dir>/inc/, holding one "
+        "<id>.inc per pattern. The id is the pattern's expression-derived name "
+        "(e.g. Add_arg0_And_arg1_arg2), which the expression is decoded from, so "
+        "no patterns.json or marker comment is needed.",
     )
     ap.add_argument(
         "--generated-dir", type=Path,
@@ -384,7 +402,7 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    data = loads((args.input_dir / "patterns.json").read_text())
+    data = load_patterns(args.input_dir)
     parsed: list[tuple[str, str, Op]] = []
     for pid, expr in data.items():
         ast = parse_expr(expr)
@@ -393,22 +411,20 @@ def main() -> None:
     parsed.sort(key=lambda t: t[0])
 
 
-    # The numeric routing id is decoupled from the patterns.json key so the key
-    # can be an instruction name. When every key is already numeric (the legacy
-    # ideal/top/least_precise folders) we preserve int(key) so existing IDs and
-    # debug output are unchanged; otherwise we assign sequential indices.
-    all_numeric = all(pid.isdigit() for pid, _, _ in parsed)
+    # The numeric routing id is the pattern's position in sorted-id order. Both
+    # this generator and gen_optimized.py derive it the same way from the same
+    # id set, so the histogram ids line up with the dispatcher's.
     specs: list[PatternSpec] = [
         PatternSpec(
             id=pid, expr=expr, ast=ast, root=ast.name, max_arg=max_arg(ast),
-            index=int(pid) if all_numeric else i,
+            index=i,
         )
         for i, (pid, expr, ast) in enumerate(parsed)
     ]
 
     unknown_ops = sorted({s.root for s in specs if s.root not in OP_MATCHER})
     if unknown_ops:
-        raise ValueError(f"patterns.json contains unmapped ops: {unknown_ops}")
+        raise ValueError(f"patterns contain unmapped ops: {unknown_ops}")
 
     roots: dict[str, list[PatternSpec]] = defaultdict(list)
     for spec in specs:
@@ -416,39 +432,39 @@ def main() -> None:
 
     # Copy the transformer .inc files into <generated-dir>/patterns, clearing any
     # stale ones first so a smaller pattern set doesn't leave orphans behind. An
-    # empty patterns.json is valid: it yields a no-op dispatcher (opt runs with
+    # empty pattern set is valid: it yields a no-op dispatcher (opt runs with
     # no pattern matching), so we don't require an inc/ folder in that case.
     patterns_dst = args.generated_dir / "patterns"
     patterns_dst.mkdir(parents=True, exist_ok=True)
-    for old in patterns_dst.glob("pattern_*.inc"):
+    for old in patterns_dst.glob("*.inc"):
         old.unlink()
     if specs:
         inc_src = find_inc_dir(args.input_dir)
         for spec in specs:
-            src = inc_src / f"pattern_{spec.id}.inc"
+            src = inc_src / f"{spec.id}.inc"
             if not src.exists():
-                raise ValueError(f"missing {src} for pattern {spec.id} listed in patterns.json")
-            shutil.copyfile(src, patterns_dst / f"pattern_{spec.id}.inc")
+                raise ValueError(f"missing {src} for pattern {spec.id}")
+            shutil.copyfile(src, patterns_dst / f"{spec.id}.inc")
 
     out: list[str] = []
     out.append("// Auto-generated by generate_pattern_dispatcher.py. Do not edit.\n")
     if args.include_helper:
         out.append('#include "table_helper.inc"\n')
     for spec in specs:
-        out.append(f'#include "patterns/pattern_{spec.id}.inc" // {spec.expr}\n')
+        out.append(f'#include "patterns/{spec.id}.inc" // {spec.expr}\n')
     out.append("\n")
     for spec in specs:
         out.append(
-            f'ALWAYS_ENABLED_STATISTIC(NumPattern{spec.id}Matches, "KnownBits DAG pattern {spec.id} matches");\n'
+            f'ALWAYS_ENABLED_STATISTIC(Num{spec.id}Matches, "KnownBits DAG pattern {spec.id} matches");\n'
         )
         out.append(
-            f'ALWAYS_ENABLED_STATISTIC(NumPattern{spec.id}ImprovedQueries, "KnownBits DAG pattern {spec.id} improved queries against vanilla known bits");\n'
+            f'ALWAYS_ENABLED_STATISTIC(Num{spec.id}ImprovedQueries, "KnownBits DAG pattern {spec.id} improved queries against vanilla known bits");\n'
         )
         out.append(
-            f'ALWAYS_ENABLED_STATISTIC(Pattern{spec.id}BitsAdded, "KnownBits DAG pattern {spec.id} total bits added against vanilla known bits");\n'
+            f'ALWAYS_ENABLED_STATISTIC({spec.id}BitsAdded, "KnownBits DAG pattern {spec.id} total bits added against vanilla known bits");\n'
         )
         out.append(
-            f'ALWAYS_ENABLED_STATISTIC(NumPattern{spec.id}Conflicts, "KnownBits DAG pattern {spec.id} meet conflicts against vanilla known bits");\n'
+            f'ALWAYS_ENABLED_STATISTIC(Num{spec.id}Conflicts, "KnownBits DAG pattern {spec.id} meet conflicts against vanilla known bits");\n'
         )
     out.append("\n")
 

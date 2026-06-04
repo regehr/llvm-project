@@ -109,7 +109,7 @@ def int_to_le_bytes(v: int, n: int) -> bytes:
 def emit_stub(pid: str, arity: int) -> str:
     sig = ", ".join(f"std::array<APInt, 2> ssa_{i}_" for i in range(arity))
     return (
-        f"namespace Pattern{pid} {{\n"
+        f"namespace {pid} {{\n"
         f"std::array<APInt, 2> solution({sig}) {{\n"
         f"\tunsigned bw = ssa_0_[0].getBitWidth();\n"
         f"\treturn std::array<APInt, 2>{{APInt(bw, 0), APInt(bw, 0)}};\n"
@@ -122,7 +122,7 @@ def emit_inline(pid: str, arity: int,
                 bw_groups: dict[int, list[tuple[list[str], str]]]) -> str:
     sig = ", ".join(f"std::array<APInt, 2> ssa_{i}_" for i in range(arity))
     out: list[str] = []
-    out.append(f"namespace Pattern{pid} {{\n")
+    out.append(f"namespace {pid} {{\n")
     out.append("namespace {\n")
     out.append("struct Entry {\n")
     out.append("  unsigned bw;\n")
@@ -184,7 +184,7 @@ def emit_blob(pid: str, arity: int,
               bw_groups: dict[int, list[tuple[list[str], str]]]) -> str:
     sig = ", ".join(f"std::array<APInt, 2> ssa_{i}_" for i in range(arity))
     out: list[str] = []
-    out.append(f"namespace Pattern{pid} {{\n")
+    out.append(f"namespace {pid} {{\n")
     out.append("namespace {\n")
 
     table_entries: list[tuple[int, str, int]] = []
@@ -271,7 +271,7 @@ def main() -> None:
         if not m:
             continue
         pid = m.group(1)
-        out_path = args.out_dir / f"pattern_{pid}.inc"
+        out_path = args.out_dir / f"{pid}.inc"
 
         arity, rows = parse_tsv(tsv_path)
         n_rows += len(rows)

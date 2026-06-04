@@ -27,6 +27,11 @@ try:
 except ImportError:
     tqdm = None
 
+# Where generate_pattern_dispatcher.py writes the per-pattern <id>.inc files.
+# Their stems are the only record of the routing-index -> expression mapping, so
+# merge_histograms reads them to name the per-pattern histogram TSVs.
+PATTERNS_DIR = Path(__file__).resolve().parent / "llvm/lib/Analysis/Generated/patterns"
+
 # Counters whose values vary run-to-run; excluded from the aggregate so repeated
 # runs are comparable.
 STATS_NONDETER_KEYS = {
@@ -124,10 +129,6 @@ def main() -> None:
         "write shards under <dir>/shards/, then merge them into per-pattern "
         "<dir>/pattern_<id>.tsv. Avoids the giant raw [pNNN] logs entirely.")
     ap.add_argument(
-        '--patterns-json', type=Path, default=None,
-        help="patterns.json used to build the dispatcher. If given, names the "
-        "merged histogram TSVs by pattern key instead of numeric id.")
-    ap.add_argument(
         '--jobs', type=int, default=os.cpu_count() or 1,
         help="Parallel worker processes. Default: %(default)s")
     args = ap.parse_args()
@@ -204,23 +205,21 @@ def main() -> None:
     print(f"aggregated stats written to {stats_out} ({len(stats_acc)} keys)")
 
     if hist_dir is not None:
-        merge_histograms(hist_dir, args.patterns_json)
+        merge_histograms(hist_dir)
 
     sys.exit(1 if fail else 0)
 
 
-def load_pattern_names(patterns_json: Path | None) -> dict[int, str]:
-    """Reconstruct the generator's numeric-index -> patterns.json-key mapping.
+def load_pattern_names() -> dict[int, str]:
+    """Reconstruct the generator's routing-index -> pattern-id mapping.
 
-    Mirrors generate_pattern_dispatcher.py: when every key is numeric the id is
-    int(key); otherwise ids are assigned by sorted-key position.
+    The ids are the <id>.inc stems in PATTERNS_DIR (the dispatcher's generated
+    patterns/ tree); the routing index is each id's position in sorted order,
+    exactly as generate_pattern_dispatcher.py assigns it. Returns an empty map if
+    that directory is absent, so histograms fall back to numeric ids.
     """
-    if patterns_json is None:
-        return {}
-    keys = sorted(json.loads(Path(patterns_json).read_text()).keys())
-    if all(k.isdigit() for k in keys):
-        return {int(k): k for k in keys}
-    return {i: k for i, k in enumerate(keys)}
+    ids = sorted(p.stem for p in PATTERNS_DIR.glob("*.inc"))
+    return dict(enumerate(ids))
 
 
 def pattern_yaml_header(op: str, arity: int,
@@ -243,14 +242,14 @@ def pattern_yaml_header(op: str, arity: int,
     return '\n'.join(lines) + '\n'
 
 
-def merge_histograms(hist_dir: str, patterns_json: Path | None) -> None:
+def merge_histograms(hist_dir: str) -> None:
     """Merge per-input .hist shards into ranked per-pattern TSVs.
 
     Each shard line is: <id> <arg_0> <arg_1> ... <count> <bits_added> <conflict>
     (tab-separated). We sum count/bits_added/conflict across shards per
     (id, args), then per id emit pattern_<name>.tsv ranked by count desc.
     """
-    names = load_pattern_names(patterns_json)
+    names = load_pattern_names()
     # id -> {args-tuple -> [count, bits_added, conflict]}
     acc: dict[int, dict[tuple, list]] = collections.defaultdict(dict)
     shards = glob.glob(os.path.join(hist_dir, 'shards', '**', '*.hist'),
