@@ -158,7 +158,7 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    tsv_files = sorted(args.tsv_dir.glob("pattern_*.tsv"))
+    tsv_files = sorted(args.tsv_dir.glob("*.tsv"))
     if not tsv_files:
         print(f"No TSVs found in {args.tsv_dir}", file=sys.stderr)
         sys.exit(1)

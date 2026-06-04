@@ -27,6 +27,10 @@ try:
 except ImportError:
     tqdm = None
 
+# Share the id<->expression codec with the table_builder tooling.
+sys.path.insert(0, str(Path(__file__).resolve().parent / "table_builder"))
+from util import decode_id_to_expr  # noqa: E402
+
 # Where generate_pattern_dispatcher.py writes the per-pattern <id>.inc files.
 # Their stems are the only record of the routing-index -> expression mapping, so
 # merge_histograms reads them to name the per-pattern histogram TSVs.
@@ -271,14 +275,20 @@ def merge_histograms(hist_dir: str) -> None:
 
     n_tables = 0
     for pid, rows in acc.items():
+        # The filename is the bare pattern id (no `pattern_` prefix); the YAML
+        # header's `op` field carries the decoded expression for readability.
         name = names.get(pid, f'{pid:03d}')
+        try:
+            op = decode_id_to_expr(name)
+        except ValueError:
+            op = name  # numeric fallback id (no PATTERNS_DIR): not decodable.
         arity = max(len(a) for a in rows) if rows else 0
         ranked = sorted(rows.items(), key=lambda kv: -kv[1][0])
         # distinct-row count per bitwidth (= ternary string length) for hbw.
         bw_counts = collections.Counter(len(a[0]) for a in rows if a)
-        out_path = os.path.join(hist_dir, f'pattern_{name}.tsv')
+        out_path = os.path.join(hist_dir, f'{name}.tsv')
         with open(out_path, 'w') as f:
-            f.write(pattern_yaml_header(name, arity, bw_counts))
+            f.write(pattern_yaml_header(op, arity, bw_counts))
             header = (['bw', 'rank', 'count'] + [f'arg_{i}' for i in range(arity)]
                       + ['bits_added', 'conflict'])
             f.write('\t'.join(header) + '\n')

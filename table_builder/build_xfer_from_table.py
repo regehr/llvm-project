@@ -237,12 +237,12 @@ def main() -> None:
     ap = ArgumentParser()
     ap.add_argument(
         "--tsv-dir", type=Path, default=Path("results/tsv/ideal_optimized"),
-        help="Directory containing pattern_NNN.tsv files",
+        help="Directory containing <id>.tsv files",
     )
     ap.add_argument(
         "--out-dir", type=Path,
         default=Path("llvm/lib/Analysis/Generated/patterns"),
-        help="Directory to write pattern_NNN.inc files into",
+        help="Directory to write <id>.inc files into",
     )
     ap.add_argument(
         "--inline-threshold", type=int, default=16,
@@ -254,7 +254,7 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    tsv_files = sorted(args.tsv_dir.glob("pattern_*.tsv"))
+    tsv_files = sorted(args.tsv_dir.glob("*.tsv"))
     if not tsv_files:
         print(f"No TSVs found in {args.tsv_dir}", file=sys.stderr)
         sys.exit(1)
@@ -267,10 +267,8 @@ def main() -> None:
     n_rows = 0
 
     for tsv_path in tsv_files:
-        m = re.fullmatch(r"pattern_([A-Za-z0-9_]+)\.tsv", tsv_path.name)
-        if not m:
-            continue
-        pid = m.group(1)
+        # The filename stem is the pattern id (the expression-derived name).
+        pid = tsv_path.stem
         out_path = args.out_dir / f"{pid}.inc"
 
         arity, rows = parse_tsv(tsv_path)
