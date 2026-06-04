@@ -11,9 +11,10 @@ stats into one JSON.
 Examples:
   python3 gen_optimized.py ~/repos/llvm-opt-benchmark
   python3 gen_optimized.py ~/repos/llvm-opt-benchmark --filter cjson,coremark --stats outputs/run1.json
-  python3 gen_optimized.py ~/repos/llvm-opt-benchmark --debug-logs outputs/run1_logs   # also dump [pNNN] logs
 """
 import argparse
+import collections
+import glob
 import json
 import os
 import subprocess
@@ -41,12 +42,18 @@ STATS_NONDETER_KEYS = {
 # methods too.
 _OPT = None
 _BENCH_DIR = None
-_DEBUG_DIR = None
+_HIST_DIR = None
 
 
-def _init_worker(opt: str, bench_dir: str, debug_dir: str | None) -> None:
-    global _OPT, _BENCH_DIR, _DEBUG_DIR
-    _OPT, _BENCH_DIR, _DEBUG_DIR = opt, bench_dir, debug_dir
+def _init_worker(opt: str, bench_dir: str, hist_dir: str | None) -> None:
+    global _OPT, _BENCH_DIR, _HIST_DIR
+    _OPT, _BENCH_DIR, _HIST_DIR = opt, bench_dir, hist_dir
+
+
+def _rel_stem(input_file: str) -> str:
+    """benchmark-relative path with /original/ folded out and no .ll suffix."""
+    rel = os.path.relpath(input_file, _BENCH_DIR).replace('/original/', '/')
+    return rel[:-3] if rel.endswith('.ll') else rel
 
 
 def run_opt(task):
@@ -58,10 +65,13 @@ def run_opt(task):
         ]
         tmp_output = output_file + '.bench_tmp.ll'
         cmd += ['-o', tmp_output, '--stats', '--stats-json']
-        if _DEBUG_DIR is not None:
-            cmd += ['-debug-only=value-tracking-pattern']
+        if _HIST_DIR is not None:
+            # opt writes the per-input histogram itself (no stderr/pipe/parse).
+            hist_path = os.path.join(_HIST_DIR, 'shards', _rel_stem(input_file) + '.hist')
+            os.makedirs(os.path.dirname(hist_path), exist_ok=True)
+            cmd += [f'-value-tracking-pattern-histogram={hist_path}']
         ret = subprocess.run(cmd, stdin=subprocess.DEVNULL,
-                             capture_output=True, timeout=1200.0, env={})
+                             capture_output=True, timeout=600.0, env={})
         if ret.returncode != 0:
             return (input_file, 'fail', {}, ret.stderr.decode())
 
@@ -74,17 +84,6 @@ def run_opt(task):
                 stats = json.loads(err[json_start:json_end + 1])
             except json.JSONDecodeError:
                 stats = {}
-
-        if _DEBUG_DIR is not None:
-            rel = os.path.relpath(input_file, _BENCH_DIR).replace('/original/', '/')
-            log_path = (os.path.join(_DEBUG_DIR, rel[:-3] + '.log')
-                        if rel.endswith('.ll')
-                        else os.path.join(_DEBUG_DIR, rel + '.log'))
-            os.makedirs(os.path.dirname(log_path), exist_ok=True)
-            with open(log_path, 'w') as f:
-                for line in err.splitlines():
-                    if line.startswith('[p'):
-                        f.write(line + '\n')
 
         diff_ret = subprocess.run(['diff', '-q', tmp_output, output_file],
                                   stdout=subprocess.DEVNULL,
@@ -119,10 +118,15 @@ def main() -> None:
         '--stats', type=Path, default=repo_root / 'outputs' / 'stats.json',
         help="Aggregated stats JSON output path. Default: %(default)s")
     ap.add_argument(
-        '--debug-logs', type=Path, default=None,
-        help="If set, also pass -debug-only=value-tracking-pattern and write "
-        "per-input [pNNN] transformer-input logs here. Omit for stats only "
-        "(no extra opt-side or IO cost).")
+        '--pattern-hist', type=Path, default=None,
+        help="If set, have opt accumulate a per-input histogram of pattern "
+        "inputs (id + operand known bits, summed bits_added/conflict) and "
+        "write shards under <dir>/shards/, then merge them into per-pattern "
+        "<dir>/pattern_<id>.tsv. Avoids the giant raw [pNNN] logs entirely.")
+    ap.add_argument(
+        '--patterns-json', type=Path, default=None,
+        help="patterns.json used to build the dispatcher. If given, names the "
+        "merged histogram TSVs by pattern key instead of numeric id.")
     ap.add_argument(
         '--jobs', type=int, default=os.cpu_count() or 1,
         help="Parallel worker processes. Default: %(default)s")
@@ -136,7 +140,7 @@ def main() -> None:
 
     opt = str(args.opt)
     bench_dir = str(bench_dir)
-    debug_dir = str(args.debug_logs) if args.debug_logs is not None else None
+    hist_dir = str(args.pattern_hist) if args.pattern_hist is not None else None
     filt = set(args.filter.split(',')) if args.filter else None
 
     work_list = []
@@ -153,10 +157,10 @@ def main() -> None:
                 work_list.append((os.path.join(original_dir, f),
                                   os.path.join(optimized_dir, f)))
 
-    if debug_dir is not None:
-        if os.path.exists(debug_dir) and not os.path.isdir(debug_dir):
-            sys.exit(f"error: --debug-logs {debug_dir!r} exists but is not a directory")
-        os.makedirs(debug_dir, exist_ok=True)
+    if hist_dir is not None:
+        if os.path.exists(hist_dir) and not os.path.isdir(hist_dir):
+            sys.exit(f"error: --pattern-hist {hist_dir!r} exists but is not a directory")
+        os.makedirs(os.path.join(hist_dir, 'shards'), exist_ok=True)
 
     print("total items: ", len(work_list))
     print("threads: ", args.jobs)
@@ -170,7 +174,7 @@ def main() -> None:
     fail = False
 
     pool = Pool(processes=args.jobs, initializer=_init_worker,
-                initargs=(opt, bench_dir, debug_dir))
+                initargs=(opt, bench_dir, hist_dir))
     results = pool.imap_unordered(run_opt, work_list)
     if tqdm is not None:
         results = tqdm.tqdm(results, total=len(work_list),
@@ -199,7 +203,92 @@ def main() -> None:
         json.dump(stats_acc, f, indent=2, sort_keys=True)
     print(f"aggregated stats written to {stats_out} ({len(stats_acc)} keys)")
 
+    if hist_dir is not None:
+        merge_histograms(hist_dir, args.patterns_json)
+
     sys.exit(1 if fail else 0)
+
+
+def load_pattern_names(patterns_json: Path | None) -> dict[int, str]:
+    """Reconstruct the generator's numeric-index -> patterns.json-key mapping.
+
+    Mirrors generate_pattern_dispatcher.py: when every key is numeric the id is
+    int(key); otherwise ids are assigned by sorted-key position.
+    """
+    if patterns_json is None:
+        return {}
+    keys = sorted(json.loads(Path(patterns_json).read_text()).keys())
+    if all(k.isdigit() for k in keys):
+        return {int(k): k for k in keys}
+    return {i: k for i, k in enumerate(keys)}
+
+
+def pattern_yaml_header(op: str, arity: int,
+                        bw_counts: dict[int, int]) -> str:
+    """The '# ---'-delimited YAML preamble used by results/tsv/*/pattern_*.tsv.
+
+    `op` is the bare instruction name (no path). The per-bitwidth distinct-row
+    counts go in hbw as [bw, count, 0] (mbw/lbw left empty), per the conversion
+    mbw:[x, y] -> hbw:[x, y, 0].
+    """
+    lines = ['# ---', '# domain: KnownBits', f'# op: {op}', f'# arity: {arity}',
+             '# seed: null', '# lbw: []', '# mbw: []']
+    if bw_counts:
+        lines.append('# hbw:')
+        for bw in sorted(bw_counts):
+            lines.append(f'# - [{bw}, {bw_counts[bw]}, 0]')
+    else:
+        lines.append('# hbw: []')
+    lines.append('# ---')
+    return '\n'.join(lines) + '\n'
+
+
+def merge_histograms(hist_dir: str, patterns_json: Path | None) -> None:
+    """Merge per-input .hist shards into ranked per-pattern TSVs.
+
+    Each shard line is: <id> <arg_0> <arg_1> ... <count> <bits_added> <conflict>
+    (tab-separated). We sum count/bits_added/conflict across shards per
+    (id, args), then per id emit pattern_<name>.tsv ranked by count desc.
+    """
+    names = load_pattern_names(patterns_json)
+    # id -> {args-tuple -> [count, bits_added, conflict]}
+    acc: dict[int, dict[tuple, list]] = collections.defaultdict(dict)
+    shards = glob.glob(os.path.join(hist_dir, 'shards', '**', '*.hist'),
+                       recursive=True)
+    for shard in shards:
+        with open(shard) as f:
+            for line in f:
+                parts = line.rstrip('\n').split('\t')
+                if len(parts) < 4:
+                    continue
+                pid = int(parts[0])
+                count, bits_added, conflict = (int(parts[-3]), int(parts[-2]),
+                                               int(parts[-1]))
+                args = tuple(parts[1:-3])
+                row = acc[pid].setdefault(args, [0, 0, 0])
+                row[0] += count
+                row[1] += bits_added
+                row[2] += conflict
+
+    n_tables = 0
+    for pid, rows in acc.items():
+        name = names.get(pid, f'{pid:03d}')
+        arity = max(len(a) for a in rows) if rows else 0
+        ranked = sorted(rows.items(), key=lambda kv: -kv[1][0])
+        # distinct-row count per bitwidth (= ternary string length) for hbw.
+        bw_counts = collections.Counter(len(a[0]) for a in rows if a)
+        out_path = os.path.join(hist_dir, f'pattern_{name}.tsv')
+        with open(out_path, 'w') as f:
+            f.write(pattern_yaml_header(name, arity, bw_counts))
+            header = (['bw', 'rank', 'count'] + [f'arg_{i}' for i in range(arity)]
+                      + ['bits_added', 'conflict'])
+            f.write('\t'.join(header) + '\n')
+            for rank, (args, (count, bits_added, conflict)) in enumerate(ranked, 1):
+                bw = len(args[0]) if args else 0
+                f.write('\t'.join([str(bw), str(rank), str(count), *args,
+                                   str(bits_added), str(conflict)]) + '\n')
+        n_tables += 1
+    print(f"merged {len(shards)} shards -> {n_tables} pattern TSVs in {hist_dir}")
 
 
 if __name__ == '__main__':

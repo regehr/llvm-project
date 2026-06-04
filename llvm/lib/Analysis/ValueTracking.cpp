@@ -77,13 +77,18 @@
 #include "llvm/Support/Format.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/KnownFPClass.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/RISCVTargetParser.h"
 #include <algorithm>
 #include <array>
 #include <cassert>
 #include <cstdint>
+#include <map>
+#include <mutex>
 #include <optional>
+#include <string>
 #include <tuple>
 #include <utility>
 
@@ -1557,6 +1562,82 @@ struct PatternMatchKB {
 #pragma clang diagnostic pop
 #endif
 
+// If set, accumulate a histogram of pattern-transformer inputs instead of
+// emitting a per-query debug log. For each (pattern id, operand known bits) we
+// record the occurrence count, the summed bits-added, and the conflict count,
+// then write a compact TSV to this path at process exit. This collapses the
+// hundreds of millions of repeated queries into a few thousand distinct rows
+// without ever materializing the raw lines (no stderr, no pipe, no per-query
+// disk IO). vanilla/combined are deliberately not recorded: combined is
+// derivable and vanilla is not a function of the inputs, so per the histogram
+// design we drop them and aggregate bits-added/conflict instead.
+static cl::opt<std::string> PatternHistFile(
+    "value-tracking-pattern-histogram", cl::Hidden, cl::init(""),
+    cl::desc("Write a TSV histogram of pattern-transformer inputs to this file "
+             "at exit (id + operand known bits, summed bits-added/conflicts)."));
+
+namespace {
+/// Process-wide aggregator for pattern-transformer inputs. Rows are keyed by a
+/// pre-formatted "<id>\t<arg0>\t<arg1>..." string (args MSB-first ternary,
+/// matching KnownBits::print and the existing aggregation TSVs) so the dump is
+/// a straight write with no re-formatting.
+class PatternInputHistogram {
+public:
+  void record(StringRef OutFile, unsigned ID, ArrayRef<KnownBits> Inputs,
+              unsigned BitsAdded, bool Conflict) {
+    std::lock_guard<std::mutex> Lock(Mtx);
+    // Capture the output path on first use; reading the cl::opt here (during
+    // compilation) is safe, whereas reading it in the destructor would race
+    // static-destruction order.
+    if (Path.empty())
+      Path = OutFile.str();
+    std::string Key;
+    raw_string_ostream OS(Key);
+    OS << ID;
+    for (const KnownBits &In : Inputs) {
+      OS << '\t';
+      In.print(OS);
+    }
+    Row &R = Rows[OS.str()];
+    ++R.Count;
+    R.BitsAdded += BitsAdded;
+    R.Conflicts += Conflict ? 1 : 0;
+  }
+
+  ~PatternInputHistogram() {
+    if (Path.empty() || Rows.empty())
+      return;
+    std::error_code EC;
+    raw_fd_ostream Out(Path, EC, sys::fs::OF_Text);
+    if (EC)
+      return;
+    // <id> <arg0> <arg1> ... <count> <bits_added> <conflicts>
+    for (const auto &KV : Rows)
+      Out << KV.first << '\t' << KV.second.Count << '\t' << KV.second.BitsAdded
+          << '\t' << KV.second.Conflicts << '\n';
+  }
+
+private:
+  struct Row {
+    uint64_t Count = 0;
+    uint64_t BitsAdded = 0;
+    uint64_t Conflicts = 0;
+  };
+  std::mutex Mtx;
+  // Ordered map for deterministic output across runs.
+  std::map<std::string, Row> Rows;
+  std::string Path;
+};
+} // namespace
+
+static void recordPatternHistogram(unsigned ID, ArrayRef<KnownBits> Inputs,
+                                   unsigned BitsAdded, bool Conflict) {
+  if (PatternHistFile.empty())
+    return;
+  static PatternInputHistogram Histogram;
+  Histogram.record(PatternHistFile, ID, Inputs, BitsAdded, Conflict);
+}
+
 static void computeKnownBitsFromOperator(const Operator *I,
                                          const APInt &DemandedElts,
                                          KnownBits &Known,
@@ -2737,15 +2818,7 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
       const unsigned After = (Candidate.Zero | Candidate.One).popcount();
       const unsigned BitsAdded = After > Before ? (After - Before) : 0;
       recordPatternImpact(PM.ID, BitsAdded, Conflict);
-
-      DEBUG_WITH_TYPE("value-tracking-pattern", {
-        dbgs() << format("[p%03u]", PM.ID);
-        for (size_t i = 0; i < PM.Inputs.size(); ++i)
-          dbgs() << " in" << i << "=" << PM.Inputs[i];
-        dbgs() << " vanilla=" << VanillaKnown << " pattern=" << PM.KB
-               << " combined=" << Candidate << " bitsAdded=" << BitsAdded
-               << (Conflict ? " CONFLICT" : "") << "\n";
-      });
+      recordPatternHistogram(PM.ID, PM.Inputs, BitsAdded, Conflict);
 
       if (Conflict) {
         ++NumPatternKBConflicts;

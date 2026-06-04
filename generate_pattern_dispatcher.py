@@ -29,6 +29,10 @@ class PatternSpec:
     ast: Op
     root: str
     max_arg: int
+    # Numeric routing id stored into PatternMatchKB.ID and switched on by
+    # recordPatternImpact. Decoupled from `id` so the patterns.json key can be a
+    # non-numeric name (e.g. "Add"): C++ identifiers use `id`, dispatch uses this.
+    index: int
 
 
 NSW = "OverflowingBinaryOperator::NoSignedWrap"
@@ -77,6 +81,16 @@ PATTERN_OP_CANON = {
     "Mods": "Srem",
     "Modu": "Urem",
 }
+
+
+OP_CALL_RE = re.compile(r"([A-Za-z][A-Za-z0-9]*)\(")
+
+
+def expr_ops(expr: str) -> set[str]:
+    """All operator names invoked in an expression (an identifier directly
+    followed by '('). Leaves are bare `argN` tokens with no paren, so this
+    yields exactly the op names, including nested ones."""
+    return set(OP_CALL_RE.findall(expr))
 
 
 def parse_expr(text: str) -> Node:
@@ -209,6 +223,26 @@ def compose_op_matcher(op_name: str, lhs: str, rhs: str) -> str:
     return f"{pattern}({lhs}, {rhs})"
 
 
+def arg_depths(node: Node, level: int = 0,
+               acc: dict[int, int] | None = None) -> dict[int, int]:
+    """Map each arg index to its nesting level in the pattern AST.
+
+    The root Op is level 0, so its direct operands are level 1 (which matches the
+    flat `Depth` the dispatcher passes in), grandchildren level 2, etc. When an
+    arg appears more than once (m_Deferred), keep the SHALLOWEST occurrence: it is
+    computed once and reused, so the smallest depth gives it the largest analysis
+    budget and the most refined known bits for every slot it feeds.
+    """
+    if acc is None:
+        acc = {}
+    if isinstance(node, Arg):
+        acc[node.idx] = min(acc.get(node.idx, level), level)
+    else:
+        arg_depths(node.lhs, level + 1, acc)
+        arg_depths(node.rhs, level + 1, acc)
+    return acc
+
+
 def emit_match_expr(node: Node, seen_args: set[int]) -> str:
     if isinstance(node, Arg):
         if node.idx in seen_args:
@@ -227,16 +261,37 @@ def emit_pattern_function(spec: PatternSpec) -> str:
     arg_decl = "const Value " + ", ".join(f"*Arg{i} = nullptr" for i in r) + ";"
 
     matcher = emit_match_expr(spec.ast, set())
-    pid_int = int(spec.id)
+    pid_int = spec.index
+    depths = arg_depths(spec.ast)
+    max_offset = max(depths.values()) - 1
     out: list[str] = []
     out.append(
         f"static std::optional<PatternMatchKB> match{spec.id}(const Operator *I, const SimplifyQuery &Q, unsigned Depth) {{\n"
     )
+    # The deepest matched leaf recurses at Depth + max_offset (see effective-depth
+    # note below). If that would exceed the recursion cap, decline the match so the
+    # query falls back to vanilla known bits. This both keeps every leaf call within
+    # computeKnownBits's Depth <= MaxAnalysisRecursionDepth contract and makes the
+    # pattern's budget identical to the no-transformer baseline -- a pattern never
+    # gets credit for analyzing a subtree deeper than vanilla could reach. Only
+    # emitted for nested patterns; flat (max_offset == 0) patterns can never exceed.
+    if max_offset > 0:
+        out.append(
+            f"  if (Depth + {max_offset} > MaxAnalysisRecursionDepth)\n"
+            f"    return std::nullopt;\n"
+        )
     out.append(f"  {arg_decl}\n")
     out.append(emit_guard(matcher))
     out.append(f"  ++NumPattern{spec.id}Matches;\n")
     for i in r:
-        out.append(f"  auto KBArg{i} = computeKnownBits(Arg{i}, Q, Depth);\n")
+        # Effective depth: charge each leaf its true nesting level so a nested
+        # operand (e.g. b/c in add(a, add(b, c))) recurses with the same budget
+        # vanilla computeKnownBitsFromOperator would give it. Level-1 leaves keep
+        # plain `Depth`, so flat patterns are byte-for-byte unchanged. The guard
+        # above guarantees Depth + offset <= MaxAnalysisRecursionDepth here.
+        offset = depths[i] - 1
+        depth_expr = "Depth" if offset == 0 else f"Depth + {offset}"
+        out.append(f"  auto KBArg{i} = computeKnownBits(Arg{i}, Q, {depth_expr});\n")
     for i in r:
         out.append(f"  auto ArrArg{i} = kbToArr(KBArg{i});\n")
     arg_list = ", ".join(f"ArrArg{i}" for i in r)
@@ -281,7 +336,7 @@ def emit_pattern_impact_stats(specs: list[PatternSpec]) -> str:
     )
     out.append("  switch (ID) {\n")
     for spec in specs:
-        out.append(f"  case {int(spec.id)}:\n")
+        out.append(f"  case {spec.index}:\n")
         out.append(
             f"    if (BitsAdded > 0) ++NumPattern{spec.id}ImprovedQueries, Pattern{spec.id}BitsAdded += BitsAdded;\n"
         )
@@ -330,14 +385,26 @@ def main() -> None:
     args = ap.parse_args()
 
     data = loads((args.input_dir / "patterns.json").read_text())
-    specs: list[PatternSpec] = []
+    parsed: list[tuple[str, str, Op]] = []
     for pid, expr in data.items():
         ast = parse_expr(expr)
         assert isinstance(ast, Op)
-        specs.append(
-            PatternSpec(id=pid, expr=expr, ast=ast, root=ast.name, max_arg=max_arg(ast))
+        parsed.append((pid, expr, ast))
+    parsed.sort(key=lambda t: t[0])
+
+
+    # The numeric routing id is decoupled from the patterns.json key so the key
+    # can be an instruction name. When every key is already numeric (the legacy
+    # ideal/top/least_precise folders) we preserve int(key) so existing IDs and
+    # debug output are unchanged; otherwise we assign sequential indices.
+    all_numeric = all(pid.isdigit() for pid, _, _ in parsed)
+    specs: list[PatternSpec] = [
+        PatternSpec(
+            id=pid, expr=expr, ast=ast, root=ast.name, max_arg=max_arg(ast),
+            index=int(pid) if all_numeric else i,
         )
-    specs.sort(key=lambda s: s.id)
+        for i, (pid, expr, ast) in enumerate(parsed)
+    ]
 
     unknown_ops = sorted({s.root for s in specs if s.root not in OP_MATCHER})
     if unknown_ops:
@@ -348,17 +415,20 @@ def main() -> None:
         roots[PATTERN_OP_CANON.get(spec.root, spec.root)].append(spec)
 
     # Copy the transformer .inc files into <generated-dir>/patterns, clearing any
-    # stale ones first so a smaller pattern set doesn't leave orphans behind.
-    inc_src = find_inc_dir(args.input_dir)
+    # stale ones first so a smaller pattern set doesn't leave orphans behind. An
+    # empty patterns.json is valid: it yields a no-op dispatcher (opt runs with
+    # no pattern matching), so we don't require an inc/ folder in that case.
     patterns_dst = args.generated_dir / "patterns"
     patterns_dst.mkdir(parents=True, exist_ok=True)
     for old in patterns_dst.glob("pattern_*.inc"):
         old.unlink()
-    for spec in specs:
-        src = inc_src / f"pattern_{spec.id}.inc"
-        if not src.exists():
-            raise ValueError(f"missing {src} for pattern {spec.id} listed in patterns.json")
-        shutil.copyfile(src, patterns_dst / f"pattern_{spec.id}.inc")
+    if specs:
+        inc_src = find_inc_dir(args.input_dir)
+        for spec in specs:
+            src = inc_src / f"pattern_{spec.id}.inc"
+            if not src.exists():
+                raise ValueError(f"missing {src} for pattern {spec.id} listed in patterns.json")
+            shutil.copyfile(src, patterns_dst / f"pattern_{spec.id}.inc")
 
     out: list[str] = []
     out.append("// Auto-generated by generate_pattern_dispatcher.py. Do not edit.\n")
@@ -393,7 +463,7 @@ def main() -> None:
     dispatch_out = args.generated_dir / "KnownBitsPatternDispatch.inc"
     dispatch_out.write_text("".join(out))
 
-    print(f"copied {len(specs)} pattern .inc from {inc_src} -> {patterns_dst}")
+    print(f"copied {len(specs)} pattern .inc -> {patterns_dst}")
     print(f"wrote dispatcher -> {dispatch_out} (include helper: {args.include_helper})")
 
 
