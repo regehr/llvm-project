@@ -33,6 +33,7 @@
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/Loads.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/PatternInputHistogram.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/VectorUtils.h"
 #include "llvm/Analysis/WithCache.h"
@@ -78,6 +79,7 @@
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/KnownFPClass.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/RISCVTargetParser.h"
 #include <algorithm>
 #include <array>
@@ -2737,15 +2739,7 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
       const unsigned After = (Candidate.Zero | Candidate.One).popcount();
       const unsigned BitsAdded = After > Before ? (After - Before) : 0;
       recordPatternImpact(PM.ID, BitsAdded, Conflict);
-
-      DEBUG_WITH_TYPE("value-tracking-pattern", {
-        dbgs() << format("[p%03u]", PM.ID);
-        for (size_t i = 0; i < PM.Inputs.size(); ++i)
-          dbgs() << " in" << i << "=" << PM.Inputs[i];
-        dbgs() << " vanilla=" << VanillaKnown << " pattern=" << PM.KB
-               << " combined=" << Candidate << " bitsAdded=" << BitsAdded
-               << (Conflict ? " CONFLICT" : "") << "\n";
-      });
+      recordPatternHistogram(PM.ID, PM.Inputs, BitsAdded, Conflict);
 
       if (Conflict) {
         ++NumPatternKBConflicts;
