@@ -1,0 +1,165 @@
+declare {i16, i1} @llvm.uadd.with.overflow.i16(i16, i16)
+declare {i16, i1} @llvm.sadd.with.overflow.i16(i16, i16)
+declare {i16, i1} @llvm.usub.with.overflow.i16(i16, i16)
+declare {i16, i1} @llvm.ssub.with.overflow.i16(i16, i16)
+declare {i16, i1} @llvm.umul.with.overflow.i16(i16, i16)
+declare {i16, i1} @llvm.smul.with.overflow.i16(i16, i16)
+declare i16 @llvm.ctlz.i16(i16, i1 immarg)
+declare i16 @llvm.cttz.i16(i16, i1 immarg)
+declare i16 @llvm.ctpop.i16(i16)
+declare [2 x i16] @id_pair_16(i16, i16)
+
+define [2 x i16] @fn(i16 %".1", i16 %".2") alwaysinline norecurse nounwind readnone {
+entry:
+  %".4" = xor i16 %".1", -1
+  %".5" = add i16 %".1", %".2"
+  %".6" = sub i16 %".1", %".2"
+  %".7" = mul i16 %".1", %".2"
+  %"sdiv_rhs_is_zero" = icmp eq i16 1, 0
+  %"sdiv_lhs_is_im" = icmp eq i16 %".1", 32768
+  %"sdiv_rhs_is_m1" = icmp eq i16 1, 65535
+  %"sdiv_ov_case" = and i1 %"sdiv_lhs_is_im", %"sdiv_rhs_is_m1"
+  %"sdiv_ub_case" = or i1 %"sdiv_rhs_is_zero", %"sdiv_ov_case"
+  %"sdiv_safe_rhs" = select i1 %"sdiv_ub_case", i16 1, i16 1
+  %"sdiv_raw" = sdiv i16 %".1", %"sdiv_safe_rhs"
+  %"sdiv_lhs_is_neg" = icmp slt i16 %".1", 0
+  %"sdiv_div0_res" = select i1 %"sdiv_lhs_is_neg", i16 1, i16 65535
+  %"sdiv_div0" = select i1 %"sdiv_rhs_is_zero", i16 %"sdiv_div0_res", i16 %"sdiv_raw"
+  %"sdiv" = select i1 %"sdiv_ov_case", i16 32768, i16 %"sdiv_div0"
+  %"udiv_rhs_is_zero" = icmp eq i16 1, 0
+  %"udiv_safe_rhs" = select i1 %"udiv_rhs_is_zero", i16 1, i16 1
+  %"udiv_raw" = udiv i16 %".2", %"udiv_safe_rhs"
+  %"udiv" = select i1 %"udiv_rhs_is_zero", i16 65535, i16 %"udiv_raw"
+  %"srem_rhs_is_zero" = icmp eq i16 2, 0
+  %"srem_lhs_is_im" = icmp eq i16 %".1", 32768
+  %"srem_rhs_is_m1" = icmp eq i16 2, 65535
+  %"srem_ov_case" = and i1 %"srem_lhs_is_im", %"srem_rhs_is_m1"
+  %"srem_ub_case" = or i1 %"srem_rhs_is_zero", %"srem_ov_case"
+  %"srem_safe_rhs" = select i1 %"srem_ub_case", i16 1, i16 2
+  %"srem_raw" = srem i16 %".1", %"srem_safe_rhs"
+  %"srem_div0" = select i1 %"srem_rhs_is_zero", i16 %".1", i16 %"srem_raw"
+  %"srem" = select i1 %"srem_ov_case", i16 0, i16 %"srem_div0"
+  %"urem_rhs_is_zero" = icmp eq i16 2, 0
+  %"urem_safe_rhs" = select i1 %"urem_rhs_is_zero", i16 1, i16 2
+  %"urem_raw" = urem i16 %".2", %"urem_safe_rhs"
+  %"urem" = select i1 %"urem_rhs_is_zero", i16 %".2", i16 %"urem_raw"
+  %"shl_rhs_ge_bw" = icmp uge i16 1, 16
+  %"shl_safe_rhs" = select i1 %"shl_rhs_ge_bw", i16 0, i16 1
+  %"shl_raw" = shl i16 %".1", %"shl_safe_rhs"
+  %"shl" = select i1 %"shl_rhs_ge_bw", i16 0, i16 %"shl_raw"
+  %"ashr_rhs_ge_bw" = icmp uge i16 1, 16
+  %"ashr_lhs_is_neg" = icmp slt i16 %".1", 0
+  %"ashr_safe_rhs" = select i1 %"ashr_rhs_ge_bw", i16 0, i16 1
+  %"ashr_raw" = ashr i16 %".1", %"ashr_safe_rhs"
+  %"ashr_sat" = select i1 %"ashr_lhs_is_neg", i16 65535, i16 0
+  %"ashr" = select i1 %"ashr_rhs_ge_bw", i16 %"ashr_sat", i16 %"ashr_raw"
+  %"lshr_rhs_ge_bw" = icmp uge i16 1, 16
+  %"lshr_safe_rhs" = select i1 %"lshr_rhs_ge_bw", i16 0, i16 1
+  %"lshr_raw" = lshr i16 %".2", %"lshr_safe_rhs"
+  %"lshr" = select i1 %"lshr_rhs_ge_bw", i16 0, i16 %"lshr_raw"
+  %"uadd_ov_ov" = call {i16, i1} @llvm.uadd.with.overflow.i16(i16 %".1", i16 %".2")
+  %"uadd_ov" = extractvalue {i16, i1} %"uadd_ov_ov", 1
+  %"sadd_ov_ov" = call {i16, i1} @llvm.sadd.with.overflow.i16(i16 %".1", i16 %".2")
+  %"sadd_ov" = extractvalue {i16, i1} %"sadd_ov_ov", 1
+  %"usub_ov_ov" = call {i16, i1} @llvm.usub.with.overflow.i16(i16 %".1", i16 %".2")
+  %"usub_ov" = extractvalue {i16, i1} %"usub_ov_ov", 1
+  %"ssub_ov_ov" = call {i16, i1} @llvm.ssub.with.overflow.i16(i16 %".1", i16 %".2")
+  %"ssub_ov" = extractvalue {i16, i1} %"ssub_ov_ov", 1
+  %"umul_ov_ov" = call {i16, i1} @llvm.umul.with.overflow.i16(i16 %".1", i16 %".2")
+  %"umul_ov" = extractvalue {i16, i1} %"umul_ov_ov", 1
+  %"smul_ov_ov" = call {i16, i1} @llvm.smul.with.overflow.i16(i16 %".1", i16 %".2")
+  %"smul_ov" = extractvalue {i16, i1} %"smul_ov_ov", 1
+  %"ushl_ov_cmp" = icmp uge i16 1, 1
+  %"ushl_ov_shl" = shl i16 %".1", 1
+  %"ushl_ov_ashr" = lshr i16 %"ushl_ov_shl", 1
+  %"ushl_ov_ov" = icmp ne i16 %"ushl_ov_ashr", %".1"
+  %"ushl_ov_ov.1" = select i1 %"ushl_ov_cmp", i1 1, i1 %"ushl_ov_ov"
+  %"sshl_ov_cmp" = icmp uge i16 1, 1
+  %"sshl_ov_shl" = shl i16 %".1", 1
+  %"sshl_ov_ashr" = ashr i16 %"sshl_ov_shl", 1
+  %"sshl_ov_ov" = icmp ne i16 %"sshl_ov_ashr", %".1"
+  %"sshl_ov_ov.1" = select i1 %"sshl_ov_cmp", i1 1, i1 %"sshl_ov_ov"
+  %".8" = and i16 %".1", %".2"
+  %".9" = or i16 %".1", %".2"
+  %".10" = xor i16 %".1", %".2"
+  %"countl_zero" = call i16 @llvm.ctlz.i16(i16 %".1", i1 0)
+  %"countr_zero" = call i16 @llvm.cttz.i16(i16 %".1", i1 0)
+  %"countl_one_not" = xor i16 65535, -1
+  %"countl_one" = call i16 @llvm.ctlz.i16(i16 %"countl_one_not", i1 0)
+  %"countr_one_not" = xor i16 65535, -1
+  %"countr_one" = call i16 @llvm.cttz.i16(i16 %"countr_one_not", i1 0)
+  %".11" = call i16 @llvm.ctpop.i16(i16 %".1")
+  %"smin_cmp" = icmp slt i16 %".1", %".2"
+  %"smin" = select i1 %"smin_cmp", i16 %".1", i16 %".2"
+  %"smax_cmp" = icmp sgt i16 %".1", %".2"
+  %"smax" = select i1 %"smax_cmp", i16 %".1", i16 %".2"
+  %"umin_cmp" = icmp ult i16 %".1", %".2"
+  %"umin" = select i1 %"umin_cmp", i16 %".1", i16 %".2"
+  %"umax_cmp" = icmp ugt i16 %".1", %".2"
+  %"umax" = select i1 %"umax_cmp", i16 %".1", i16 %".2"
+  %"set_high_ge" = icmp uge i16 2, 16
+  %"set_high_safeN" = select i1 %"set_high_ge", i16 0, i16 2
+  %"set_high_sh" = lshr i16 65535, %"set_high_safeN"
+  %"set_high_inv" = xor i16 %"set_high_sh", 65535
+  %"set_high_mask" = select i1 %"set_high_ge", i16 65535, i16 %"set_high_inv"
+  %"set_high" = or i16 %".1", %"set_high_mask"
+  %"set_low_ge" = icmp uge i16 2, 16
+  %"set_low_safeN" = select i1 %"set_low_ge", i16 15, i16 2
+  %"set_low_sh" = shl i16 65535, %"set_low_safeN"
+  %"set_low_inv" = xor i16 %"set_low_sh", 65535
+  %"set_low_mask" = select i1 %"set_low_ge", i16 65535, i16 %"set_low_inv"
+  %"set_low" = or i16 %".1", %"set_low_mask"
+  %"clear_high_ge" = icmp uge i16 2, 16
+  %"clear_high_safeN" = select i1 %"clear_high_ge", i16 0, i16 2
+  %"clear_high_sh" = lshr i16 65535, %"clear_high_safeN"
+  %"clear_high_mask" = select i1 %"clear_high_ge", i16 0, i16 %"clear_high_sh"
+  %"clear_high" = and i16 %".1", %"clear_high_mask"
+  %"clear_low_ge" = icmp uge i16 2, 16
+  %"clear_low_safeN" = select i1 %"clear_low_ge", i16 15, i16 2
+  %"clear_low_sh" = shl i16 65535, %"clear_low_safeN"
+  %"clear_low_mask" = select i1 %"clear_low_ge", i16 0, i16 %"clear_low_sh"
+  %"clear_low" = and i16 %".1", %"clear_low_mask"
+  %"set_sign" = or i16 %".1", 32768
+  %"clear_sign" = and i16 %".1", 32767
+  %"is_negative" = icmp slt i16 32768, 0
+  %"cmp" = icmp eq i16 %".1", %".2"
+  %".12" = and i1 %"uadd_ov", %"sadd_ov"
+  %".13" = or i1 %"usub_ov", %"ssub_ov"
+  %".14" = xor i1 %"umul_ov", %"smul_ov"
+  %".15" = or i1 %"cmp", %"uadd_ov"
+  %".16" = and i1 %"cmp", %"uadd_ov"
+  %".17" = or i1 %"is_negative", %".12"
+  %".18" = xor i1 %".13", %".14"
+  %".19" = select i1 %".15", i16 %".5", i16 %".6"
+  %".20" = select i1 %".16", i16 %".7", i16 %".10"
+  %".21" = select i1 %".17", i16 %"smin", i16 %"smax"
+  %".22" = select i1 %".18", i16 %"umin", i16 %"umax"
+  %".23" = or i16 %".19", %".21"
+  %".24" = and i16 %".20", %".22"
+  %".25" = xor i16 %".23", %".24"
+  %".26" = add i16 %".25", %"countl_zero"
+  %".27" = add i16 %".26", %"countr_zero"
+  %".28" = add i16 %".27", %"countl_one"
+  %".29" = add i16 %".28", %"countr_one"
+  %".30" = add i16 %".29", %".11"
+  %".31" = add i16 %".30", %"set_high"
+  %".32" = add i16 %".31", %"set_low"
+  %".33" = add i16 %".32", %"clear_high"
+  %".34" = add i16 %".33", %"clear_low"
+  %".35" = add i16 %".34", %"set_sign"
+  %".36" = add i16 %".35", %"clear_sign"
+  %".37" = add i16 %".36", %".4"
+  %".38" = add i16 %".37", %"sdiv"
+  %".39" = add i16 %".38", %"udiv"
+  %".40" = add i16 %".39", %"srem"
+  %".41" = add i16 %".40", %"urem"
+  %".42" = add i16 %".41", %"shl"
+  %".43" = add i16 %".42", %"ashr"
+  %".44" = add i16 %".43", %"lshr"
+  %".45" = add i16 %".44", 32767
+  %".46" = add i16 %".45", 32768
+  %".47" = select i1 %"ushl_ov_ov.1", i16 %".46", i16 0
+  %".48" = select i1 %"sshl_ov_ov.1", i16 65535, i16 %".46"
+  %"result" = call [2 x i16] @id_pair_16(i16 %".47", i16 %".48")
+  ret [2 x i16] %"result"
+}
