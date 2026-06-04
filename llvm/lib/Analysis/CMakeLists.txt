@@ -129,6 +129,7 @@ add_llvm_component_library(LLVMAnalysis
   OverflowInstAnalysis.cpp
   PHITransAddr.cpp
   PhiValues.cpp
+  PatternInputHistogram.cpp
   PostDominators.cpp
   ProfileSummaryInfo.cpp
   PtrUseVisitor.cpp
