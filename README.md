@@ -1,20 +1,28 @@
-# LLVM Pattern Mining Notes
+# Good Company
 
-This fork contains pattern mining support for integer expression DAGs seen by LLVM analysis code.
+This fork is based off of LLVM 22.1.4
+And contains changes for the Eval of GoodCompany
 
-## DAGSlicer
+## Pattern Mining
 
-The mining implementation lives in `llvm/lib/Analysis/DAGSlicer.cpp`.
-This code is hooked and run from selected analyses in
-`llvm/lib/Analysis/ValueTracking.cpp`.
+Mining Patterns from LLVM proceeds in several steps:
+
+1. Slicing
+2. Deduplication
+3. Enumerate up to some size (right now 6 I think)
+4. Refinement
+
+### Slicing
+
+TODO give the expected `gen_optimized.py` call to get the patterns
+
+The slicing implementation lives in `llvm/lib/Analysis/DAGSlicer.cpp`.
+The hook to call the silcer is in `ValueTracking.cpp` which may call `DAGSlicer` from both `computeKnownBits` or `computeConstantRange`,
+with `-enable-knownbits-pattern-mining`, or `-enable-constantrange-pattern-mining` flags respectivly.
 
 `DAGSlicer` walks backward from an LLVM IR value and renders supported instruction DAGs as canonical pattern strings.
-It supports scalar integer operations such as:
-
-- integer binary operators, including `nuw`, `nsw`, `exact`, and `disjoint` flags;
-- selected integer intrinsics such as min/max, saturating add/sub/shift, popcount, and ctlz;
-- `icmp`, `select`, and bool/int casts needed to represent `i1` values inside integer DAGs.
-- See `dsl.md` for a full list of supported ops
+All supported operations are documented in [dsl.md](dsl.md).
+The patterns should follow a canonical form, documented in [canonicalization_contract.md](canonicalization_contract.md).
 
 Pattern depth is measured as the maximum number of expanded instruction nodes on any root-to-leaf path.
 Boundary values are rendered as `argN`.
@@ -22,63 +30,20 @@ Boundary values are rendered as `argN`.
 Pattern mining allows `i1` values and one integer type `iN`.
 Patterns that would require multiple distinct integer widths are rejected.
 
-## ValueTracking Hooks
+Once patterns are mined from LLVM, there is a pipeline to the final patterns.
 
-`ValueTracking.cpp` calls the miner from both `computeKnownBits` and
-`computeConstantRange`:
+TODO fill these out
+### Deduplication
+TODO add the dedup script to synth-xfer
+### Enumeration
+TODO add the enum script to synth-xfer
+### Refinement 
+TODO add the refinement script to synth-xfer
 
-```c++
-DAGSlicer::recordPatterns(V, Depth, 2, MaxAnalysisRecursionDepth);
-```
+## Table Building
 
-The effective mining depth is: `MaxAnalysisRecursionDepth - Depth`
-This keeps mined patterns within the recursion budget that the current analysis
-would use from the current query.
-Such that the pattern miner only "sees" the instructions that the analysis
-would during normal execution.
+TODO
 
-Both hooks are disabled by default. To enable known-bits mining, pass both the
-known-bits mining flag and LLVM debug output for the slicer:
+## Final Eval
 
-```bash
-opt -O3 input.ll                     \
-    -enable-knownbits-pattern-mining \
-    -debug-only=dag-slicer           \
-    -disable-output 2> patterns.txt
-```
-
-To enable constant-range mining instead:
-
-```bash
-opt -O3 input.ll                         \
-    -enable-constantrange-pattern-mining \
-    -debug-only=dag-slicer               \
-    -disable-output 2> patterns.txt
-```
-
-Both flags can be used in the same run.
-The debug output prints one pattern string per line.
-
-## `pattern-miner`
-
-`pattern-miner` is a standalone tool for mining patterns from every instruction in an input LLVM IR or bitcode module.
-It aggregates pattern counts into a TSV file.
-This is mostly used for testing the mining code.
-
-Example:
-
-```bash
-pattern-miner --input=input.ll --output=patterns.tsv --depth=6
-```
-
-## Building
-
-The tool is integrated into LLVM's CMake tool tree under `llvm/tools/pattern-miner`.
-
-After configuring LLVM, build it with:
-
-```sh
-ninja -C build pattern-miner
-```
-
-It is also part of the normal LLVM tools build configured from this source tree.
+TODO
