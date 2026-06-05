@@ -14,8 +14,6 @@ Mining Patterns from LLVM proceeds in several steps:
 
 ### Slicing
 
-TODO give the expected `gen_optimized.py` call to get the patterns
-
 The slicing implementation lives in `llvm/lib/Analysis/DAGSlicer.cpp`.
 The hook to call the silcer is in `ValueTracking.cpp` which may call `DAGSlicer` from both `computeKnownBits` or `computeConstantRange`,
 with `-enable-knownbits-pattern-mining`, or `-enable-constantrange-pattern-mining` flags respectivly.
@@ -30,20 +28,52 @@ Boundary values are rendered as `argN`.
 Pattern mining allows `i1` values and one integer type `iN`.
 Patterns that would require multiple distinct integer widths are rejected.
 
-Once patterns are mined from LLVM, there is a pipeline to the final patterns.
+To run this part of the pipeline:
+```bash
+python synth_xfer/llvm_eval/run_opt_benchmark.py \
+    --bench-path ~/git/llvm-opt-benchmark        \
+    --opt-path ~/git/llvm/llvm/build/bin/opt     \
+    --slice-kb
+```
+or alternatively use `--slice-cr`
 
-TODO fill these out
 ### Deduplication
-TODO add the dedup script to synth-xfer
+
+**TODO** Xuanyu add the dedup script to synth-xfer
+and explain the dedup algo
+
 ### Enumeration
-TODO add the enum script to synth-xfer
+
+ **TODO** Xuanyu add the enum script to synth-xfer
+and explain the enum algo
+
 ### Refinement 
-TODO add the refinement script to synth-xfer
+
+**TODO** Dominic add the refinement script to synth-xfer
+and explain the refine algo
 
 ## Table Building
 
-TODO
+1. Select patterns to mine abstact inputs for, and generate stubs:
+**TODO** Xuanyu, add table building script
+2. Rebuild LLVM
+3. Run the opt benchmark with the `--pattern-hist` flag:
+```bash
+python synth_xfer/llvm_eval/run_opt_benchmark.py \
+    --bench-path ~/git/llvm-opt-benchmark        \
+    --opt-path ~/git/llvm/llvm/build/bin/opt     \
+    --pattern-hist outputs/pattern-hist          \
+```
+4. Calculate the max precise value for all table values: **TODO**
+5. Shrink the tables: **TODO**
 
 ## Final Eval
 
-TODO
+Once the table transformers have been generated, and LLVM opt has been rebuilt run:
+```bash
+python synth_xfer/llvm_eval/run_opt_benchmark.py \
+    --bench-path ~/git/llvm-opt-benchmark        \
+    --opt-path ~/git/llvm/llvm/build/bin/opt     \
+    --stats stats.json
+```
+for a breakdown of the KnownBits added.
