@@ -1416,7 +1416,69 @@ static KnownBits arrToKB(const std::array<APInt, 2> &A) {
   return KB;
 }
 
+template <typename OpTy, typename CastTy, bool MatchSourceBool>
+struct BoolCast_match {
+  OpTy Op;
+
+  BoolCast_match(const OpTy &Op) : Op(Op) {}
+
+  template <typename ValTy> bool match(ValTy *V) const {
+    auto *I = dyn_cast<CastTy>(V);
+    if (!I)
+      return false;
+    Type *BoolTy = MatchSourceBool ? I->getSrcTy() : I->getDestTy();
+    return BoolTy->getScalarSizeInBits() == 1 && Op.match(I->getOperand(0));
+  }
+};
+
+template <typename OpTy>
+inline BoolCast_match<OpTy, TruncInst, false>
+m_TruncToBool(const OpTy &Op) {
+  return BoolCast_match<OpTy, TruncInst, false>(Op);
+}
+
+template <typename OpTy>
+inline BoolCast_match<OpTy, ZExtInst, true> m_ZExtBool(const OpTy &Op) {
+  return BoolCast_match<OpTy, ZExtInst, true>(Op);
+}
+
+template <typename OpTy>
+inline BoolCast_match<OpTy, SExtInst, true> m_SExtBool(const OpTy &Op) {
+  return BoolCast_match<OpTy, SExtInst, true>(Op);
+}
+
+template <Intrinsic::ID IntrID, typename LHS, typename RHS, typename Scale>
+struct CommutativeBinaryIntrinsicWithScale_match {
+  LHS L;
+  RHS R;
+  Scale S;
+
+  CommutativeBinaryIntrinsicWithScale_match(const LHS &L, const RHS &R,
+                                            const Scale &S)
+      : L(L), R(R), S(S) {}
+
+  template <typename OpTy> bool match(OpTy *V) const {
+    const auto *II = dyn_cast<IntrinsicInst>(V);
+    if (!II || II->getIntrinsicID() != IntrID)
+      return false;
+    return S.match(II->getArgOperand(2)) &&
+           ((L.match(II->getArgOperand(0)) &&
+             R.match(II->getArgOperand(1))) ||
+            (L.match(II->getArgOperand(1)) &&
+             R.match(II->getArgOperand(0))));
+  }
+};
+
+template <Intrinsic::ID IntrID, typename LHS, typename RHS, typename Scale>
+inline CommutativeBinaryIntrinsicWithScale_match<IntrID, LHS, RHS, Scale>
+m_c_IntrinsicWithScale(const LHS &L, const RHS &R, const Scale &S) {
+  return CommutativeBinaryIntrinsicWithScale_match<IntrID, LHS, RHS, Scale>(
+      L, R, S);
+}
+
 enum class PatternOp : uint8_t {
+  Abs,
+  AbsUndef,
   Add,
   AddNsw,
   AddNuw,
@@ -1424,31 +1486,85 @@ enum class PatternOp : uint8_t {
   And,
   Ashr,
   AshrExact,
+  CountLZero,
+  CountLZeroUndef,
+  CountRZero,
+  CountRZeroUndef,
+  ICmpEq,
+  ICmpNe,
+  ICmpSlt,
+  ICmpSle,
+  ICmpSgt,
+  ICmpSge,
+  ICmpUlt,
+  ICmpUle,
+  ICmpUgt,
+  ICmpUge,
   Lshr,
   LshrExact,
+  Mods,
+  Modu,
   Mul,
   MulNsw,
   MulNuw,
   MulNswNuw,
   Or,
   OrDisjoint,
+  PopCount,
+  SaddSat,
   Sdiv,
   SdivExact,
+  Select,
+  SextBool,
   Shl,
   ShlNsw,
   ShlNuw,
   ShlNswNuw,
-  Srem,
+  Smax,
+  Smin,
+  SmulSat,
+  SshlSat,
   Sub,
   SubNsw,
   SubNuw,
   SubNswNuw,
+  SsubSat,
+  TruncToBool,
+  UaddSat,
   Udiv,
   UdivExact,
-  Urem,
+  Umax,
+  Umin,
+  UmulSat,
+  UshlSat,
+  UsubSat,
   Xor,
+  ZextBool,
   Other
 };
+
+static PatternOp getIcmpPatternOp(ICmpInst::Predicate Pred) {
+  switch (Pred) {
+  case ICmpInst::ICMP_EQ:
+    return PatternOp::ICmpEq;
+  case ICmpInst::ICMP_NE:
+    return PatternOp::ICmpNe;
+  case ICmpInst::ICMP_SLT:
+  case ICmpInst::ICMP_SGT:
+    return PatternOp::ICmpSlt;
+  case ICmpInst::ICMP_SLE:
+  case ICmpInst::ICMP_SGE:
+    return PatternOp::ICmpSle;
+  case ICmpInst::ICMP_ULT:
+  case ICmpInst::ICMP_UGT:
+    return PatternOp::ICmpUlt;
+  case ICmpInst::ICMP_ULE:
+  case ICmpInst::ICMP_UGE:
+    return PatternOp::ICmpUle;
+  default:
+    return PatternOp::Other;
+  }
+}
 
 static PatternOp classifyPatternOp(const Operator *I, const SimplifyQuery &Q) {
   switch (I->getOpcode()) {
@@ -1470,6 +1586,54 @@ static PatternOp classifyPatternOp(const Operator *I, const SimplifyQuery &Q) {
     return Q.IIQ.isExact(cast<BinaryOperator>(I))
                ? PatternOp::AshrExact
                : PatternOp::Ashr;
+  case Instruction::Call: {
+    const auto *II = dyn_cast<IntrinsicInst>(I);
+    if (!II)
+      return PatternOp::Other;
+    switch (II->getIntrinsicID()) {
+    case Intrinsic::abs:
+      return match(II->getArgOperand(1), m_One()) ? PatternOp::AbsUndef
+                                                  : PatternOp::Abs;
+    case Intrinsic::ctlz:
+      return match(II->getArgOperand(1), m_One()) ? PatternOp::CountLZeroUndef
+                                                  : PatternOp::CountLZero;
+    case Intrinsic::cttz:
+      return match(II->getArgOperand(1), m_One()) ? PatternOp::CountRZeroUndef
+                                                  : PatternOp::CountRZero;
+    case Intrinsic::ctpop:
+      return PatternOp::PopCount;
+    case Intrinsic::sadd_sat:
+      return PatternOp::SaddSat;
+    case Intrinsic::uadd_sat:
+      return PatternOp::UaddSat;
+    case Intrinsic::ssub_sat:
+      return PatternOp::SsubSat;
+    case Intrinsic::usub_sat:
+      return PatternOp::UsubSat;
+    case Intrinsic::smul_fix_sat:
+      return match(II->getArgOperand(2), m_ZeroInt()) ? PatternOp::SmulSat
+                                                      : PatternOp::Other;
+    case Intrinsic::umul_fix_sat:
+      return match(II->getArgOperand(2), m_ZeroInt()) ? PatternOp::UmulSat
+                                                      : PatternOp::Other;
+    case Intrinsic::sshl_sat:
+      return PatternOp::SshlSat;
+    case Intrinsic::ushl_sat:
+      return PatternOp::UshlSat;
+    case Intrinsic::smax:
+      return PatternOp::Smax;
+    case Intrinsic::smin:
+      return PatternOp::Smin;
+    case Intrinsic::umax:
+      return PatternOp::Umax;
+    case Intrinsic::umin:
+      return PatternOp::Umin;
+    default:
+      return PatternOp::Other;
+    }
+  }
+  case Instruction::ICmp:
+    return getIcmpPatternOp(cast<ICmpInst>(I)->getPredicate());
   case Instruction::LShr:
     return Q.IIQ.isExact(cast<BinaryOperator>(I))
                ? PatternOp::LshrExact
@@ -1494,6 +1658,12 @@ static PatternOp classifyPatternOp(const Operator *I, const SimplifyQuery &Q) {
     return Q.IIQ.isExact(cast<BinaryOperator>(I))
                ? PatternOp::SdivExact
                : PatternOp::Sdiv;
+  case Instruction::Select:
+    return PatternOp::Select;
+  case Instruction::SExt:
+    return I->getOperand(0)->getType()->getScalarSizeInBits() == 1
+               ? PatternOp::SextBool
+               : PatternOp::Other;
   case Instruction::Shl: {
     auto *OBO = cast<OverflowingBinaryOperator>(I);
     bool NUW = Q.IIQ.hasNoUnsignedWrap(OBO);
@@ -1507,7 +1677,7 @@ static PatternOp classifyPatternOp(const Operator *I, const SimplifyQuery &Q) {
     return PatternOp::Shl;
   }
   case Instruction::SRem:
-    return PatternOp::Srem;
+    return PatternOp::Mods;
   case Instruction::Sub: {
     auto *OBO = cast<OverflowingBinaryOperator>(I);
     bool NUW = Q.IIQ.hasNoUnsignedWrap(OBO);
@@ -1520,14 +1690,21 @@ static PatternOp classifyPatternOp(const Operator *I, const SimplifyQuery &Q) {
       return PatternOp::SubNuw;
     return PatternOp::Sub;
   }
+  case Instruction::Trunc:
+    return I->getType()->getScalarSizeInBits() == 1 ? PatternOp::TruncToBool
+                                                    : PatternOp::Other;
   case Instruction::UDiv:
     return Q.IIQ.isExact(cast<BinaryOperator>(I))
                ? PatternOp::UdivExact
                : PatternOp::Udiv;
   case Instruction::URem:
-    return PatternOp::Urem;
+    return PatternOp::Modu;
   case Instruction::Xor:
     return PatternOp::Xor;
+  case Instruction::ZExt:
+    return I->getOperand(0)->getType()->getScalarSizeInBits() == 1
+               ? PatternOp::ZextBool
+               : PatternOp::Other;
   default:
     return PatternOp::Other;
   }

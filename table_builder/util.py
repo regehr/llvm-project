@@ -1,12 +1,12 @@
 """Shared helpers for the pattern tooling: the lossless conversion between a
 pattern expression and its filename/identifier form.
 
-A pattern is an all-binary DAG expression like `Add(arg0, And(arg1, arg2))`.
+A pattern is a fixed-arity DAG expression like `Add(arg0, And(arg1, arg2))`.
 `expr_to_id` sanitizes it into an id (`Add_arg0_And_arg1_arg2`) that is legal
 both as a filename stem and as a C++ identifier; `decode_id_to_expr` is the exact
 inverse. The id is the preorder traversal of the tree with every non-alphanumeric
-run collapsed to '_' -- because operators are binary and CamelCase (no '_' or
-digits) while leaves are `argN`, that token stream uniquely reconstructs the
+run collapsed to '_' -- because operator arities are known and CamelCase (no '_'
+or digits) while leaves are `argN`, that token stream uniquely reconstructs the
 tree, so the id is the only place the expression needs to live (no patterns.json,
 no marker comment).
 """
@@ -61,17 +61,28 @@ def expr_to_id(expression: str) -> str:
     return ident
 
 
+def _op_arity(valid_ops, op: str) -> int:
+    if valid_ops is None:
+        return 2
+    if not hasattr(valid_ops, "__getitem__"):
+        return 2
+    info = valid_ops[op]
+    if isinstance(info, tuple):
+        return info[0]
+    return int(info)
+
+
 def decode_id_to_expr(pid: str, valid_ops=None) -> str:
     """Reconstruct a pattern expression from its expression-derived id, the exact
     inverse of expr_to_id.
 
-    The id is the underscore-joined preorder traversal of an all-binary tree:
-    operator tokens have two children, `argN` tokens are leaves. That fixed-arity
-    preorder is uniquely decodable, so splitting on '_' and rebuilding greedily
-    recovers the original `Op(left, right)` text verbatim. If `valid_ops` is given
-    (e.g. the dispatcher's supported-op set), every operator token is checked
-    against it for an early, clear error; otherwise any non-argN token is taken to
-    be a binary op. Raises if the tokens don't form exactly one tree.
+    The id is the underscore-joined preorder traversal of a fixed-arity tree:
+    operator tokens have their declared number of children, and `argN` tokens are
+    leaves. That preorder is uniquely decodable, so splitting on '_' and
+    rebuilding greedily recovers the original expression text. If `valid_ops` is
+    given (e.g. the dispatcher's supported-op set), every operator token is
+    checked against it and its arity is used; otherwise any non-argN token is
+    taken to be a binary op. Raises if the tokens don't form exactly one tree.
     """
     tokens = pid.split("_")
     pos = 0
@@ -86,9 +97,8 @@ def decode_id_to_expr(pid: str, valid_ops=None) -> str:
             return tok
         if valid_ops is not None and tok not in valid_ops:
             raise ValueError(f"unknown op token {tok!r} in pattern id {pid!r}")
-        lhs = build()
-        rhs = build()
-        return f"{tok}({lhs}, {rhs})"
+        args = [build() for _ in range(_op_arity(valid_ops, tok))]
+        return f"{tok}({', '.join(args)})"
 
     expr = build()
     if pos != len(tokens):
