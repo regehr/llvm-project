@@ -55,17 +55,28 @@ and explain the refine algo
 ## Table Building
 
 1. Select patterns to mine abstact inputs for, and generate stubs:
-**TODO** Xuanyu, add table building script
-2. Rebuild LLVM
-3. Run the opt benchmark with the `--pattern-hist` flag:
+```bash
+python synth_xfer/llvm_eval/build_xfer_stubs.py \
+    -d KnownBits                                \
+    --tsv top_patterns.tsv                      \
+    --output-dir outputs
+```
+2. Generate `KnownBitsPatternDispatch`:
+```bash
+python synth_xfer/llvm_eval/generate_matcher.py \
+    --input-dir outputs                         \
+    --llvm-dir ~/git/llvm/
+```
+3. Rebuild LLVM
+4. Run the opt benchmark with the `--pattern-hist` flag:
 ```bash
 python synth_xfer/llvm_eval/run_opt_benchmark.py \
     --bench-path ~/git/llvm-opt-benchmark        \
     --opt-path ~/git/llvm/llvm/build/bin/opt     \
-    --pattern-hist outputs/pattern-hist          \
+    --pattern-hist outputs/pattern-hist
 ```
-4. Calculate the max precise value for all table values: **TODO**
-5. Shrink the tables: **TODO**
+5. Calculate the max precise value for all table values: **TODO**
+6. Shrink the tables: **TODO**
 
 ## Final Eval
 
