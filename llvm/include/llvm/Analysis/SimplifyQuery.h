@@ -87,6 +87,11 @@ struct SimplifyQuery {
   /// allowed to assume a particular value for a use of undef for example.
   bool CanUseUndef = true;
 
+  /// When true, the DAG-pattern known-bits hook is suppressed at every
+  /// recursion depth. Used to compute an existing-transformers-only ("pattern
+  /// off") baseline so the net top-level gain from patterns can be measured.
+  bool DisablePatterns = false;
+
   SimplifyQuery(const DataLayout &DL, const Instruction *CXTI = nullptr)
       : DL(DL), CxtI(CXTI) {}
 
@@ -135,6 +140,12 @@ struct SimplifyQuery {
   SimplifyQuery getWithoutCondContext() const {
     SimplifyQuery Copy(*this);
     Copy.CC = nullptr;
+    return Copy;
+  }
+
+  SimplifyQuery getWithPatternsDisabled() const {
+    SimplifyQuery Copy(*this);
+    Copy.DisablePatterns = true;
     return Copy;
   }
 };

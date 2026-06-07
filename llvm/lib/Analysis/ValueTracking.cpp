@@ -108,6 +108,13 @@ static cl::opt<bool> EnableConstantRangePatternMining(
     cl::desc("Mine and print DAGSlicer patterns from computeConstantRange. "
              "Requires -debug-only=dag-slicer output to be enabled."));
 
+static cl::opt<bool> EnablePatternOffBaseline(
+    "enable-pattern-off-baseline", cl::Hidden, cl::init(false),
+    cl::desc("Run a second patterns-disabled computeKnownBits pass at each "
+             "top-level query to measure net bits added by patterns "
+             "(PatternKBBitsAddedTopLevel statistic). Roughly doubles "
+             "top-level known-bits cost; enable only for stats runs."));
+
 /// Maximum number of instructions to check between assume and context
 /// instruction.
 static constexpr unsigned MaxInstrsToCheckForFree = 16;
@@ -1726,6 +1733,10 @@ ALWAYS_ENABLED_STATISTIC(
     "Number of queries improved by pattern KB meet");
 ALWAYS_ENABLED_STATISTIC(
     PatternKBBitsAdded, "Total bits added by pattern KB meet");
+ALWAYS_ENABLED_STATISTIC(
+    PatternKBBitsAddedTopLevel,
+    "Net top-level bits gained by patterns: final known bits at depth 0 with "
+    "patterns enabled minus the same query computed existing-transformers-only");
 ALWAYS_ENABLED_STATISTIC(NumPatternKBConflicts,
                          "Number of conflicts introduced by pattern KB meet");
 
@@ -2772,15 +2783,43 @@ KnownBits llvm::computeKnownBits(const Value *V, const SimplifyQuery &Q,
 void computeKnownBits(const Value *V, const APInt &DemandedElts,
                       KnownBits &Known, const SimplifyQuery &Q,
                       unsigned Depth) {
-  ++NumKBQueries;
-  if (Depth == 0)
-    ++NumKBTopLevelQueries;
+  // The "pattern off" shadow pass (Q.DisablePatterns) is synthetic measurement
+  // work; it must not touch any statistic, so all counters are gated below.
+  if (!Q.DisablePatterns) {
+    ++NumKBQueries;
+    if (Depth == 0)
+      ++NumKBTopLevelQueries;
+  }
+
+  // Pattern-off baseline popcount for the net top-level gain measurement, filled
+  // in by the shadow pass below. -1 means "not measured for this query".
+  int PatternFreePopcount = -1;
   auto CountKnownBitsOnExit = scope_exit([&] {
+    if (Q.DisablePatterns)
+      return;
     unsigned KnownCount = (Known.Zero | Known.One).popcount();
     TotalKnownBits += KnownCount;
-    if (Depth == 0)
+    if (Depth == 0) {
       TotalKnownBitsTopLevel += KnownCount;
+      // Net gain that patterns actually surface at the top level, on identical
+      // IR: pattern-on final known bits minus the existing-only baseline.
+      if (PatternFreePopcount >= 0 &&
+          KnownCount > static_cast<unsigned>(PatternFreePopcount))
+        PatternKBBitsAddedTopLevel +=
+            KnownCount - static_cast<unsigned>(PatternFreePopcount);
+    }
   });
+
+  // Once per top-level query, recompute known bits with patterns disabled
+  // throughout the whole recursive subtree to obtain the existing-transformers-
+  // only baseline. The shadow pass sets Q.DisablePatterns, so it neither
+  // recurses into another shadow pass nor perturbs any statistic.
+  if (Depth == 0 && !Q.DisablePatterns && EnablePatternOffBaseline) {
+    KnownBits PatternFree(Known.getBitWidth());
+    computeKnownBits(V, DemandedElts, PatternFree, Q.getWithPatternsDisabled(),
+                     Depth);
+    PatternFreePopcount = (PatternFree.Zero | PatternFree.One).popcount();
+  }
 
   if (!DemandedElts) {
     // No demanded elts, better to assume we don't know anything.
@@ -2897,10 +2936,12 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
   // Top-level DAG-pattern hook: all public computeKnownBits() overloads
   // eventually flow through this internal entry point.
   SmallVector<PatternMatchKB, 4> PatternMatches;
-  if (const auto *I = dyn_cast<Operator>(V)) {
-    computePatternKBMatches(I, Q, Depth, PatternMatches);
-    if (!PatternMatches.empty())
-      ++NumPatternMatches;
+  if (!Q.DisablePatterns) {
+    if (const auto *I = dyn_cast<Operator>(V)) {
+      computePatternKBMatches(I, Q, Depth, PatternMatches);
+      if (!PatternMatches.empty())
+        ++NumPatternMatches;
+    }
   }
 
   // A weak GlobalAlias is totally unknown. A non-weak GlobalAlias has
