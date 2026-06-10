@@ -1,6 +1,9 @@
 #include "DAGSlicer.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/InstrTypes.h"
@@ -11,7 +14,6 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include <algorithm>
 #include <cassert>
 #include <optional>
 #include <string>
@@ -23,8 +25,6 @@
 using namespace llvm;
 
 namespace {
-
-static constexpr bool AllowExternalBoolPatternValues = true;
 
 enum class PatternValueType { DataInt, Bool };
 
@@ -45,8 +45,6 @@ struct PatternOp {
   SmallVector<PatternValueType, 3> OperandTypes;
   bool IsCommutative;
 };
-
-enum class PatternTreeKind { Node, Boundary };
 
 bool isBoolType(Type *Ty) { return Ty->isIntegerTy(1); }
 
@@ -70,37 +68,6 @@ bool getConstantBool(const Value *Val) {
   auto *C = dyn_cast<ConstantInt>(Val);
   return C && !C->isZero();
 }
-
-struct PatternTree {
-  static PatternTree makeNode(const Instruction *Inst, const PatternOp &Op,
-                              ArrayRef<PatternTree> Children) {
-    PatternTree Tree(PatternTreeKind::Node, Op.ResultType,
-                     getBitWidth(Inst->getType()), Inst);
-    Tree.Name = Op.Name;
-    Tree.Children.assign(Children.begin(), Children.end());
-    Tree.IsCommutative = Op.IsCommutative;
-    return Tree;
-  }
-
-  static PatternTree makeBoundary(const Value *V, PatternValueType ResultType,
-                                  unsigned BitWidth) {
-    return PatternTree(PatternTreeKind::Boundary, ResultType, BitWidth, V);
-  }
-
-  PatternTreeKind Kind;
-  PatternValueType ResultType;
-  unsigned BitWidth;
-  std::string Name;
-  std::vector<PatternTree> Children;
-  const Value *BoundaryValue;
-  bool IsCommutative;
-
-private:
-  PatternTree(PatternTreeKind Kind, PatternValueType ResultType,
-              unsigned BitWidth, const Value *BoundaryValue)
-      : Kind(Kind), ResultType(ResultType), BitWidth(BitWidth),
-        BoundaryValue(BoundaryValue), IsCommutative(false) {}
-};
 
 bool isZeroConstant(const Value *Val) {
   auto *C = dyn_cast<ConstantInt>(Val);
@@ -194,10 +161,10 @@ std::string getOpcodeName(const Instruction *Inst) {
     Name = "Sdiv";
     break;
   case Instruction::URem:
-    Name = "Urem";
+    Name = "Modu";
     break;
   case Instruction::SRem:
-    Name = "Srem";
+    Name = "Mods";
     break;
   case Instruction::Shl:
     Name = "Shl";
@@ -341,242 +308,175 @@ std::optional<PatternOp> getPatternOp(const Instruction *Inst) {
   return Op;
 }
 
-std::optional<PatternTree> makeBoundaryTree(const Value *V) {
-  auto Ty = getPatternValueType(V->getType());
-  if (!Ty)
-    return std::nullopt;
-
-  return PatternTree::makeBoundary(V, *Ty, getBitWidth(V->getType()));
-}
-
-std::vector<PatternTree> enumeratePatternHelper(const Value *Val,
-                                                unsigned RemainingDepth);
-
-std::optional<SmallVector<std::vector<PatternTree>, 3>>
-getOperandPatternTrees(const Instruction *Inst, const PatternOp &Op,
-                       unsigned RemainingDepth) {
-  SmallVector<std::vector<PatternTree>, 3> OperandTrees;
-  for (std::size_t I = 0; I < Op.OperandIndices.size(); ++I) {
-    OperandTrees.push_back(enumeratePatternHelper(
-        Inst->getOperand(Op.OperandIndices[I]), RemainingDepth));
-    if (OperandTrees.back().empty())
-      return std::nullopt;
-  }
-  return OperandTrees;
-}
-
-void enumerateOperandProducts(const Instruction *Inst, const PatternOp &Op,
-                              ArrayRef<std::vector<PatternTree>> OperandTrees,
-                              SmallVectorImpl<PatternTree> &ChosenOperands,
-                              std::vector<PatternTree> &Result,
-                              std::size_t OperandNo = 0) {
-  if (OperandNo == Op.OperandIndices.size()) {
-    Result.push_back(PatternTree::makeNode(Inst, Op, ChosenOperands));
-    return;
-  }
-
-  for (const PatternTree &OperandTree : OperandTrees[OperandNo]) {
-    ChosenOperands.push_back(OperandTree);
-    enumerateOperandProducts(Inst, Op, OperandTrees, ChosenOperands, Result,
-                             OperandNo + 1);
-    ChosenOperands.pop_back();
-  }
-}
-
-std::vector<PatternTree> enumeratePatternHelper(const Value *Val,
-                                                unsigned RemainingDepth) {
-  std::vector<PatternTree> Result;
-
-  if (auto Boundary = makeBoundaryTree(Val))
-    Result.push_back(*Boundary);
-
-  if (RemainingDepth == 0)
-    return Result;
-
-  auto *Inst = dyn_cast<Instruction>(Val);
-  if (!Inst)
-    return Result;
-
-  auto Op = getPatternOp(Inst);
-  if (!Op)
-    return Result;
-
-  auto OperandTrees = getOperandPatternTrees(Inst, *Op, RemainingDepth - 1);
-  if (!OperandTrees)
-    return Result;
-
-  SmallVector<PatternTree, 3> ChosenOperands;
-  ChosenOperands.reserve(Op->OperandIndices.size());
-  enumerateOperandProducts(Inst, *Op, *OperandTrees, ChosenOperands, Result);
-
-  return Result;
-}
-
-unsigned getPatternDepth(const PatternTree &Tree) {
-  if (Tree.Kind != PatternTreeKind::Node)
-    return 0;
-
-  unsigned Depth = 0;
-  for (const PatternTree &Child : Tree.Children)
-    Depth = std::max(Depth, getPatternDepth(Child));
-  return Depth + 1;
-}
-
-struct RenderState {
-  std::optional<unsigned> DataIntBitWidth;
-  DenseMap<const Value *, unsigned> ArgumentNumbers;
-  bool Valid = true;
+// A single node of a truncated, sharing-preserving DAG. Mirrors PatternOp's
+// view of an instruction, but references its operands by node id so reused
+// values are not unfolded.
+struct DAGNodeInfo {
+  bool IsBoundary = false;
+  std::string Name;
+  PatternValueType ResultType = PatternValueType::DataInt;
+  unsigned BitWidth = 0;
+  bool IsCommutative = false;
+  SmallVector<unsigned, 3> Operands;
 };
 
-bool notePatternValue(const PatternTree &Tree, RenderState &State) {
-  if (Tree.ResultType != PatternValueType::DataInt)
-    return true;
+// Builds the maximal truncation of the value graph rooted at a given Value,
+// assigning one id per distinct Value. A value reached by several paths is
+// expanded to the deepest budget any path allows; edges do not carry local
+// truncation state, so all uses refer to that maximal node.
+class TruncatedDAGBuilder {
+public:
+  unsigned build(const Value *V, unsigned Remaining) {
+    // Some optimization passes temporarily create cyclic instruction graphs and
+    // call value analyses before repairing the IR. Cut those backedges at a
+    // boundary so mining cannot recurse forever or serialize a cyclic graph.
+    if (InProgress.contains(V))
+      return makeBoundaryNode(V);
 
-  if (!State.DataIntBitWidth) {
-    State.DataIntBitWidth = Tree.BitWidth;
-    return true;
+    auto VisitedIt = ExpandedRemaining.find(V);
+    bool Known = VisitedIt != ExpandedRemaining.end();
+    unsigned Id;
+    if (Known) {
+      Id = NodeIds[V];
+      if (VisitedIt->second >= Remaining)
+        return Id;
+    } else {
+      Id = Nodes.size();
+      Nodes.emplace_back();
+      NodeIds[V] = Id;
+    }
+    ExpandedRemaining[V] = Remaining;
+    InProgress.insert(V);
+    auto RemoveFromInProgress = make_scope_exit([&] { InProgress.erase(V); });
+
+    const auto *Inst = dyn_cast<Instruction>(V);
+    std::optional<PatternOp> Op =
+        (Remaining > 0 && Inst) ? getPatternOp(Inst) : std::nullopt;
+
+    DAGNodeInfo Info;
+    if (!Op) {
+      Info = makeBoundaryInfo(V);
+    } else {
+      Info.Name = Op->Name;
+      Info.ResultType = Op->ResultType;
+      Info.BitWidth = getBitWidth(Inst->getType());
+      Info.IsCommutative = Op->IsCommutative;
+      for (unsigned OperandIdx : Op->OperandIndices)
+        Info.Operands.push_back(
+            build(Inst->getOperand(OperandIdx), Remaining - 1));
+    }
+
+    Nodes[Id] = std::move(Info);
+    return Id;
   }
 
-  return Tree.BitWidth == *State.DataIntBitWidth;
-}
+  ArrayRef<DAGNodeInfo> nodes() const { return Nodes; }
 
-bool isValidExternalPatternValue(const PatternTree &Tree, RenderState &State) {
-  if (!notePatternValue(Tree, State))
-    return false;
-
-  if constexpr (AllowExternalBoolPatternValues) {
-    if (Tree.ResultType == PatternValueType::Bool)
-      return Tree.BitWidth == 1;
+private:
+  DAGNodeInfo makeBoundaryInfo(const Value *V) {
+    DAGNodeInfo Info;
+    Info.IsBoundary = true;
+    auto Ty = getPatternValueType(V->getType());
+    Info.ResultType = Ty.value_or(PatternValueType::DataInt);
+    Info.BitWidth = Ty ? getBitWidth(V->getType()) : 0;
+    return Info;
   }
 
-  return Tree.ResultType == PatternValueType::DataInt;
-}
+  unsigned makeBoundaryNode(const Value *V) {
+    auto It = BoundaryNodeIds.find(V);
+    if (It != BoundaryNodeIds.end())
+      return It->second;
 
-void renderPattern(const PatternTree &Tree, RenderState &State,
-                   raw_ostream &OS) {
-  if (!State.Valid)
+    unsigned Id = Nodes.size();
+    Nodes.push_back(makeBoundaryInfo(V));
+    BoundaryNodeIds[V] = Id;
+    return Id;
+  }
+
+  std::vector<DAGNodeInfo> Nodes;
+  DenseMap<const Value *, unsigned> NodeIds;
+  DenseMap<const Value *, unsigned> BoundaryNodeIds;
+  DenseMap<const Value *, unsigned> ExpandedRemaining;
+  DenseSet<const Value *> InProgress;
+};
+
+void serializeTruncatedDAG(const Value *Root, unsigned MaxDepth,
+                           raw_ostream &OS) {
+  const auto *Inst = dyn_cast_or_null<Instruction>(Root);
+  if (!Inst || !getPatternOp(Inst))
     return;
 
-  switch (Tree.Kind) {
-  case PatternTreeKind::Boundary: {
-    if (!isValidExternalPatternValue(Tree, State)) {
-      State.Valid = false;
-      return;
-    }
-    auto Inserted = State.ArgumentNumbers.try_emplace(
-        Tree.BoundaryValue, State.ArgumentNumbers.size());
-    OS << "arg" << Inserted.first->second;
+  TruncatedDAGBuilder Builder;
+  Builder.build(Root, MaxDepth);
+  ArrayRef<DAGNodeInfo> Nodes = Builder.nodes();
+
+  unsigned NonBoundaryNodes = 0;
+  for (const DAGNodeInfo &N : Nodes)
+    if (!N.IsBoundary)
+      ++NonBoundaryNodes;
+  if (NonBoundaryNodes < 2)
     return;
-  }
-  case PatternTreeKind::Node:
-    if (!notePatternValue(Tree, State)) {
-      State.Valid = false;
-      return;
+
+  SmallVector<unsigned, 16> Postorder;
+  SmallVector<unsigned, 16> SsaIndex(Nodes.size(), ~0u);
+  SmallVector<std::pair<unsigned, unsigned>, 16> Stack;
+  BitVector Done(Nodes.size());
+
+  Stack.emplace_back(0, 0);
+  while (!Stack.empty()) {
+    auto &[Id, OpNo] = Stack.back();
+    const DAGNodeInfo &N = Nodes[Id];
+    if (OpNo == N.Operands.size()) {
+      Postorder.push_back(Id);
+      Done.set(Id);
+      Stack.pop_back();
+      continue;
     }
-    OS << Tree.Name << "(";
-    for (std::size_t I = 0; I < Tree.Children.size(); ++I) {
-      if (I)
+
+    unsigned Child = N.Operands[OpNo++];
+    // Only operation nodes get SSA ids. Sharing means a node may be reached
+    // repeatedly, so skip operation nodes that have already been emitted.
+    if (!Nodes[Child].IsBoundary && !Done.test(Child))
+      Stack.emplace_back(Child, 0);
+  }
+
+  for (unsigned I = 0; I < Postorder.size(); ++I)
+    SsaIndex[Postorder[Postorder.size() - 1 - I]] = I;
+
+  DenseMap<unsigned, unsigned> ArgNumbers;
+  for (unsigned I = 0; I < Postorder.size(); ++I) {
+    unsigned Id = Postorder[Postorder.size() - 1 - I];
+    const DAGNodeInfo &N = Nodes[Id];
+    if (I)
+      OS << "; ";
+    OS << '%' << I << " = " << N.Name << '(';
+    for (unsigned J = 0; J < N.Operands.size(); ++J) {
+      if (J)
         OS << ", ";
-      renderPattern(Tree.Children[I], State, OS);
+      unsigned Child = N.Operands[J];
+      if (Nodes[Child].IsBoundary) {
+        auto Inserted = ArgNumbers.try_emplace(Child, ArgNumbers.size());
+        OS << "arg" << Inserted.first->second;
+      } else {
+        OS << '%' << SsaIndex[Child];
+      }
     }
-    OS << ")";
-    return;
+    OS << ')';
   }
-}
-
-std::optional<std::string> renderPatternWithState(const PatternTree &Tree,
-                                                  RenderState &State) {
-  std::string Pattern;
-  raw_string_ostream OS(Pattern);
-  renderPattern(Tree, State, OS);
-  if (!State.Valid)
-    return std::nullopt;
-  return OS.str();
-}
-
-std::optional<std::string> getCanonicalSortKey(const PatternTree &Tree);
-
-void canonicalizePatternTree(PatternTree &Tree) {
-  for (PatternTree &Child : Tree.Children)
-    canonicalizePatternTree(Child);
-
-  // Canonicalization contract:
-  // - Patterns are trees; repeated subexpressions are rendered structurally,
-  //   not as shared DAG bindings.
-  // - Children are canonicalized recursively first.
-  // - Only local commutative operands are sorted, by canonical subtree text.
-  //   Future matchers should use m_c_* / m_c_SpecificICmp for these nodes.
-  // - Swapped icmp predicates are normalized in getIcmpPatternOp().
-  // - We intentionally do not canonicalize associativity, algebraic
-  //   identities, or sharing constraints.
-  if (!Tree.IsCommutative || Tree.Children.size() != 2)
-    return;
-
-  auto LHS = getCanonicalSortKey(Tree.Children[0]);
-  auto RHS = getCanonicalSortKey(Tree.Children[1]);
-  if (LHS && RHS && *RHS < *LHS)
-    std::swap(Tree.Children[0], Tree.Children[1]);
-}
-
-std::optional<std::string> renderCanonicalPatternTree(PatternTree Tree) {
-  canonicalizePatternTree(Tree);
-
-  RenderState State;
-  return renderPatternWithState(Tree, State);
-}
-
-std::optional<std::string> renderPattern(const PatternTree &Tree) {
-  if constexpr (!AllowExternalBoolPatternValues) {
-    if (Tree.ResultType != PatternValueType::DataInt)
-      return std::nullopt;
-  } else {
-    if (Tree.ResultType == PatternValueType::Bool && Tree.BitWidth != 1)
-      return std::nullopt;
-  }
-
-  if (Tree.ResultType != PatternValueType::DataInt &&
-      Tree.ResultType != PatternValueType::Bool)
-    return std::nullopt;
-
-  return renderCanonicalPatternTree(Tree);
-}
-
-std::optional<std::string> getCanonicalSortKey(const PatternTree &Tree) {
-  return renderCanonicalPatternTree(Tree);
+  OS << '\n';
 }
 
 } // namespace
 
 namespace llvm::DAGSlicer {
 
-void enumeratePatterns(const Value *Root, unsigned MinDepth, unsigned MaxDepth,
-                       function_ref<void(StringRef Pattern)> Callback) {
-  auto *Inst = dyn_cast_or_null<Instruction>(Root);
-  auto RootOp = Inst ? getPatternOp(Inst) : std::nullopt;
-  if (!RootOp)
-    return;
-
-  for (const PatternTree &Tree : enumeratePatternHelper(Root, MaxDepth)) {
-    unsigned Depth = getPatternDepth(Tree);
-    if (Depth < MinDepth || Depth > MaxDepth)
-      continue;
-
-    if (auto Pattern = renderPattern(Tree))
-      Callback(*Pattern);
-  }
-}
-
-void recordPatterns(const Value *Root, unsigned AnalysisDepth,
-                    unsigned MinDepth, unsigned MaxDepth) {
-  assert(MinDepth <= MaxDepth);
+void recordDAG(const Value *Root, unsigned AnalysisDepth, unsigned MaxDepth) {
   assert(AnalysisDepth <= MaxDepth && "analysis depth exceeds max depth");
   unsigned RemainingDepth = MaxDepth - AnalysisDepth;
-  if (RemainingDepth < MinDepth)
+  if (RemainingDepth < 2)
     return;
 
-  LLVM_DEBUG(
-      enumeratePatterns(Root, MinDepth, RemainingDepth,
-                        [&](StringRef Pattern) { dbgs() << Pattern << '\n'; }));
+  LLVM_DEBUG(serializeTruncatedDAG(Root, RemainingDepth, dbgs()));
 }
 
 } // namespace llvm::DAGSlicer
