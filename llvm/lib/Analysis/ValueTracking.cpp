@@ -1809,9 +1809,7 @@ struct PatternMatchCR {
 #pragma clang diagnostic ignored "-Wunused-function"
 #endif
 #include "Generated/KnownBitsPatternDispatch.inc"
-#undef DEBUG_TYPE
 #include "Generated/SConstRangePatternDispatch.inc"
-#undef DEBUG_TYPE
 #include "Generated/UConstRangePatternDispatch.inc"
 #undef DEBUG_TYPE
 #if defined(__clang__)
