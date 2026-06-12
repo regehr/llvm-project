@@ -103,17 +103,21 @@ static cl::opt<bool> EnableKnownBitsPatternMining(
     cl::desc("Mine and print DAGSlicer DAGs from computeKnownBits. "
              "Requires -debug-only=dag-slicer output to be enabled."));
 
-static cl::opt<bool> EnableConstantRangePatternMining(
-    "enable-constantrange-pattern-mining", cl::Hidden, cl::init(false),
-    cl::desc("Mine and print DAGSlicer DAGs from computeConstantRange. "
-             "Requires -debug-only=dag-slicer output to be enabled."));
+static cl::opt<bool> EnableSignedConstantRangePatternMining(
+    "enable-sconstrange-pattern-mining", cl::Hidden, cl::init(false),
+    cl::desc("Mine and print DAGSlicer DAGs from signed computeConstantRange "
+             "queries. Requires -debug-only=dag-slicer output to be enabled."));
+
+static cl::opt<bool> EnableUnsignedConstantRangePatternMining(
+    "enable-uconstrange-pattern-mining", cl::Hidden, cl::init(false),
+    cl::desc("Mine and print DAGSlicer DAGs from unsigned computeConstantRange "
+             "queries. Requires -debug-only=dag-slicer output to be enabled."));
 
 static cl::opt<bool> EnablePatternOffBaseline(
     "enable-pattern-off-baseline", cl::Hidden, cl::init(false),
-    cl::desc("Run a second patterns-disabled computeKnownBits pass at each "
-             "top-level query to measure net bits added by patterns "
-             "(PatternKBBitsAddedTopLevel statistic). Roughly doubles "
-             "top-level known-bits cost; enable only for stats runs."));
+    cl::desc("Run a second patterns-disabled analysis pass at each top-level "
+             "query to measure net precision added by patterns. Roughly "
+             "doubles top-level query cost; enable only for stats runs."));
 
 /// Maximum number of instructions to check between assume and context
 /// instruction.
@@ -1573,12 +1577,12 @@ static PatternOp getIcmpPatternOp(ICmpInst::Predicate Pred) {
   }
 }
 
-static PatternOp classifyPatternOp(const Operator *I, const SimplifyQuery &Q) {
+static PatternOp classifyPatternOp(const Operator *I, const InstrInfoQuery &IIQ) {
   switch (I->getOpcode()) {
   case Instruction::Add: {
     auto *OBO = cast<OverflowingBinaryOperator>(I);
-    bool NUW = Q.IIQ.hasNoUnsignedWrap(OBO);
-    bool NSW = Q.IIQ.hasNoSignedWrap(OBO);
+    bool NUW = IIQ.hasNoUnsignedWrap(OBO);
+    bool NSW = IIQ.hasNoSignedWrap(OBO);
     if (NUW && NSW)
       return PatternOp::AddNswNuw;
     if (NSW)
@@ -1590,7 +1594,7 @@ static PatternOp classifyPatternOp(const Operator *I, const SimplifyQuery &Q) {
   case Instruction::And:
     return PatternOp::And;
   case Instruction::AShr:
-    return Q.IIQ.isExact(cast<BinaryOperator>(I))
+    return IIQ.isExact(cast<BinaryOperator>(I))
                ? PatternOp::AshrExact
                : PatternOp::Ashr;
   case Instruction::Call: {
@@ -1642,13 +1646,13 @@ static PatternOp classifyPatternOp(const Operator *I, const SimplifyQuery &Q) {
   case Instruction::ICmp:
     return getIcmpPatternOp(cast<ICmpInst>(I)->getPredicate());
   case Instruction::LShr:
-    return Q.IIQ.isExact(cast<BinaryOperator>(I))
+    return IIQ.isExact(cast<BinaryOperator>(I))
                ? PatternOp::LshrExact
                : PatternOp::Lshr;
   case Instruction::Mul: {
     auto *OBO = cast<OverflowingBinaryOperator>(I);
-    bool NUW = Q.IIQ.hasNoUnsignedWrap(OBO);
-    bool NSW = Q.IIQ.hasNoSignedWrap(OBO);
+    bool NUW = IIQ.hasNoUnsignedWrap(OBO);
+    bool NSW = IIQ.hasNoSignedWrap(OBO);
     if (NUW && NSW)
       return PatternOp::MulNswNuw;
     if (NSW)
@@ -1662,7 +1666,7 @@ static PatternOp classifyPatternOp(const Operator *I, const SimplifyQuery &Q) {
                ? PatternOp::OrDisjoint
                : PatternOp::Or;
   case Instruction::SDiv:
-    return Q.IIQ.isExact(cast<BinaryOperator>(I))
+    return IIQ.isExact(cast<BinaryOperator>(I))
                ? PatternOp::SdivExact
                : PatternOp::Sdiv;
   case Instruction::Select:
@@ -1673,8 +1677,8 @@ static PatternOp classifyPatternOp(const Operator *I, const SimplifyQuery &Q) {
                : PatternOp::Other;
   case Instruction::Shl: {
     auto *OBO = cast<OverflowingBinaryOperator>(I);
-    bool NUW = Q.IIQ.hasNoUnsignedWrap(OBO);
-    bool NSW = Q.IIQ.hasNoSignedWrap(OBO);
+    bool NUW = IIQ.hasNoUnsignedWrap(OBO);
+    bool NSW = IIQ.hasNoSignedWrap(OBO);
     if (NUW && NSW)
       return PatternOp::ShlNswNuw;
     if (NSW)
@@ -1687,8 +1691,8 @@ static PatternOp classifyPatternOp(const Operator *I, const SimplifyQuery &Q) {
     return PatternOp::Mods;
   case Instruction::Sub: {
     auto *OBO = cast<OverflowingBinaryOperator>(I);
-    bool NUW = Q.IIQ.hasNoUnsignedWrap(OBO);
-    bool NSW = Q.IIQ.hasNoSignedWrap(OBO);
+    bool NUW = IIQ.hasNoUnsignedWrap(OBO);
+    bool NSW = IIQ.hasNoSignedWrap(OBO);
     if (NUW && NSW)
       return PatternOp::SubNswNuw;
     if (NSW)
@@ -1701,7 +1705,7 @@ static PatternOp classifyPatternOp(const Operator *I, const SimplifyQuery &Q) {
     return I->getType()->getScalarSizeInBits() == 1 ? PatternOp::TruncToBool
                                                     : PatternOp::Other;
   case Instruction::UDiv:
-    return Q.IIQ.isExact(cast<BinaryOperator>(I))
+    return IIQ.isExact(cast<BinaryOperator>(I))
                ? PatternOp::UdivExact
                : PatternOp::Udiv;
   case Instruction::URem:
@@ -1726,7 +1730,7 @@ ALWAYS_ENABLED_STATISTIC(NumKBTopLevelQueries,
 ALWAYS_ENABLED_STATISTIC(
     TotalKnownBitsTopLevel,
     "Total known bits discovered across computeKnownBits queries at depth 0");
-ALWAYS_ENABLED_STATISTIC(NumPatternMatches,
+ALWAYS_ENABLED_STATISTIC(NumKBPatternMatches,
                          "Number of computePatternKB calls with at least one pattern match");
 ALWAYS_ENABLED_STATISTIC(
     NumPatternKBImprovedQueries,
@@ -1734,16 +1738,68 @@ ALWAYS_ENABLED_STATISTIC(
 ALWAYS_ENABLED_STATISTIC(
     PatternKBBitsAdded, "Total bits added by pattern KB meet");
 ALWAYS_ENABLED_STATISTIC(
+    PatternKBRelativeReduced,
+    "Total normalized KB precision added by pattern KB meet, in parts per 1000");
+ALWAYS_ENABLED_STATISTIC(
     PatternKBBitsAddedTopLevel,
     "Net top-level bits gained by patterns: final known bits at depth 0 with "
     "patterns enabled minus the same query computed existing-transformers-only");
+ALWAYS_ENABLED_STATISTIC(
+    PatternKBRelativeReducedTopLevel,
+    "Net top-level normalized KB precision added by patterns, in parts per 1000");
 ALWAYS_ENABLED_STATISTIC(NumPatternKBConflicts,
                          "Number of conflicts introduced by pattern KB meet");
+ALWAYS_ENABLED_STATISTIC(
+    NumPatternSCRMatches,
+    "Number of signed computePatternCR calls with at least one pattern match");
+ALWAYS_ENABLED_STATISTIC(
+    NumPatternUCRMatches,
+    "Number of unsigned computePatternCR calls with at least one pattern match");
+ALWAYS_ENABLED_STATISTIC(
+    NumPatternSCRImprovedQueries,
+    "Number of signed computeConstantRange queries improved by pattern "
+    "intersection");
+ALWAYS_ENABLED_STATISTIC(
+    NumPatternUCRImprovedQueries,
+    "Number of unsigned computeConstantRange queries improved by pattern "
+    "intersection");
+ALWAYS_ENABLED_STATISTIC(
+    PatternSCRSetSizeReduced,
+    "Total signed log2 set-size reduction from CR patterns");
+ALWAYS_ENABLED_STATISTIC(
+    PatternUCRSetSizeReduced,
+    "Total unsigned log2 set-size reduction from CR patterns");
+ALWAYS_ENABLED_STATISTIC(
+    PatternSCRRelativeReduced,
+    "Total signed scaled relative set-size reduction from CR patterns, in parts "
+    "per 1000");
+ALWAYS_ENABLED_STATISTIC(
+    PatternUCRRelativeReduced,
+    "Total unsigned scaled relative set-size reduction from CR patterns, in "
+    "parts per 1000");
+ALWAYS_ENABLED_STATISTIC(
+    PatternSCRSetSizeReducedTopLevel,
+    "Net top-level signed log2 set-size reduction from CR patterns");
+ALWAYS_ENABLED_STATISTIC(
+    PatternUCRSetSizeReducedTopLevel,
+    "Net top-level unsigned log2 set-size reduction from CR patterns");
+ALWAYS_ENABLED_STATISTIC(
+    NumPatternSCRBottom,
+    "Number of signed CR pattern intersections that produced empty range");
+ALWAYS_ENABLED_STATISTIC(
+    NumPatternUCRBottom,
+    "Number of unsigned CR pattern intersections that produced empty range");
 
 struct PatternMatchKB {
   unsigned ID;
   KnownBits KB;
-  SmallVector<KnownBits, 4> Inputs;
+  SmallVector<KnownBits, 6> Inputs;
+};
+
+struct PatternMatchCR {
+  unsigned ID;
+  ConstantRange CR;
+  SmallVector<ConstantRange, 6> Inputs;
 };
 
 #if defined(__clang__)
@@ -1754,9 +1810,20 @@ struct PatternMatchKB {
 #endif
 #include "Generated/KnownBitsPatternDispatch.inc"
 #undef DEBUG_TYPE
+#include "Generated/SConstRangePatternDispatch.inc"
+#undef DEBUG_TYPE
+#include "Generated/UConstRangePatternDispatch.inc"
+#undef DEBUG_TYPE
 #if defined(__clang__)
 #pragma clang diagnostic pop
 #endif
+
+static uint64_t getRelativeReductionPerThousand(uint64_t Reduction,
+                                                uint64_t FullSize) {
+  if (!Reduction || !FullSize)
+    return 0;
+  return (Reduction * 1000) / FullSize;
+}
 
 static void computeKnownBitsFromOperator(const Operator *I,
                                          const APInt &DemandedElts,
@@ -2804,9 +2871,13 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
       // Net gain that patterns actually surface at the top level, on identical
       // IR: pattern-on final known bits minus the existing-only baseline.
       if (PatternFreePopcount >= 0 &&
-          KnownCount > static_cast<unsigned>(PatternFreePopcount))
-        PatternKBBitsAddedTopLevel +=
+          KnownCount > static_cast<unsigned>(PatternFreePopcount)) {
+        unsigned BitsAdded =
             KnownCount - static_cast<unsigned>(PatternFreePopcount);
+        PatternKBBitsAddedTopLevel += BitsAdded;
+        PatternKBRelativeReducedTopLevel +=
+            getRelativeReductionPerThousand(BitsAdded, Known.getBitWidth());
+      }
     }
   });
 
@@ -2940,7 +3011,7 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
     if (const auto *I = dyn_cast<Operator>(V)) {
       computePatternKBMatches(I, Q, Depth, PatternMatches);
       if (!PatternMatches.empty())
-        ++NumPatternMatches;
+        ++NumKBPatternMatches;
     }
   }
 
@@ -2970,8 +3041,10 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
       const bool Conflict = Candidate.hasConflict();
       const unsigned After = (Candidate.Zero | Candidate.One).popcount();
       const unsigned BitsAdded = After > Before ? (After - Before) : 0;
-      recordPatternImpact(PM.ID, BitsAdded, Conflict);
-      recordPatternHistogram(PM.ID, PM.Inputs, BitsAdded, Conflict);
+      const uint64_t RelativeReduced =
+          getRelativeReductionPerThousand(BitsAdded, Known.getBitWidth());
+      recordKBPatternImpact(PM.ID, BitsAdded, RelativeReduced, Conflict);
+      recordKBPatternHistogram(PM.ID, PM.Inputs, BitsAdded, Conflict);
 
       if (Conflict) {
         ++NumPatternKBConflicts;
@@ -2990,6 +3063,7 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
       if (BitsAdded > 0) {
         ++NumPatternKBImprovedQueries;
         PatternKBBitsAdded += BitsAdded;
+        PatternKBRelativeReduced += RelativeReduced;
       }
 
       if (!PatternKnown)
@@ -10698,14 +10772,66 @@ static void setLimitForFPToI(const Instruction *I, APInt &Lower, APInt &Upper) {
   }
 }
 
-ConstantRange llvm::computeConstantRange(const Value *V, bool ForSigned,
-                                         bool UseInstrInfo, AssumptionCache *AC,
-                                         const Instruction *CtxI,
-                                         const DominatorTree *DT,
-                                         unsigned Depth) {
+static APInt getConstantRangeSetSize(const ConstantRange &CR) {
+  unsigned BitWidth = CR.getBitWidth();
+  APInt Modulus = APInt::getOneBitSet(BitWidth + 1, BitWidth);
+
+  if (CR.isEmptySet())
+    return APInt(BitWidth + 1, 0);
+  if (CR.isFullSet())
+    return Modulus;
+
+  APInt Lower = CR.getLower().zext(BitWidth + 1);
+  APInt Upper = CR.getUpper().zext(BitWidth + 1);
+  if (!CR.isWrappedSet())
+    return Upper - Lower;
+  return Modulus - (Lower - Upper);
+}
+
+static unsigned getConstantRangeLog2SetSize(const ConstantRange &CR) {
+  if (CR.isEmptySet())
+    return 0;
+  return getConstantRangeSetSize(CR).ceilLogBase2();
+}
+
+static uint64_t getCRRelativeReductionPerThousand(const APInt &Reduction,
+                                                  unsigned BitWidth) {
+  if (Reduction.isZero())
+    return 0;
+
+  unsigned CalcWidth = BitWidth + 10;
+  APInt ScaledReduction = Reduction.zext(CalcWidth) * APInt(CalcWidth, 1000);
+  APInt FullSetSize = APInt::getOneBitSet(CalcWidth, BitWidth);
+  return ScaledReduction.udiv(FullSetSize).getLimitedValue();
+}
+
+static void recordConstantRangeReduction(const ConstantRange &Before,
+                                         const ConstantRange &After,
+                                         uint64_t &Log2Reduced,
+                                         uint64_t &RelativeReduced) {
+  unsigned BeforeLog2Size = getConstantRangeLog2SetSize(Before);
+  unsigned AfterLog2Size = getConstantRangeLog2SetSize(After);
+  Log2Reduced =
+      BeforeLog2Size > AfterLog2Size ? BeforeLog2Size - AfterLog2Size : 0;
+
+  APInt BeforeSize = getConstantRangeSetSize(Before);
+  APInt AfterSize = getConstantRangeSetSize(After);
+  APInt Reduction = BeforeSize.uge(AfterSize)
+                        ? BeforeSize - AfterSize
+                        : APInt(BeforeSize.getBitWidth(), 0);
+  RelativeReduced =
+      getCRRelativeReductionPerThousand(Reduction, Before.getBitWidth());
+}
+
+static ConstantRange
+computeConstantRangeImpl(const Value *V, bool ForSigned, bool UseInstrInfo,
+                         AssumptionCache *AC, const Instruction *CtxI,
+                         const DominatorTree *DT, unsigned Depth,
+                         bool DisablePatterns) {
   assert(V->getType()->isIntOrIntVectorTy() && "Expected integer instruction");
 
-  if (EnableConstantRangePatternMining)
+  if (ForSigned ? EnableSignedConstantRangePatternMining
+                : EnableUnsignedConstantRangePatternMining)
     DAGSlicer::recordDAG(V, Depth, MaxAnalysisRecursionDepth);
 
   if (Depth == MaxAnalysisRecursionDepth)
@@ -10715,6 +10841,12 @@ ConstantRange llvm::computeConstantRange(const Value *V, bool ForSigned,
     return C->toConstantRange();
 
   unsigned BitWidth = V->getType()->getScalarSizeInBits();
+  std::optional<ConstantRange> PatternFreeCR;
+  if (Depth == 0 && !DisablePatterns && EnablePatternOffBaseline)
+    PatternFreeCR = computeConstantRangeImpl(
+        V, ForSigned, UseInstrInfo, AC, CtxI, DT, Depth,
+        /*DisablePatterns=*/true);
+
   InstrInfoQuery IIQ(UseInstrInfo);
   ConstantRange CR = ConstantRange::getFull(BitWidth);
   if (auto *BO = dyn_cast<BinaryOperator>(V)) {
@@ -10726,10 +10858,12 @@ ConstantRange llvm::computeConstantRange(const Value *V, bool ForSigned,
   } else if (auto *II = dyn_cast<IntrinsicInst>(V))
     CR = getRangeForIntrinsic(*II, UseInstrInfo);
   else if (auto *SI = dyn_cast<SelectInst>(V)) {
-    ConstantRange CRTrue = computeConstantRange(
-        SI->getTrueValue(), ForSigned, UseInstrInfo, AC, CtxI, DT, Depth + 1);
-    ConstantRange CRFalse = computeConstantRange(
-        SI->getFalseValue(), ForSigned, UseInstrInfo, AC, CtxI, DT, Depth + 1);
+    ConstantRange CRTrue = computeConstantRangeImpl(
+        SI->getTrueValue(), ForSigned, UseInstrInfo, AC, CtxI, DT, Depth + 1,
+        DisablePatterns);
+    ConstantRange CRFalse = computeConstantRangeImpl(
+        SI->getFalseValue(), ForSigned, UseInstrInfo, AC, CtxI, DT, Depth + 1,
+        DisablePatterns);
     CR = CRTrue.unionWith(CRFalse);
     CR = CR.intersectWith(getRangeForSelectPattern(*SI, IIQ));
   } else if (isa<FPToUIInst>(V) || isa<FPToSIInst>(V)) {
@@ -10770,15 +10904,103 @@ ConstantRange llvm::computeConstantRange(const Value *V, bool ForSigned,
       if (!Cmp || Cmp->getOperand(0) != V)
         continue;
       // TODO: Set "ForSigned" parameter via Cmp->isSigned()?
-      ConstantRange RHS =
-          computeConstantRange(Cmp->getOperand(1), /* ForSigned */ false,
-                               UseInstrInfo, AC, I, DT, Depth + 1);
+      ConstantRange RHS = computeConstantRangeImpl(
+          Cmp->getOperand(1), /* ForSigned */ false, UseInstrInfo, AC, I, DT,
+          Depth + 1, DisablePatterns);
       CR = CR.intersectWith(
           ConstantRange::makeAllowedICmpRegion(Cmp->getPredicate(), RHS));
     }
   }
 
+  SmallVector<PatternMatchCR, 4> PatternMatches;
+  if (!DisablePatterns) {
+    if (const auto *I = dyn_cast<Operator>(V)) {
+      if (ForSigned)
+        computePatternSCRMatches(I, UseInstrInfo, AC, CtxI, DT, Depth,
+                                 PatternMatches);
+      else
+        computePatternUCRMatches(I, UseInstrInfo, AC, CtxI, DT, Depth,
+                                 PatternMatches);
+      if (!PatternMatches.empty()) {
+        if (ForSigned)
+          ++NumPatternSCRMatches;
+        else
+          ++NumPatternUCRMatches;
+      }
+    }
+  }
+
+  if (!PatternMatches.empty()) {
+    const ConstantRange VanillaCR = CR;
+    ConstantRange::PreferredRangeType RangeType =
+        ForSigned ? ConstantRange::Signed : ConstantRange::Unsigned;
+    std::optional<ConstantRange> PatternCR;
+
+    for (const PatternMatchCR &PM : PatternMatches) {
+      ConstantRange Candidate = VanillaCR.intersectWith(PM.CR, RangeType);
+      bool Improved = Candidate != VanillaCR;
+      bool Bottom = Candidate.isEmptySet();
+
+      uint64_t Log2Reduced = 0;
+      uint64_t RelativeReduced = 0;
+      recordConstantRangeReduction(VanillaCR, Candidate, Log2Reduced,
+                                   RelativeReduced);
+      if (ForSigned)
+        recordSCRPatternImpact(PM.ID, Log2Reduced, RelativeReduced, Bottom);
+      else
+        recordUCRPatternImpact(PM.ID, Log2Reduced, RelativeReduced, Bottom);
+      recordCRPatternHistogram(PM.ID, PM.Inputs, ForSigned, Log2Reduced,
+                               Bottom);
+
+      if (Improved) {
+        if (ForSigned) {
+          ++NumPatternSCRImprovedQueries;
+          PatternSCRSetSizeReduced += Log2Reduced;
+          PatternSCRRelativeReduced += RelativeReduced;
+        } else {
+          ++NumPatternUCRImprovedQueries;
+          PatternUCRSetSizeReduced += Log2Reduced;
+          PatternUCRRelativeReduced += RelativeReduced;
+        }
+      }
+      if (Bottom) {
+        if (ForSigned)
+          ++NumPatternSCRBottom;
+        else
+          ++NumPatternUCRBottom;
+      }
+
+      if (!PatternCR)
+        PatternCR = PM.CR;
+      else
+        PatternCR = PatternCR->intersectWith(PM.CR, RangeType);
+    }
+
+    if (PatternCR)
+      CR = CR.intersectWith(*PatternCR, RangeType);
+  }
+
+  if (PatternFreeCR) {
+    uint64_t Log2Reduced = 0;
+    uint64_t RelativeReduced = 0;
+    recordConstantRangeReduction(*PatternFreeCR, CR, Log2Reduced,
+                                 RelativeReduced);
+    if (ForSigned)
+      PatternSCRSetSizeReducedTopLevel += Log2Reduced;
+    else
+      PatternUCRSetSizeReducedTopLevel += Log2Reduced;
+  }
+
   return CR;
+}
+
+ConstantRange llvm::computeConstantRange(const Value *V, bool ForSigned,
+                                         bool UseInstrInfo, AssumptionCache *AC,
+                                         const Instruction *CtxI,
+                                         const DominatorTree *DT,
+                                         unsigned Depth) {
+  return computeConstantRangeImpl(V, ForSigned, UseInstrInfo, AC, CtxI, DT,
+                                  Depth, /*DisablePatterns=*/false);
 }
 
 static void
