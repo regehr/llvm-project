@@ -1731,11 +1731,22 @@ ALWAYS_ENABLED_STATISTIC(NumKBTopLevelQueries,
 ALWAYS_ENABLED_STATISTIC(
     TotalKnownBitsTopLevel,
     "Total known bits discovered across computeKnownBits queries at depth 0");
+ALWAYS_ENABLED_STATISTIC(
+    TotalVanillaKnownBitsTopLevel,
+    "Total known bits discovered across pattern-disabled computeKnownBits "
+    "queries at depth 0");
 ALWAYS_ENABLED_STATISTIC(NumKBPatternMatches,
                          "Number of computePatternKB calls with at least one pattern match");
 ALWAYS_ENABLED_STATISTIC(
+    NumKBPatternMatchesTopLevel,
+    "Number of top-level computePatternKB calls with at least one pattern "
+    "match");
+ALWAYS_ENABLED_STATISTIC(
     NumPatternKBImprovedQueries,
     "Number of queries improved by pattern KB meet");
+ALWAYS_ENABLED_STATISTIC(
+    NumPatternKBImprovedQueriesTopLevel,
+    "Number of top-level queries improved by pattern KB meet");
 ALWAYS_ENABLED_STATISTIC(
     PatternKBBitsAdded, "Total bits added by pattern KB meet");
 ALWAYS_ENABLED_STATISTIC(
@@ -1757,6 +1768,20 @@ ALWAYS_ENABLED_STATISTIC(
     NumPatternUCRMatches,
     "Number of unsigned computePatternCR calls with at least one pattern match");
 ALWAYS_ENABLED_STATISTIC(
+    NumPatternSCRMatchesTopLevel,
+    "Number of top-level signed computePatternCR calls with at least one "
+    "pattern match");
+ALWAYS_ENABLED_STATISTIC(
+    NumPatternUCRMatchesTopLevel,
+    "Number of top-level unsigned computePatternCR calls with at least one "
+    "pattern match");
+ALWAYS_ENABLED_STATISTIC(
+    NumSCRTopLevelQueries,
+    "Number of signed computeConstantRange queries at depth 0");
+ALWAYS_ENABLED_STATISTIC(
+    NumUCRTopLevelQueries,
+    "Number of unsigned computeConstantRange queries at depth 0");
+ALWAYS_ENABLED_STATISTIC(
     NumPatternSCRImprovedQueries,
     "Number of signed computeConstantRange queries improved by pattern "
     "intersection");
@@ -1764,6 +1789,14 @@ ALWAYS_ENABLED_STATISTIC(
     NumPatternUCRImprovedQueries,
     "Number of unsigned computeConstantRange queries improved by pattern "
     "intersection");
+ALWAYS_ENABLED_STATISTIC(
+    NumPatternSCRImprovedQueriesTopLevel,
+    "Number of top-level signed computeConstantRange queries improved by "
+    "pattern intersection");
+ALWAYS_ENABLED_STATISTIC(
+    NumPatternUCRImprovedQueriesTopLevel,
+    "Number of top-level unsigned computeConstantRange queries improved by "
+    "pattern intersection");
 ALWAYS_ENABLED_STATISTIC(
     PatternSCRSetSizeReduced,
     "Total signed log2 set-size reduction from CR patterns");
@@ -1784,6 +1817,26 @@ ALWAYS_ENABLED_STATISTIC(
 ALWAYS_ENABLED_STATISTIC(
     PatternUCRSetSizeReducedTopLevel,
     "Net top-level unsigned log2 set-size reduction from CR patterns");
+ALWAYS_ENABLED_STATISTIC(
+    PatternSCRRelativeReducedTopLevel,
+    "Net top-level signed relative set-size reduction from CR patterns, in "
+    "parts per 1000");
+ALWAYS_ENABLED_STATISTIC(
+    PatternUCRRelativeReducedTopLevel,
+    "Net top-level unsigned relative set-size reduction from CR patterns, in "
+    "parts per 1000");
+ALWAYS_ENABLED_STATISTIC(
+    PatternSCRVanillaLog2SetSizeTopLevel,
+    "Total top-level signed log2 CR set size with patterns disabled");
+ALWAYS_ENABLED_STATISTIC(
+    PatternUCRVanillaLog2SetSizeTopLevel,
+    "Total top-level unsigned log2 CR set size with patterns disabled");
+ALWAYS_ENABLED_STATISTIC(
+    PatternSCRFinalLog2SetSizeTopLevel,
+    "Total top-level signed log2 CR set size with patterns enabled");
+ALWAYS_ENABLED_STATISTIC(
+    PatternUCRFinalLog2SetSizeTopLevel,
+    "Total top-level unsigned log2 CR set size with patterns enabled");
 ALWAYS_ENABLED_STATISTIC(
     NumPatternSCRBottom,
     "Number of signed CR pattern intersections that produced empty range");
@@ -2873,10 +2926,14 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
           KnownCount > static_cast<unsigned>(PatternFreePopcount)) {
         unsigned BitsAdded =
             KnownCount - static_cast<unsigned>(PatternFreePopcount);
+        ++NumPatternKBImprovedQueriesTopLevel;
         PatternKBBitsAddedTopLevel += BitsAdded;
         PatternKBRelativeReducedTopLevel +=
             getRelativeReductionPerThousand(BitsAdded, Known.getBitWidth());
       }
+      if (PatternFreePopcount >= 0)
+        TotalVanillaKnownBitsTopLevel +=
+            static_cast<unsigned>(PatternFreePopcount);
     }
   });
 
@@ -3009,8 +3066,11 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
   if (!Q.DisablePatterns) {
     if (const auto *I = dyn_cast<Operator>(V)) {
       computePatternKBMatches(I, Q, Depth, PatternMatches);
-      if (!PatternMatches.empty())
+      if (!PatternMatches.empty()) {
         ++NumKBPatternMatches;
+        if (Depth == 0)
+          ++NumKBPatternMatchesTopLevel;
+      }
     }
   }
 
@@ -10833,6 +10893,13 @@ computeConstantRangeImpl(const Value *V, bool ForSigned, bool UseInstrInfo,
                 : EnableUnsignedConstantRangePatternMining)
     DAGSlicer::recordDAG(V, Depth, MaxAnalysisRecursionDepth);
 
+  if (!DisablePatterns && Depth == 0) {
+    if (ForSigned)
+      ++NumSCRTopLevelQueries;
+    else
+      ++NumUCRTopLevelQueries;
+  }
+
   if (Depth == MaxAnalysisRecursionDepth)
     return ConstantRange::getFull(V->getType()->getScalarSizeInBits());
 
@@ -10921,10 +10988,15 @@ computeConstantRangeImpl(const Value *V, bool ForSigned, bool UseInstrInfo,
         computePatternUCRMatches(I, UseInstrInfo, AC, CtxI, DT, Depth,
                                  PatternMatches);
       if (!PatternMatches.empty()) {
-        if (ForSigned)
+        if (ForSigned) {
           ++NumPatternSCRMatches;
-        else
+          if (Depth == 0)
+            ++NumPatternSCRMatchesTopLevel;
+        } else {
           ++NumPatternUCRMatches;
+          if (Depth == 0)
+            ++NumPatternUCRMatchesTopLevel;
+        }
       }
     }
   }
@@ -10984,10 +11056,23 @@ computeConstantRangeImpl(const Value *V, bool ForSigned, bool UseInstrInfo,
     uint64_t RelativeReduced = 0;
     recordConstantRangeReduction(*PatternFreeCR, CR, Log2Reduced,
                                  RelativeReduced);
-    if (ForSigned)
+    if (ForSigned) {
+      if (CR != *PatternFreeCR)
+        ++NumPatternSCRImprovedQueriesTopLevel;
+      PatternSCRVanillaLog2SetSizeTopLevel +=
+          getConstantRangeLog2SetSize(*PatternFreeCR);
+      PatternSCRFinalLog2SetSizeTopLevel += getConstantRangeLog2SetSize(CR);
       PatternSCRSetSizeReducedTopLevel += Log2Reduced;
-    else
+      PatternSCRRelativeReducedTopLevel += RelativeReduced;
+    } else {
+      if (CR != *PatternFreeCR)
+        ++NumPatternUCRImprovedQueriesTopLevel;
+      PatternUCRVanillaLog2SetSizeTopLevel +=
+          getConstantRangeLog2SetSize(*PatternFreeCR);
+      PatternUCRFinalLog2SetSizeTopLevel += getConstantRangeLog2SetSize(CR);
       PatternUCRSetSizeReducedTopLevel += Log2Reduced;
+      PatternUCRRelativeReducedTopLevel += RelativeReduced;
+    }
   }
 
   return CR;
