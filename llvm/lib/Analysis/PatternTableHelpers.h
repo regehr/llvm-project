@@ -1,15 +1,15 @@
-// Auto-generated runtime support for KnownBits pattern lookup tables.
-// Included once from KnownBitsPatternDispatch.inc, before per-pattern files.
-//
-// Each pattern's .inc holds a per-bitwidth byte blob with the layout:
-//   row 0: arg0.Zero | arg0.One | arg1.Zero | arg1.One | ... | out.Zero | out.One
-//   row 1: ...
-// where each field is `(bw + 7) / 8` little-endian bytes.
-//
-// lookupKB() picks the subtable matching the runtime bitwidth, accumulates
-// (bitwise OR of Zero/One masks) the ideal output of every row that subsumes
-// the runtime input KnownBits, and returns the meet. If no row subsumes, it
-// returns top.
+#ifndef LLVM_LIB_ANALYSIS_PATTERNTABLEHELPERS_H
+#define LLVM_LIB_ANALYSIS_PATTERNTABLEHELPERS_H
+
+#include "llvm/ADT/APInt.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/IR/ConstantRange.h"
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+
+namespace llvm {
 
 namespace KnownBitsPatterns {
 
@@ -41,8 +41,8 @@ inline void packArg(const std::array<APInt, 2> &arg, unsigned maskBytes,
 }
 
 inline std::array<APInt, 2> unpackOut(const unsigned char *zBytes,
-                                      const unsigned char *oBytes,
-                                      unsigned bw, unsigned maskBytes) {
+                                      const unsigned char *oBytes, unsigned bw,
+                                      unsigned maskBytes) {
   uint64_t tmpZ[kMaxMaskBytes / sizeof(uint64_t)] = {};
   uint64_t tmpO[kMaxMaskBytes / sizeof(uint64_t)] = {};
   std::memcpy(tmpZ, zBytes, maskBytes);
@@ -56,8 +56,7 @@ inline std::array<APInt, 2> unpackOut(const unsigned char *zBytes,
 
 template <unsigned Arity>
 inline std::array<APInt, 2> lookupKB(const std::array<APInt, 2> *args,
-                                     const BwTable *tables,
-                                     size_t numTables) {
+                                     const BwTable *tables, size_t numTables) {
   unsigned bw = args[0][0].getBitWidth();
   unsigned maskBytes = (bw + 7) / 8;
   if (maskBytes > detail::kMaxMaskBytes)
@@ -71,16 +70,13 @@ inline std::array<APInt, 2> lookupKB(const std::array<APInt, 2> *args,
   unsigned char outZ[detail::kMaxMaskBytes] = {};
   unsigned char outO[detail::kMaxMaskBytes] = {};
 
-  // A bitwidth may be split across several subtables (blobs are chunked to keep
-  // each string literal within the limit C++ guarantees). Scan every subtable
-  // matching the runtime bitwidth and meet their outputs.
   for (size_t t = 0; t < numTables; ++t) {
     if (tables[t].bw != bw)
       continue;
     if (!packed) {
       for (unsigned a = 0; a < Arity; ++a)
-        detail::packArg(args[a], maskBytes,
-                        inZ + a * maskBytes, inO + a * maskBytes);
+        detail::packArg(args[a], maskBytes, inZ + a * maskBytes,
+                        inO + a * maskBytes);
       packed = true;
     }
 
@@ -118,3 +114,48 @@ inline std::array<APInt, 2> lookupKB(const std::array<APInt, 2> *args,
 }
 
 } // namespace KnownBitsPatterns
+
+namespace ConstantRangePatterns {
+
+template <size_t Arity> struct CRRow {
+  std::array<ConstantRange, Arity> Args;
+  ConstantRange Out;
+};
+
+template <size_t Arity, size_t NumRows>
+inline ConstantRange lookupCR(const std::array<ConstantRange, Arity> &Args,
+                              const std::array<CRRow<Arity>, NumRows> &Table,
+                              ConstantRange::PreferredRangeType Preferred) {
+  unsigned BW = Args[0].getBitWidth();
+  ConstantRange Out = ConstantRange::getFull(BW);
+  for (const CRRow<Arity> &Row : Table) {
+    bool Match = true;
+    for (size_t I = 0; I < Arity; ++I) {
+      if (!Row.Args[I].contains(Args[I])) {
+        Match = false;
+        break;
+      }
+    }
+    if (Match)
+      Out = Out.intersectWith(Row.Out, Preferred);
+  }
+  return Out;
+}
+
+template <size_t Arity, size_t NumRows>
+inline ConstantRange lookupSCR(const std::array<ConstantRange, Arity> &Args,
+                               const std::array<CRRow<Arity>, NumRows> &Table) {
+  return lookupCR(Args, Table, ConstantRange::Signed);
+}
+
+template <size_t Arity, size_t NumRows>
+inline ConstantRange lookupUCR(const std::array<ConstantRange, Arity> &Args,
+                               const std::array<CRRow<Arity>, NumRows> &Table) {
+  return lookupCR(Args, Table, ConstantRange::Unsigned);
+}
+
+} // namespace ConstantRangePatterns
+
+} // namespace llvm
+
+#endif
