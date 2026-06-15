@@ -1798,11 +1798,11 @@ ALWAYS_ENABLED_STATISTIC(
     "Number of top-level unsigned computeConstantRange queries improved by "
     "pattern intersection");
 ALWAYS_ENABLED_STATISTIC(
-    PatternSCRSetSizeReduced,
-    "Total signed log2 set-size reduction from CR patterns");
+    PatternSCRPrecisionBitsAdded,
+    "Total signed CR precision bits added by patterns");
 ALWAYS_ENABLED_STATISTIC(
-    PatternUCRSetSizeReduced,
-    "Total unsigned log2 set-size reduction from CR patterns");
+    PatternUCRPrecisionBitsAdded,
+    "Total unsigned CR precision bits added by patterns");
 ALWAYS_ENABLED_STATISTIC(
     PatternSCRRelativeReduced,
     "Total signed scaled relative set-size reduction from CR patterns, in parts "
@@ -1812,11 +1812,11 @@ ALWAYS_ENABLED_STATISTIC(
     "Total unsigned scaled relative set-size reduction from CR patterns, in "
     "parts per 1000");
 ALWAYS_ENABLED_STATISTIC(
-    PatternSCRSetSizeReducedTopLevel,
-    "Net top-level signed log2 set-size reduction from CR patterns");
+    PatternSCRPrecisionBitsAddedTopLevel,
+    "Net top-level signed CR precision bits added by patterns");
 ALWAYS_ENABLED_STATISTIC(
-    PatternUCRSetSizeReducedTopLevel,
-    "Net top-level unsigned log2 set-size reduction from CR patterns");
+    PatternUCRPrecisionBitsAddedTopLevel,
+    "Net top-level unsigned CR precision bits added by patterns");
 ALWAYS_ENABLED_STATISTIC(
     PatternSCRRelativeReducedTopLevel,
     "Net top-level signed relative set-size reduction from CR patterns, in "
@@ -1826,17 +1826,17 @@ ALWAYS_ENABLED_STATISTIC(
     "Net top-level unsigned relative set-size reduction from CR patterns, in "
     "parts per 1000");
 ALWAYS_ENABLED_STATISTIC(
-    PatternSCRVanillaLog2SetSizeTopLevel,
-    "Total top-level signed log2 CR set size with patterns disabled");
+    PatternSCRVanillaPrecisionBitsTopLevel,
+    "Total top-level signed CR precision bits with patterns disabled");
 ALWAYS_ENABLED_STATISTIC(
-    PatternUCRVanillaLog2SetSizeTopLevel,
-    "Total top-level unsigned log2 CR set size with patterns disabled");
+    PatternUCRVanillaPrecisionBitsTopLevel,
+    "Total top-level unsigned CR precision bits with patterns disabled");
 ALWAYS_ENABLED_STATISTIC(
-    PatternSCRFinalLog2SetSizeTopLevel,
-    "Total top-level signed log2 CR set size with patterns enabled");
+    PatternSCRFinalPrecisionBitsTopLevel,
+    "Total top-level signed CR precision bits with patterns enabled");
 ALWAYS_ENABLED_STATISTIC(
-    PatternUCRFinalLog2SetSizeTopLevel,
-    "Total top-level unsigned log2 CR set size with patterns enabled");
+    PatternUCRFinalPrecisionBitsTopLevel,
+    "Total top-level unsigned CR precision bits with patterns enabled");
 ALWAYS_ENABLED_STATISTIC(
     NumPatternSCRBottom,
     "Number of signed CR pattern intersections that produced empty range");
@@ -10853,6 +10853,12 @@ static unsigned getConstantRangeLog2SetSize(const ConstantRange &CR) {
   return getConstantRangeSetSize(CR).ceilLogBase2();
 }
 
+static unsigned getConstantRangePrecisionBits(const ConstantRange &CR) {
+  unsigned BitWidth = CR.getBitWidth();
+  unsigned Log2SetSize = getConstantRangeLog2SetSize(CR);
+  return BitWidth > Log2SetSize ? BitWidth - Log2SetSize : 0;
+}
+
 static uint64_t getCRRelativeReductionPerThousand(const APInt &Reduction,
                                                   unsigned BitWidth) {
   if (Reduction.isZero())
@@ -10866,11 +10872,11 @@ static uint64_t getCRRelativeReductionPerThousand(const APInt &Reduction,
 
 static void recordConstantRangeReduction(const ConstantRange &Before,
                                          const ConstantRange &After,
-                                         uint64_t &Log2Reduced,
+                                         uint64_t &PrecisionBitsAdded,
                                          uint64_t &RelativeReduced) {
   unsigned BeforeLog2Size = getConstantRangeLog2SetSize(Before);
   unsigned AfterLog2Size = getConstantRangeLog2SetSize(After);
-  Log2Reduced =
+  PrecisionBitsAdded =
       BeforeLog2Size > AfterLog2Size ? BeforeLog2Size - AfterLog2Size : 0;
 
   APInt BeforeSize = getConstantRangeSetSize(Before);
@@ -11012,25 +11018,27 @@ computeConstantRangeImpl(const Value *V, bool ForSigned, bool UseInstrInfo,
       bool Improved = Candidate != VanillaCR;
       bool Bottom = Candidate.isEmptySet();
 
-      uint64_t Log2Reduced = 0;
+      uint64_t PrecisionBitsAdded = 0;
       uint64_t RelativeReduced = 0;
-      recordConstantRangeReduction(VanillaCR, Candidate, Log2Reduced,
+      recordConstantRangeReduction(VanillaCR, Candidate, PrecisionBitsAdded,
                                    RelativeReduced);
       if (ForSigned)
-        recordSCRPatternImpact(PM.ID, Log2Reduced, RelativeReduced, Bottom);
-      else
-        recordUCRPatternImpact(PM.ID, Log2Reduced, RelativeReduced, Bottom);
-      recordCRPatternHistogram(PM.ID, PM.Inputs, ForSigned, Log2Reduced,
+        recordSCRPatternImpact(PM.ID, PrecisionBitsAdded, RelativeReduced,
                                Bottom);
+      else
+        recordUCRPatternImpact(PM.ID, PrecisionBitsAdded, RelativeReduced,
+                               Bottom);
+      recordCRPatternHistogram(PM.ID, PM.Inputs, ForSigned,
+                               PrecisionBitsAdded, Bottom);
 
       if (Improved) {
         if (ForSigned) {
           ++NumPatternSCRImprovedQueries;
-          PatternSCRSetSizeReduced += Log2Reduced;
+          PatternSCRPrecisionBitsAdded += PrecisionBitsAdded;
           PatternSCRRelativeReduced += RelativeReduced;
         } else {
           ++NumPatternUCRImprovedQueries;
-          PatternUCRSetSizeReduced += Log2Reduced;
+          PatternUCRPrecisionBitsAdded += PrecisionBitsAdded;
           PatternUCRRelativeReduced += RelativeReduced;
         }
       }
@@ -11052,25 +11060,27 @@ computeConstantRangeImpl(const Value *V, bool ForSigned, bool UseInstrInfo,
   }
 
   if (PatternFreeCR) {
-    uint64_t Log2Reduced = 0;
+    uint64_t PrecisionBitsAdded = 0;
     uint64_t RelativeReduced = 0;
-    recordConstantRangeReduction(*PatternFreeCR, CR, Log2Reduced,
+    recordConstantRangeReduction(*PatternFreeCR, CR, PrecisionBitsAdded,
                                  RelativeReduced);
     if (ForSigned) {
       if (CR != *PatternFreeCR)
         ++NumPatternSCRImprovedQueriesTopLevel;
-      PatternSCRVanillaLog2SetSizeTopLevel +=
-          getConstantRangeLog2SetSize(*PatternFreeCR);
-      PatternSCRFinalLog2SetSizeTopLevel += getConstantRangeLog2SetSize(CR);
-      PatternSCRSetSizeReducedTopLevel += Log2Reduced;
+      PatternSCRVanillaPrecisionBitsTopLevel +=
+          getConstantRangePrecisionBits(*PatternFreeCR);
+      PatternSCRFinalPrecisionBitsTopLevel +=
+          getConstantRangePrecisionBits(CR);
+      PatternSCRPrecisionBitsAddedTopLevel += PrecisionBitsAdded;
       PatternSCRRelativeReducedTopLevel += RelativeReduced;
     } else {
       if (CR != *PatternFreeCR)
         ++NumPatternUCRImprovedQueriesTopLevel;
-      PatternUCRVanillaLog2SetSizeTopLevel +=
-          getConstantRangeLog2SetSize(*PatternFreeCR);
-      PatternUCRFinalLog2SetSizeTopLevel += getConstantRangeLog2SetSize(CR);
-      PatternUCRSetSizeReducedTopLevel += Log2Reduced;
+      PatternUCRVanillaPrecisionBitsTopLevel +=
+          getConstantRangePrecisionBits(*PatternFreeCR);
+      PatternUCRFinalPrecisionBitsTopLevel +=
+          getConstantRangePrecisionBits(CR);
+      PatternUCRPrecisionBitsAddedTopLevel += PrecisionBitsAdded;
       PatternUCRRelativeReducedTopLevel += RelativeReduced;
     }
   }
