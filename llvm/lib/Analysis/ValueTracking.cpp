@@ -3103,7 +3103,7 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
       const uint64_t RelativeReduced =
           getRelativeReductionPerThousand(BitsAdded, Known.getBitWidth());
       recordKBPatternImpact(PM.ID, BitsAdded, RelativeReduced, Conflict);
-      recordKBPatternHistogram(PM.ID, PM.Inputs, BitsAdded, Conflict);
+      recordKBPatternHistogram(PM.ID, PM.Inputs);
 
       if (Conflict) {
         ++NumPatternKBConflicts;
@@ -11028,8 +11028,7 @@ computeConstantRangeImpl(const Value *V, bool ForSigned, bool UseInstrInfo,
       else
         recordUCRPatternImpact(PM.ID, PrecisionBitsAdded, RelativeReduced,
                                Bottom);
-      recordCRPatternHistogram(PM.ID, PM.Inputs, ForSigned,
-                               PrecisionBitsAdded, Bottom);
+      recordCRPatternHistogram(PM.ID, PM.Inputs, ForSigned);
 
       if (Improved) {
         if (ForSigned) {

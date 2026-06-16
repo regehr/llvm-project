@@ -17,17 +17,14 @@ namespace llvm {
 class LLVM_ABI PatternInputHistogram {
 public:
   void record(StringRef OutFile, StringRef Domain, unsigned ID,
-              ArrayRef<KnownBits> Inputs, unsigned BitsAdded, bool Bottom);
+              ArrayRef<KnownBits> Inputs);
   void record(StringRef OutFile, StringRef Domain, unsigned ID,
-              ArrayRef<ConstantRange> Inputs, bool ForSigned,
-              unsigned BitsAdded, bool Bottom);
+              ArrayRef<ConstantRange> Inputs, bool ForSigned);
   ~PatternInputHistogram();
 
 private:
   struct Row {
     uint64_t Count = 0;
-    uint64_t BitsAdded = 0;
-    uint64_t Bottom = 0;
   };
 
   std::mutex Mtx;
@@ -36,12 +33,10 @@ private:
   std::string Path;
 };
 
-LLVM_ABI void recordKBPatternHistogram(unsigned ID, ArrayRef<KnownBits> Inputs,
-                                       unsigned BitsAdded, bool Bottom);
+LLVM_ABI void recordKBPatternHistogram(unsigned ID, ArrayRef<KnownBits> Inputs);
 LLVM_ABI void recordCRPatternHistogram(unsigned ID,
                                        ArrayRef<ConstantRange> Inputs,
-                                       bool ForSigned, unsigned BitsAdded,
-                                       bool Bottom);
+                                       bool ForSigned);
 
 } // namespace llvm
 

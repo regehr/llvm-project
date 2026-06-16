@@ -71,9 +71,16 @@ static void printUConstRange(raw_ostream &OS, const ConstantRange &CR) {
   OS << ']';
 }
 
+static void printKnownBits(raw_ostream &OS, const KnownBits &KB) {
+  if (KB.hasConflict()) {
+    OS << "(bottom)";
+    return;
+  }
+  KB.print(OS);
+}
+
 void PatternInputHistogram::record(StringRef OutFile, StringRef Domain,
-                                   unsigned ID, ArrayRef<KnownBits> Inputs,
-                                   unsigned BitsAdded, bool Bottom) {
+                                   unsigned ID, ArrayRef<KnownBits> Inputs) {
   std::lock_guard<std::mutex> Lock(Mtx);
   // Capture the output path on first use; reading the cl::opt here (during
   // compilation) is safe, whereas reading it in the destructor would race
@@ -85,18 +92,15 @@ void PatternInputHistogram::record(StringRef OutFile, StringRef Domain,
   OS << Domain << '\t' << ID << '\t' << getInputBitWidth(Inputs);
   for (const KnownBits &In : Inputs) {
     OS << '\t';
-    In.print(OS);
+    printKnownBits(OS, In);
   }
   Row &R = Rows[OS.str()];
   ++R.Count;
-  R.BitsAdded += BitsAdded;
-  R.Bottom += Bottom ? 1 : 0;
 }
 
 void PatternInputHistogram::record(StringRef OutFile, StringRef Domain,
                                    unsigned ID, ArrayRef<ConstantRange> Inputs,
-                                   bool ForSigned, unsigned BitsAdded,
-                                   bool Bottom) {
+                                   bool ForSigned) {
   std::lock_guard<std::mutex> Lock(Mtx);
   if (Path.empty())
     Path = OutFile.str();
@@ -112,8 +116,6 @@ void PatternInputHistogram::record(StringRef OutFile, StringRef Domain,
   }
   Row &R = Rows[OS.str()];
   ++R.Count;
-  R.BitsAdded += BitsAdded;
-  R.Bottom += Bottom ? 1 : 0;
 }
 
 PatternInputHistogram::~PatternInputHistogram() {
@@ -123,25 +125,21 @@ PatternInputHistogram::~PatternInputHistogram() {
   raw_fd_ostream Out(Path, EC, sys::fs::OF_Text);
   if (EC)
     return;
-  // <domain> <id> <bw> <arg0> <arg1> ... <count> <bits_added> <bottom>
+  // <domain> <id> <bw> <arg0> <arg1> ... <count>
   for (const auto &KV : Rows)
-    Out << KV.first << '\t' << KV.second.Count << '\t' << KV.second.BitsAdded
-        << '\t' << KV.second.Bottom << '\n';
+    Out << KV.first << '\t' << KV.second.Count << '\n';
 }
 
-void llvm::recordKBPatternHistogram(unsigned ID, ArrayRef<KnownBits> Inputs,
-                                    unsigned BitsAdded, bool Bottom) {
+void llvm::recordKBPatternHistogram(unsigned ID, ArrayRef<KnownBits> Inputs) {
   if (PatternHistFile.empty())
     return;
-  getPatternInputHistogram().record(PatternHistFile, "kb", ID, Inputs,
-                                    BitsAdded, Bottom);
+  getPatternInputHistogram().record(PatternHistFile, "kb", ID, Inputs);
 }
 
 void llvm::recordCRPatternHistogram(unsigned ID, ArrayRef<ConstantRange> Inputs,
-                                    bool ForSigned, unsigned BitsAdded,
-                                    bool Bottom) {
+                                    bool ForSigned) {
   if (PatternHistFile.empty())
     return;
   getPatternInputHistogram().record(PatternHistFile, ForSigned ? "scr" : "ucr",
-                                    ID, Inputs, ForSigned, BitsAdded, Bottom);
+                                    ID, Inputs, ForSigned);
 }
