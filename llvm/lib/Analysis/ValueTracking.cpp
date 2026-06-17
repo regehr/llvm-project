@@ -1644,7 +1644,6 @@ static PatternOp classifyPatternOp(const Operator *I, const InstrInfoQuery &IIQ)
       return PatternOp::Other;
     }
   }
-  case Instruction::ICmp:
   case Instruction::ICmp: {
     auto *Cmp = cast<ICmpInst>(I);
     if (!Cmp->getOperand(0)->getType()->isIntOrIntVectorTy())
