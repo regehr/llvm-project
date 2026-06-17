@@ -1645,7 +1645,12 @@ static PatternOp classifyPatternOp(const Operator *I, const InstrInfoQuery &IIQ)
     }
   }
   case Instruction::ICmp:
-    return getIcmpPatternOp(cast<ICmpInst>(I)->getPredicate());
+  case Instruction::ICmp: {
+    auto *Cmp = cast<ICmpInst>(I);
+    if (!Cmp->getOperand(0)->getType()->isIntOrIntVectorTy())
+      return PatternOp::Other;
+    return getIcmpPatternOp(Cmp->getPredicate());
+  }
   case Instruction::LShr:
     return IIQ.isExact(cast<BinaryOperator>(I))
                ? PatternOp::LshrExact
@@ -1720,6 +1725,39 @@ static PatternOp classifyPatternOp(const Operator *I, const InstrInfoQuery &IIQ)
   default:
     return PatternOp::Other;
   }
+}
+
+template <typename LHS_t, typename RHS_t>
+struct IntSpecificICmp_match {
+  const CmpPredicate Predicate;
+  LHS_t L;
+  RHS_t R;
+
+  IntSpecificICmp_match(CmpPredicate Pred, const LHS_t &LHS, const RHS_t &RHS)
+      : Predicate(Pred), L(LHS), R(RHS) {}
+
+  template <typename OpTy> bool match(OpTy *V) const {
+    auto *I = dyn_cast<ICmpInst>(V);
+    if (!I || !I->getOperand(0)->getType()->isIntOrIntVectorTy())
+      return false;
+
+    if (CmpPredicate::getMatching(CmpPredicate::get(I), Predicate) &&
+        L.match(I->getOperand(0)) && R.match(I->getOperand(1)))
+      return true;
+
+    if (CmpPredicate::getMatching(CmpPredicate::get(I),
+                                  CmpPredicate::getSwapped(Predicate)) &&
+        L.match(I->getOperand(1)) && R.match(I->getOperand(0)))
+      return true;
+
+    return false;
+  }
+};
+
+template <typename LHS, typename RHS>
+inline IntSpecificICmp_match<LHS, RHS>
+m_c_IntSpecificICmp(CmpPredicate MatchPred, const LHS &L, const RHS &R) {
+  return IntSpecificICmp_match<LHS, RHS>(MatchPred, L, R);
 }
 
 #define DEBUG_TYPE "value-tracking"
