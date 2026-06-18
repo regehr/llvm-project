@@ -59,6 +59,20 @@ bool GIMatchTableExecutor::executeMatchTable(
   bool NoFPException = !State.MIs[0]->getDesc().mayRaiseFPException();
 
   const uint32_t Flags = State.MIs[0]->getFlags();
+  const unsigned RootOpcode = State.MIs[0]->getOpcode();
+
+  // Poison-generating / value-asserting flags whose meaning is tied to a
+  // specific operation. They must not be propagated from the matched root to a
+  // newly built generic instruction with a different opcode (e.g. a combine
+  // rewriting a "nuw add" into a "sub"): the flag describes the root's
+  // semantics, not the new operation's, so carrying it over can introduce false
+  // poison. Selection (generic root -> target output) and same-opcode rewrites
+  // are unaffected, since they preserve the operation's semantics.
+  constexpr uint32_t OpcodeSpecificFlags =
+      MachineInstr::NoUWrap | MachineInstr::NoSWrap | MachineInstr::IsExact |
+      MachineInstr::NonNeg | MachineInstr::Disjoint | MachineInstr::NoUSWrap |
+      MachineInstr::SameSign | MachineInstr::InBounds;
+
   bool BuilderInitialized = false;
   const auto initializeBuilder = [&]() {
     if (BuilderInitialized)
@@ -84,9 +98,16 @@ bool GIMatchTableExecutor::executeMatchTable(
 
   const auto propagateFlags = [&]() {
     for (auto MIB : OutMIs) {
+      // Don't carry opcode-specific flags when a combine rebuilds the value
+      // with a different generic operation; the root's flags only describe the
+      // root's operation. Generic -> target selection is left untouched.
+      uint32_t RootFlags = Flags;
+      unsigned NewOpcode = MIB->getOpcode();
+      if (NewOpcode != RootOpcode && isPreISelGenericOpcode(NewOpcode))
+        RootFlags &= ~OpcodeSpecificFlags;
       // Set the NoFPExcept flag when no original matched instruction could
       // raise an FP exception, but the new instruction potentially might.
-      uint32_t MIBFlags = Flags | MIB.getInstr()->getFlags();
+      uint32_t MIBFlags = RootFlags | MIB.getInstr()->getFlags();
       if (NoFPException && MIB->mayRaiseFPException())
         MIBFlags |= MachineInstr::NoFPExcept;
       if (Observer)
