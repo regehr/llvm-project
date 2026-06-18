@@ -2265,10 +2265,13 @@ bool CombinerHelper::matchCombineShlOfExtend(MachineInstr &MI,
   Register LHS = MI.getOperand(1).getReg();
 
   Register ExtSrc;
-  if (!mi_match(LHS, MRI, m_GAnyExt(m_Reg(ExtSrc))) &&
-      !mi_match(LHS, MRI, m_GZExt(m_Reg(ExtSrc))) &&
-      !mi_match(LHS, MRI, m_GSExt(m_Reg(ExtSrc))))
+  bool IsSExt = false;
+  if (mi_match(LHS, MRI, m_GSExt(m_Reg(ExtSrc)))) {
+    IsSExt = true;
+  } else if (!mi_match(LHS, MRI, m_GAnyExt(m_Reg(ExtSrc))) &&
+             !mi_match(LHS, MRI, m_GZExt(m_Reg(ExtSrc)))) {
     return false;
+  }
 
   Register RHS = MI.getOperand(2).getReg();
   MachineInstr *MIShiftAmt = MRI.getVRegDef(RHS);
@@ -2293,7 +2296,18 @@ bool CombinerHelper::matchCombineShlOfExtend(MachineInstr &MI,
 
   unsigned MinLeadingZeros = VT->getKnownZeroes(ExtSrc).countl_one();
   unsigned SrcTySize = MRI.getType(ExtSrc).getScalarSizeInBits();
-  return MinLeadingZeros >= ShiftAmt && ShiftAmt < SrcTySize;
+  if (MinLeadingZeros < ShiftAmt || ShiftAmt >= SrcTySize)
+    return false;
+
+  // applyCombineShlOfExtend rebuilds the result with a zero-extend, so for a
+  // sign-extended source we also need the source's sign bit to be known zero;
+  // otherwise sext(x) != zext(x) and the high bits of the result would differ.
+  // The MinLeadingZeros >= ShiftAmt check above is vacuous when ShiftAmt == 0,
+  // so without this a `shl (sext x), 0` would be miscompiled to `zext x`.
+  if (IsSExt && MinLeadingZeros < 1)
+    return false;
+
+  return true;
 }
 
 void CombinerHelper::applyCombineShlOfExtend(
