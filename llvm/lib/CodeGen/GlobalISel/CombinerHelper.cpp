@@ -3290,7 +3290,11 @@ bool CombinerHelper::matchBinopWithNegInner(Register MInner, Register Other,
     return false;
   };
 
-  if (!TryMatch(InnerLHS, InnerRHS) && !TryMatch(InnerRHS, InnerLHS))
+  // G_ADD is commutative, so ~b may be either operand. G_SUB is not: only
+  // `~b - c` folds to `~(b + c)`. The form `c - ~b` equals `b + c + 1`, which
+  // is not of the form `~(b +/- c)`, so ~b must be the minuend (LHS) there.
+  if (!TryMatch(InnerLHS, InnerRHS) &&
+      !(InnerOpc == TargetOpcode::G_ADD && TryMatch(InnerRHS, InnerLHS)))
     return false;
 
   // Flip add/sub

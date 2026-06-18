@@ -1104,9 +1104,16 @@ def trunc_shift: GICombineRule <
 
 // Transform (mul x, -1) -> (sub 0, x)
 def mul_by_neg_one: GICombineRule <
-  (defs root:$dst),
-  (match (G_MUL $dst, $x, -1)),
-  (apply (G_SUB $dst, 0, $x))
+  (defs root:$root),
+  (match (G_MUL $dst, $x, -1):$root),
+  (apply [{
+    uint32_t Flags = ${root}->getFlags();
+    Flags &= ~(MachineInstr::NoUWrap | MachineInstr::NoUSWrap |
+               MachineInstr::InBounds);
+    auto Zero = B.buildConstant(MRI.getType(${dst}.getReg()), 0);
+    B.buildSub(${dst}.getReg(), Zero, ${x}.getReg(), Flags);
+    ${root}->eraseFromParent();
+  }])
 >;
 
 // Fold (xor (and x, y), y) -> (and (not x), y)

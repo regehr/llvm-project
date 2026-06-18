@@ -2965,6 +2965,14 @@ LegalizerHelper::widenScalar(MachineInstr &MI, unsigned TypeIdx, LLT WideTy) {
     Observer.changingInstr(MI);
     widenScalarSrc(MI, WideTy, 1, TargetOpcode::G_ANYEXT);
     widenScalarSrc(MI, WideTy, 2, TargetOpcode::G_ANYEXT);
+    // The operands are any-extended, so the high bits of the wide operation are
+    // undefined. The nuw/nsw flags describe wrapping at the original (narrow)
+    // width and do not hold at the wide width, so they must be dropped;
+    // otherwise value tracking can derive wrong facts (e.g. that a widened
+    // "0 - x" with nuw is zero) from a flag that is no longer true. Only the
+    // truncated low bits of the result are meaningful.
+    MI.clearFlag(MachineInstr::NoSWrap);
+    MI.clearFlag(MachineInstr::NoUWrap);
     widenScalarDst(MI, WideTy);
     Observer.changedInstr(MI);
     return Legalized;
