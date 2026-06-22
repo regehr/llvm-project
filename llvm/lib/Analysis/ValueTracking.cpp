@@ -1579,6 +1579,9 @@ static PatternOp getIcmpPatternOp(ICmpInst::Predicate Pred) {
 }
 
 static PatternOp classifyPatternOp(const Operator *I, const InstrInfoQuery &IIQ) {
+  if (!I->getType()->isIntOrIntVectorTy())
+    return PatternOp::Other;
+
   switch (I->getOpcode()) {
   case Instruction::Add: {
     auto *OBO = cast<OverflowingBinaryOperator>(I);
