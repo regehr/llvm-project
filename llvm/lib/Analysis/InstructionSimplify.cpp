@@ -45,6 +45,7 @@
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/IR/Statepoint.h"
+#include "llvm/Support/KBOptLog.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/KnownFPClass.h"
 #include <algorithm>
@@ -58,6 +59,12 @@ enum { RecursionLimit = 3 };
 
 STATISTIC(NumExpand, "Number of expansions");
 STATISTIC(NumReassoc, "Number of reassociations");
+
+namespace llvm {
+cl::opt<bool> LogKBOpts("log-kbopt",
+                        cl::desc("Log KnownBits-based optimizations"),
+                        cl::init(false));
+} // namespace llvm
 
 static Value *simplifyAndInst(Value *, Value *, const SimplifyQuery &,
                               unsigned);
@@ -774,6 +781,7 @@ static Value *simplifySubInst(Value *Op0, Value *Op1, bool IsNSW, bool IsNUW,
 
     KnownBits Known = computeKnownBits(Op1, Q);
     if (Known.Zero.isMaxSignedValue()) {
+      KBOPT_LOG();
       // Op1 is either 0 or the minimum signed value. If the sub is NSW, then
       // Op1 must be 0 because negating the minimum signed value is undefined.
       if (IsNSW)
