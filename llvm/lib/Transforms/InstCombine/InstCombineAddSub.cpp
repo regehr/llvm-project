@@ -29,6 +29,7 @@
 #include "llvm/Support/AlignOf.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/KnownBits.h"
+#include "llvm/Support/KBOptLog.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
 #include <cassert>
 #include <utility>
@@ -955,8 +956,10 @@ Instruction *InstCombinerImpl::foldAddWithConstant(BinaryOperator &Add) {
     // add (xor X, LowMaskC), C --> sub (LowMaskC + C), X
     if (C2->isMask()) {
       KnownBits LHSKnown = computeKnownBits(X, &Add);
-      if ((*C2 | LHSKnown.Zero).isAllOnes())
+      if ((*C2 | LHSKnown.Zero).isAllOnes()) {
+        KBOPT_LOG();
         return BinaryOperator::CreateSub(ConstantInt::get(Ty, *C2 + *C), X);
+      }
     }
 
     // Look for a math+logic pattern that corresponds to sext-in-register of a
@@ -2534,6 +2537,7 @@ Instruction *InstCombinerImpl::visitSub(BinaryOperator &I) {
       KnownBits RHSKnown = llvm::computeKnownBits(
           Op1, SQ.getWithInstruction(&I).getWithoutDomCondCache());
       if ((*Op0C | RHSKnown.Zero).isAllOnes())
+        KBOPT_LOG();
         return BinaryOperator::CreateXor(Op1, Op0);
     }
 

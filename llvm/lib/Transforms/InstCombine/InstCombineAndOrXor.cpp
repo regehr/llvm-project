@@ -20,6 +20,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/PatternMatch.h"
+#include "llvm/Support/KBOptLog.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
 #include "llvm/Transforms/Utils/Local.h"
 
@@ -772,6 +773,7 @@ Value *InstCombinerImpl::simplifyRangeCheck(ICmpInst *Cmp0, ICmpInst *Cmp1,
 
   if (Inverted)
     NewPred = ICmpInst::getInversePredicate(NewPred);
+  KBOPT_LOG();
 
   return Builder.CreateICmp(NewPred, Input, RangeEnd);
 }
@@ -2648,6 +2650,7 @@ Instruction *InstCombinerImpl::visitAnd(BinaryOperator &I) {
           // ((C1 << X) >> C2) & C3 -> X == (cttz(C3)+C2-cttz(C1)) ? C3 : 0
           Constant *CmpC = ConstantExpr::getSub(LshrC, Log2C1);
           Value *Cmp = Builder.CreateICmpEQ(X, CmpC);
+          KBOPT_LOG();
           return createSelectInstWithUnknownProfile(
               Cmp, ConstantInt::get(Ty, *C3), ConstantInt::getNullValue(Ty));
         }
@@ -2846,6 +2849,7 @@ Instruction *InstCombinerImpl::visitAnd(BinaryOperator &I) {
       return createSelectInstWithUnknownProfile(A, Constant::getNullValue(Ty),
                                                 B);
     if (computeKnownBits(A, &I).countMaxActiveBits() <= 1) {
+      KBOPT_LOG();
       return createSelectInstWithUnknownProfile(
           Builder.CreateICmpEQ(A, Constant::getNullValue(A->getType())), B,
           Constant::getNullValue(Ty));
@@ -4555,8 +4559,10 @@ Instruction *InstCombinerImpl::visitOr(BinaryOperator &I) {
   if (match(Op0, m_OneUse(m_And(m_Value(X), m_APInt(C1)))) &&
       match(Op1, m_APInt(C2))) {
     KnownBits KnownX = computeKnownBits(X, &I);
-    if ((KnownX.One & *C2) == *C2)
+    if ((KnownX.One & *C2) == *C2) {
+      KBOPT_LOG();
       return BinaryOperator::CreateAnd(X, ConstantInt::get(Ty, *C1 | *C2));
+    }
   }
 
   if (Instruction *Res = foldBitwiseLogicWithIntrinsics(I, Builder))

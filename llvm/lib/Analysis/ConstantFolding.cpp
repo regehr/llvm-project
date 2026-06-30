@@ -54,6 +54,7 @@
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/KBOptLog.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/MathExtras.h"
 #include <cassert>
@@ -807,10 +808,12 @@ Constant *SymbolicallyEvaluateBinop(unsigned Opc, Constant *Op0, Constant *Op1,
     KnownBits Known1 = computeKnownBits(Op1, DL);
     if ((Known1.One | Known0.Zero).isAllOnes()) {
       // All the bits of Op0 that the 'and' could be masking are already zero.
+      KBOPT_LOG();
       return Op0;
     }
     if ((Known0.One | Known1.Zero).isAllOnes()) {
       // All the bits of Op1 that the 'and' could be masking are already zero.
+      KBOPT_LOG();
       return Op1;
     }
 
