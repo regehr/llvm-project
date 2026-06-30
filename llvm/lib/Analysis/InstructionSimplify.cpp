@@ -1041,8 +1041,10 @@ static bool isDivZero(Value *X, Value *Y, const SimplifyQuery &Q,
   // TODO: Convert this (and above) to range analysis
   //      ("computeConstantRangeIncludingKnownBits")?
   const APInt *C;
-  if (match(Y, m_APInt(C)) && computeKnownBits(X, Q).getMaxValue().ult(*C))
+  if (match(Y, m_APInt(C)) && computeKnownBits(X, Q).getMaxValue().ult(*C)) {
+    KBOPT_LOG();
     return true;
+  }
 
   // Try again for any divisor:
   // Is the dividend unsigned less than the divisor?
@@ -1096,16 +1098,20 @@ static Value *simplifyDivRem(Instruction::BinaryOps Opcode, Value *Op0,
   // If the divisor is known to be zero, just return poison. This can happen in
   // some cases where its provable indirectly the denominator is zero but it's
   // not trivially simplifiable (i.e known zero through a phi node).
-  if (Known.isZero())
+  if (Known.isZero()) {
+    KBOPT_LOG();
     return PoisonValue::get(Ty);
+  }
 
   // X / 1 -> X
   // X % 1 -> 0
   // If the divisor can only be zero or one, we can't have division-by-zero
   // or remainder-by-zero, so assume the divisor is 1.
   //   e.g. 1, zext (i8 X), sdiv X (Y and 1)
-  if (Known.countMinLeadingZeros() == Known.getBitWidth() - 1)
+  if (Known.countMinLeadingZeros() == Known.getBitWidth() - 1) {
+    KBOPT_LOG();
     return IsDiv ? Op0 : Constant::getNullValue(Ty);
+  }
 
   // If X * Y does not overflow, then:
   //   X * Y / Y -> X
@@ -1161,8 +1167,10 @@ static Value *simplifyDiv(Instruction::BinaryOps Opcode, Value *Op0, Value *Op1,
     // it has less trailing zeros, then the result must be poison.
     if (DivC->countr_zero()) {
       KnownBits KnownOp0 = computeKnownBits(Op0, Q);
-      if (KnownOp0.countMaxTrailingZeros() < DivC->countr_zero())
+      if (KnownOp0.countMaxTrailingZeros() < DivC->countr_zero()) {
+        KBOPT_LOG();
         return PoisonValue::get(Op0->getType());
+      }
     }
 
     // udiv exact (mul nsw X, C), C --> X
@@ -1348,14 +1356,18 @@ static Value *simplifyShift(Instruction::BinaryOps Opcode, Value *Op0,
   // If any bits in the shift amount make that value greater than or equal to
   // the number of bits in the type, the shift is undefined.
   KnownBits KnownAmt = computeKnownBits(Op1, Q);
-  if (KnownAmt.getMinValue().uge(KnownAmt.getBitWidth()))
+  if (KnownAmt.getMinValue().uge(KnownAmt.getBitWidth())) {
+    KBOPT_LOG();
     return PoisonValue::get(Op0->getType());
+  }
 
   // If all valid bits in the shift amount are known zero, the first operand is
   // unchanged.
   unsigned NumValidShiftBits = Log2_32_Ceil(KnownAmt.getBitWidth());
-  if (KnownAmt.countMinTrailingZeros() >= NumValidShiftBits)
+  if (KnownAmt.countMinTrailingZeros() >= NumValidShiftBits) {
+    KBOPT_LOG();
     return Op0;
+  }
 
   // Check for nsw shl leading to a poison value.
   if (IsNSW) {
@@ -1368,8 +1380,10 @@ static Value *simplifyShift(Instruction::BinaryOps Opcode, Value *Op0,
     if (KnownVal.One.isSignBitSet())
       KnownShl.One.setSignBit();
 
-    if (KnownShl.hasConflict())
+    if (KnownShl.hasConflict()) {
+      KBOPT_LOG();
       return PoisonValue::get(Op0->getType());
+    }
   }
 
   return nullptr;
@@ -1397,8 +1411,10 @@ static Value *simplifyRightShift(Instruction::BinaryOps Opcode, Value *Op0,
   // TODO: Generalize by counting trailing zeros (see fold for exact division).
   if (IsExact) {
     KnownBits Op0Known = computeKnownBits(Op0, Q);
-    if (Op0Known.One[0])
+    if (Op0Known.One[0]) {
+      KBOPT_LOG();
       return Op0;
+    }
   }
 
   return nullptr;
@@ -1470,8 +1486,10 @@ static Value *simplifyLShrInst(Value *Op0, Value *Op1, bool IsExact,
       *ShRAmt == *ShLAmt) {
     const KnownBits YKnown = computeKnownBits(Y, Q);
     const unsigned EffWidthY = YKnown.countMaxActiveBits();
-    if (ShRAmt->uge(EffWidthY))
+    if (ShRAmt->uge(EffWidthY)) {
+      KBOPT_LOG();
       return X;
+    }
   }
 
   return nullptr;
@@ -2137,8 +2155,10 @@ static Value *simplifyAndInst(Value *Op0, Value *Op1, const SimplifyQuery &Q,
                              Q.DT)) {
     KnownBits Known = computeKnownBits(Shift, Q);
     // Use getActiveBits() to make use of the additional power of two knowledge
-    if (PowerC->getActiveBits() >= Known.getMaxValue().getActiveBits())
+    if (PowerC->getActiveBits() >= Known.getMaxValue().getActiveBits()) {
+      KBOPT_LOG();
       return ConstantInt::getNullValue(Op1->getType());
+    }
   }
 
   if (Value *V = simplifyAndOrOfCmps(Q, Op0, Op1, true))
@@ -2208,10 +2228,14 @@ static Value *simplifyAndInst(Value *Op0, Value *Op1, const SimplifyQuery &Q,
       const APInt EffBitsX = APInt::getLowBitsSet(Width, EffWidthX) << ShftCnt;
       // If the mask is extracting all bits from X or Y as is, we can skip
       // this AND op.
-      if (EffBitsY.isSubsetOf(*Mask) && !EffBitsX.intersects(*Mask))
+      if (EffBitsY.isSubsetOf(*Mask) && !EffBitsX.intersects(*Mask)) {
+        KBOPT_LOG();
         return Y;
-      if (EffBitsX.isSubsetOf(*Mask) && !EffBitsY.intersects(*Mask))
+      }
+      if (EffBitsX.isSubsetOf(*Mask) && !EffBitsY.intersects(*Mask)) {
+        KBOPT_LOG();
         return XShifted;
+      }
     }
   }
 
@@ -3000,34 +3024,50 @@ static Value *simplifyICmpWithZero(CmpPredicate Pred, Value *LHS, Value *RHS,
     break;
   case ICmpInst::ICMP_SLT: {
     KnownBits LHSKnown = computeKnownBits(LHS, Q);
-    if (LHSKnown.isNegative())
+    if (LHSKnown.isNegative()) {
+      KBOPT_LOG();
       return getTrue(ITy);
-    if (LHSKnown.isNonNegative())
+    }
+    if (LHSKnown.isNonNegative()) {
+      KBOPT_LOG();
       return getFalse(ITy);
+    }
     break;
   }
   case ICmpInst::ICMP_SLE: {
     KnownBits LHSKnown = computeKnownBits(LHS, Q);
-    if (LHSKnown.isNegative())
+    if (LHSKnown.isNegative()) {
+      KBOPT_LOG();
       return getTrue(ITy);
-    if (LHSKnown.isNonNegative() && isKnownNonZero(LHS, Q))
+    }
+    if (LHSKnown.isNonNegative() && isKnownNonZero(LHS, Q)) {
+      KBOPT_LOG();
       return getFalse(ITy);
+    }
     break;
   }
   case ICmpInst::ICMP_SGE: {
     KnownBits LHSKnown = computeKnownBits(LHS, Q);
-    if (LHSKnown.isNegative())
+    if (LHSKnown.isNegative()) {
+      KBOPT_LOG();
       return getFalse(ITy);
-    if (LHSKnown.isNonNegative())
+    }
+    if (LHSKnown.isNonNegative()) {
+      KBOPT_LOG();
       return getTrue(ITy);
+    }
     break;
   }
   case ICmpInst::ICMP_SGT: {
     KnownBits LHSKnown = computeKnownBits(LHS, Q);
-    if (LHSKnown.isNegative())
+    if (LHSKnown.isNegative()) {
+      KBOPT_LOG();
       return getFalse(ITy);
-    if (LHSKnown.isNonNegative() && isKnownNonZero(LHS, Q))
+    }
+    if (LHSKnown.isNonNegative() && isKnownNonZero(LHS, Q)) {
+      KBOPT_LOG();
       return getTrue(ITy);
+    }
     break;
   }
   }
@@ -3170,10 +3210,14 @@ static Value *simplifyICmpWithBinOpOnLHS(CmpPredicate Pred, BinaryOperator *LBO,
     if (Pred == ICmpInst::ICMP_SLT || Pred == ICmpInst::ICMP_SGE) {
       KnownBits RHSKnown = computeKnownBits(RHS, Q);
       KnownBits YKnown = computeKnownBits(Y, Q);
-      if (RHSKnown.isNonNegative() && YKnown.isNegative())
+      if (RHSKnown.isNonNegative() && YKnown.isNegative()) {
+        KBOPT_LOG();
         return Pred == ICmpInst::ICMP_SLT ? getTrue(ITy) : getFalse(ITy);
-      if (RHSKnown.isNegative() || YKnown.isNonNegative())
+      }
+      if (RHSKnown.isNegative() || YKnown.isNonNegative()) {
+        KBOPT_LOG();
         return Pred == ICmpInst::ICMP_SLT ? getFalse(ITy) : getTrue(ITy);
+      }
     }
   }
 
@@ -3192,6 +3236,7 @@ static Value *simplifyICmpWithBinOpOnLHS(CmpPredicate Pred, BinaryOperator *LBO,
     case ICmpInst::ICMP_EQ:
     case ICmpInst::ICMP_UGT:
     case ICmpInst::ICMP_UGE:
+      KBOPT_LOG();
       return getFalse(ITy);
     case ICmpInst::ICMP_SLT:
     case ICmpInst::ICMP_SLE: {
@@ -3203,6 +3248,7 @@ static Value *simplifyICmpWithBinOpOnLHS(CmpPredicate Pred, BinaryOperator *LBO,
     case ICmpInst::ICMP_NE:
     case ICmpInst::ICMP_ULT:
     case ICmpInst::ICMP_ULE:
+      KBOPT_LOG();
       return getTrue(ITy);
     }
   }
@@ -6841,8 +6887,10 @@ Value *llvm::simplifyBinaryIntrinsic(Intrinsic::ID IID, Type *ReturnType,
       C = ConstantFoldBinaryOpOperands(
           Instruction::Or, C, ConstantInt::get(C->getType(), IrrelevantPtrBits),
           Q.DL);
-      if (C != nullptr && C->isAllOnesValue())
+      if (C != nullptr && C->isAllOnesValue()) {
+        KBOPT_LOG();
         return Op0;
+      }
     }
     break;
   }
